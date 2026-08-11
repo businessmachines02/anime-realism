@@ -1,21 +1,24 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
-  "category": "UI",
+  "category": "Tweak",
   "game_version": ">=0.0.0-0 <2.0.0",
   "priority": 200,
   "affects_link": false,
   "optional_dependencies": [
     "DRAMATIC_SHAPE",
+    "DRAMALESS_SHAPE",
+    "STADIUM_BATTLE_FX",
     "quality_of_life",
     "gen3_battle_ui"
   ],
   "permissions": [
     "engine_internals"
   ],
-  "description": "Anime-style immersion: hide levels and HP everywhere so you fight by feel, not numbers. Move announces become trainer-style callouts; party list shows weak/tired heal hints; optional generic 'grown stronger' level-ups, battle HUD/XP hide, low-HP warnings, and mute for the vanilla low-HP alarm. Works with Gen 3 Inspired UI."
+  "description": "Anime-style immersion: hide levels and HP, trainer callouts, dodge/brace/counter for you and trainer foes (temp buffs clear when attacking), underdog EXP and faint effort. Works with Gen 3 UI and Stadium companions.",
+  "github": "businessmachines02/anime-realism"
 }
