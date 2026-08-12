@@ -1,11 +1,11 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "1.9.3",
+  "version": "2.0.8",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
-  "category": "Tweak",
+  "category": "TWEAK",
   "game_version": ">=0.0.0-0 <2.0.0",
   "priority": 200,
   "affects_link": false,
@@ -13,6 +13,7 @@
     "DRAMATIC_SHAPE",
     "DRAMALESS_SHAPE",
     "STADIUM_BATTLE_FX",
+    "BATTLE_CINEMATICS",
     "quality_of_life",
     "gen3_battle_ui"
   ],

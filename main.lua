@@ -90,6 +90,24 @@ return function(mod)
       },
     },
     {
+      key = "speech_bubbles",
+      type = "toggle",
+      label = "SPEECH BUBBLE",
+      default = true,
+    },
+    {
+      key = "trainer_banter",
+      type = "toggle",
+      label = "TRAINER S.BANTER",
+      default = true,
+    },
+    {
+      key = "momentum_chips",
+      type = "toggle",
+      label = "STATUS CHIPS",
+      default = true,
+    },
+    {
       key = "underdog_exp",
       type = "toggle",
       label = "UNDERDOG EXP",
@@ -101,10 +119,83 @@ return function(mod)
       label = "EFFORT FAINT",
       default = true,
     },
+    {
+      key = "dev_overlay",
+      type = "toggle",
+      label = "DEV OVERLAY",
+      default = false,
+    },
   })
 
   local function opt(key)
     return mod.options:get(key) ~= false
+  end
+
+  -- Dev overlay + sequence log (one table — keeps LuaJIT's 200-local budget).
+  -- Filled further after momentumState exists.
+  local dev = {
+    linesMax = 12,
+    byBattle = setmetatable({}, { __mode = "k" }),
+    filePath = nil,
+    peek = nil,
+    draw = nil,
+  }
+  function dev.on()
+    return mod.options:get("dev_overlay") == true
+  end
+  function dev.file()
+    if dev.filePath then
+      return dev.filePath
+    end
+    if love and love.filesystem and love.filesystem.getSaveDirectory then
+      local ok, dir = pcall(love.filesystem.getSaveDirectory)
+      if ok and type(dir) == "string" and dir ~= "" then
+        dev.filePath = dir .. "/anime_realism_dev.log"
+        return dev.filePath
+      end
+    end
+    return nil
+  end
+  function dev.append(line)
+    local path = dev.file()
+    if not path then
+      return
+    end
+    local ok, f = pcall(io.open, path, "a")
+    if ok and f then
+      f:write(line)
+      f:write("\n")
+      f:close()
+    end
+  end
+  function dev.bag(battle)
+    if not battle then
+      return nil
+    end
+    local log = dev.byBattle[battle]
+    if not log then
+      log = { seq = 0, lines = {} }
+      dev.byBattle[battle] = log
+    end
+    return log
+  end
+  function dev.log(battle, tag, detail)
+    if not dev.on() or not battle then
+      return
+    end
+    local log = dev.bag(battle)
+    log.seq = (log.seq or 0) + 1
+    local turn = tonumber(battle.turnCount) or 0
+    local msg = string.format("#%d T%d %s", log.seq, turn, tostring(tag or "?"))
+    if detail and detail ~= "" then
+      msg = msg .. " | " .. tostring(detail)
+    end
+    local lines = log.lines
+    lines[#lines + 1] = msg
+    while #lines > dev.linesMax do
+      table.remove(lines, 1)
+    end
+    dev.append(msg)
   end
 
   local function calloutPickMode()
@@ -152,13 +243,14 @@ return function(mod)
     return 0.20
   end
 
-  local PLAYER_LOW = {
+  local S = {}
+  S.PLAYER_LOW = {
     "Your POKéMON is\nlooking weak!",
     "Your POKéMON is\nlooking tired!",
     "Your POKéMON looks\nweak...",
     "Your POKéMON looks\ntired...",
   }
-  local ENEMY_LOW = {
+  S.ENEMY_LOW = {
     "The enemy POKéMON\nis looking weak!",
     "The enemy POKéMON\nis looking tired!",
     "The foe's POKéMON\nlooks weak!",
@@ -166,7 +258,7 @@ return function(mod)
   }
 
   -- Short party-list lines (fit the old HP row).
-  local PARTY_HINTS = {
+  S.PARTY_HINTS = {
     "WEAK-HEAL SOON!",
     "TIRED-HEAL SOON!",
     "LOOKING WEAK!",
@@ -202,7 +294,7 @@ return function(mod)
     end
     local hint = partyHintFor[mon]
     if not hint then
-      hint = pickLine(PARTY_HINTS)
+      hint = pickLine(S.PARTY_HINTS)
       partyHintFor[mon] = hint
     end
     return hint
@@ -248,7 +340,7 @@ return function(mod)
     end
     state[side] = true
 
-    local text = pickLine(side == "player" and PLAYER_LOW or ENEMY_LOW)
+    local text = pickLine(side == "player" and S.PLAYER_LOW or S.ENEMY_LOW)
     if not text then
       return
     end
@@ -281,24 +373,53 @@ return function(mod)
   local resolvePendingDamage
   local announceCoverHit
   local rewriteDodgeMissText
+  local maybeEnqueueIdleBanter
+  local playerHoldingHide
+  local playerCanStay
+  local playerInDeepCover
+  local rememberCoverSpot
+  local ensurePlayerPicHidden
+  local rollDeepCoverLock
+  local pickDeepCoverLine
+  local maybeQueueSameTurnCounter
+  local clearAmbientStance
+  local tickAmbientStance
+  local publishChipState
 
   local function freshMomentum()
     return {
       mode = nil,
       boosted = false,
       enemyActedThisTurn = false,
+      playerActedThisTurn = false,
       pickOfferedThisTurn = false,
       awaitingPick = nil,
       pendingDamage = nil,
+      -- Committed STATUS CHIP lines (updated only after callouts settle).
+      chipYou = nil,
+      chipFoe = nil,
+      chipPulseYou = 0,
+      chipPulseFoe = 0,
       -- Temporary cover buffs from dodge/brace; cleared on your attack.
       -- entrenched: strong brace — near-max DEF while you wait to counter;
       -- foe can rarely "break through" and strip it before damage.
+      -- entrenchTurns: STAY count while locked in (max S.ENTRENCH_MAX_TURNS).
       temp = {
         evasion = 0,
         defense = 0,
         cover = false,
         picHidden = false,
         entrenched = false,
+        entrenchTurns = 0,
+        -- Hid/flew to a spot (not a plain sidestep) — STAY allowed.
+        hidAway = false,
+        -- ROCK / TREE / DIVE / FLY UP / … — flavors deep-cover locks.
+        coverSpot = nil,
+        -- This turn: stuck deep in cover (no STRIKE, no dodge/brace callout).
+        deepCover = false,
+        deepCoverRolled = false,
+        -- Set only on a successful dodge this swing (gates same-turn COUNTER!).
+        dodgedOk = false,
       },
       -- Trainer-foe mirror: temp buffs clear when the foe attacks.
       enemyTemp = { evasion = 0, defense = 0, cover = false },
@@ -321,12 +442,153 @@ return function(mod)
         cover = false,
         picHidden = false,
         entrenched = false,
+        entrenchTurns = 0,
+        hidAway = false,
+        coverSpot = nil,
+        deepCover = false,
+        deepCoverRolled = false,
+        dodgedOk = false,
       }
+    end
+    if state.temp.entrenchTurns == nil then
+      state.temp.entrenchTurns = 0
     end
     if not state.enemyTemp then
       state.enemyTemp = { evasion = 0, defense = 0, cover = false }
     end
     return state
+  end
+
+  do
+    local function fmtTemp(temp)
+      if not temp then
+        return "-"
+      end
+      local bits = {}
+      if (temp.evasion or 0) ~= 0 then
+        bits[#bits + 1] = "EV" .. tostring(temp.evasion)
+      end
+      if (temp.defense or 0) ~= 0 then
+        bits[#bits + 1] = "DF" .. tostring(temp.defense)
+      end
+      if temp.cover then
+        bits[#bits + 1] = "cover"
+      end
+      if temp.hidAway then
+        bits[#bits + 1] = "hide"
+      end
+    if temp.entrenched then
+      bits[#bits + 1] = "entrench"
+      if (temp.entrenchTurns or 0) > 0 then
+        bits[#bits + 1] = "t" .. tostring(temp.entrenchTurns)
+      end
+    end
+    if temp.picHidden then
+      bits[#bits + 1] = "picHide"
+    end
+    if temp.coverSpot and temp.coverSpot ~= "" then
+      bits[#bits + 1] = tostring(temp.coverSpot):sub(1, 6)
+    end
+    if temp.deepCover then
+      bits[#bits + 1] = "deep"
+    end
+      if #bits == 0 then
+        return "-"
+      end
+      return table.concat(bits, ",")
+    end
+    -- Expose for turn-start / cover-clear logs in the outer scope.
+    dev.fmtTemp = fmtTemp
+
+    dev.peek = function(battle)
+      return battle and momentumByBattle[battle] or nil
+    end
+
+    function dev.stage(battler, stat)
+      if not battler or not battler.stages then
+        return 0
+      end
+      return battler.stages[stat] or 0
+    end
+
+    function dev.snapshot(battle)
+      local state = dev.peek(battle) or { temp = {}, enemyTemp = {} }
+      local p, e = battle.player, battle.enemy
+      local youArm = state.boosted and "used"
+        or (state.mode == "counter" and "rdy" or "-")
+      local wait = tostring(state.awaitingPick or "-"):sub(1, 5)
+      local youTmp = dev.fmtTemp(state.temp)
+      local foeTmp = dev.fmtTemp(state.enemyTemp)
+      return {
+        -- Compact chip lines (≤18 chars) for a corner panel.
+        string.format("YOU %s %s", youArm, wait),
+        string.format(" %s E%d D%d", youTmp, dev.stage(p, "evasion"),
+          dev.stage(p, "defense")),
+        string.format("FOE %s %s",
+          tostring(state.enemyMode or "-"):sub(1, 7),
+          state.enemyReactedThisTurn and "rx" or "-"),
+        string.format(" %s E%d D%d", foeTmp, dev.stage(e, "evasion"),
+          dev.stage(e, "defense")),
+      }
+    end
+
+    -- Compact top-right chip; full sequence stays in anime_realism_dev.log.
+    dev.draw = function(battle)
+      if not dev.on() or type(battle) ~= "table" then
+        return
+      end
+      if not (love and love.graphics) then
+        return
+      end
+      local okFont, Font = pcall(require, "src.render.Font")
+      if not okFont or type(Font) ~= "table" or type(Font.draw) ~= "function" then
+        return
+      end
+      local g = love.graphics
+      local log = dev.bag(battle)
+      local snap = dev.snapshot(battle)
+      local events = log and log.lines or {}
+      local last = events[#events]
+      local lineH = 8
+      local pad = 2
+      local colW = 18 * 8
+      local rows = 1 + #snap + (last and 1 or 0)
+      local boxW = colW + pad * 2
+      local boxH = rows * lineH + pad * 2
+      local boxX = math.max(0, 160 - boxW)
+      local boxY = 0
+      local function clip(s, n)
+        s = tostring(s or "")
+        n = n or 18
+        if #s <= n then
+          return s
+        end
+        return s:sub(1, n - 1) .. "+"
+      end
+      g.push("all")
+      -- Soft panel; thin edge so it reads as a chip, not a blackout.
+      g.setColor(0.05, 0.08, 0.12, 0.72)
+      g.rectangle("fill", boxX, boxY, boxW, boxH)
+      g.setColor(0.55, 0.75, 0.95, 0.55)
+      g.rectangle("line", boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1)
+      local y = boxY + pad
+      local x = boxX + pad
+      local function put(text)
+        Font.draw(clip(text), x, y)
+        y = y + lineH
+      end
+      g.setColor(1, 1, 1, 1)
+      put("AR DEV")
+      for i = 1, #snap do
+        put(snap[i])
+      end
+      if last then
+        -- Strip the noisy "#N TN " prefix for the one-line tail.
+        local short = tostring(last):gsub("^#%d+%s+T%d+%s+", "")
+        put(short)
+      end
+      g.pop()
+    end
   end
 
   local function resetMomentum(battle)
@@ -336,8 +598,13 @@ return function(mod)
     local prev = momentumByBattle[battle]
     local keepTemp = prev and prev.temp
     local keepEnemyTemp = prev and prev.enemyTemp
-    local keepPending = prev and prev.pendingDamage
-    local keepAwait = prev and prev.awaitingPick
+    -- Never carry deferred pick menus across turns — a leftover OPENING!
+    -- COUNTER/HOLD would pop at the start of the next turn before anyone acts.
+    if prev and prev.awaitingPick == "counter" then
+      prev.mode = nil
+      prev.boosted = false
+      prev.foeWhiffDamage = nil
+    end
     -- Keep unused counters armed across the turn boundary.
     local keepCounter = prev and prev.mode == "counter" and not prev.boosted
     local keepEnemyCounter = prev and prev.enemyMode == "counter" and not prev.enemyBoosted
@@ -347,11 +614,6 @@ return function(mod)
     end
     if keepEnemyTemp then
       momentumByBattle[battle].enemyTemp = keepEnemyTemp
-    end
-    if keepPending then
-      momentumByBattle[battle].pendingDamage = keepPending
-      momentumByBattle[battle].awaitingPick = keepAwait
-      momentumByBattle[battle].pickOfferedThisTurn = true
     end
     if keepCounter then
       momentumByBattle[battle].mode = "counter"
@@ -364,6 +626,14 @@ return function(mod)
   end
 
   local function clearBattleMomentum(battle)
+    if battle then
+      clearAmbientStance(battle)
+      local st = momentumByBattle[battle]
+      local cameo = st and st.banterCameo
+      if cameo and cameo.forcedTrainer then
+        battle.showEnemyTrainer = cameo.prevShowEnemyTrainer and true or false
+      end
+    end
     if not battle then
       return
     end
@@ -383,6 +653,26 @@ return function(mod)
     -- Gen 1: physical/special comes from the move's type.
     local ok, special = pcall(Damage.isSpecial, move.type)
     return ok and special or false
+  end
+
+  -- Sleep / freeze: fully inert — no trainer callouts, dodge/brace,
+  -- COVER!/ENTRENCH!, or idle pulses. Paralysis still can act (stiffer react).
+  local function battlerStatusLocked(battler)
+    local st = battler and battler.mon and battler.mon.status
+    return st == "SLP" or st == "FRZ"
+  end
+
+  local function playerStatusLocked(battle)
+    return battlerStatusLocked(battle and battle.player)
+  end
+
+  local function enemyStatusLocked(battle)
+    return battlerStatusLocked(battle and battle.enemy)
+  end
+
+  local function playerIsParalyzed(battle)
+    local mon = battle and battle.player and battle.player.mon
+    return mon and mon.status == "PAR"
   end
 
   local function playerHasCounter(battle)
@@ -407,15 +697,84 @@ return function(mod)
     return 0.30
   end
 
+  -- Paralysis: still react, but stiffer (~+25% fail). Small per-turn chance
+  -- to shake it off (vanilla Gen 1 never wears PAR on its own).
+  S.PAR_REACT_FAIL_EXTRA = 0.25
+  S.PAR_SHAKE_OFF = 0.10
+
   local function rollDodgeSuccess()
     local r = (love and love.math and love.math.random) or math.random
     return r() >= dodgeFailChance()
+  end
+
+  -- Player dodge/brace under fire. kind "brace" only fails while paralyzed.
+  local function rollPlayerReactSuccess(battle, kind)
+    local r = (love and love.math and love.math.random) or math.random
+    local fail = 0
+    if kind == "dodge" then
+      fail = dodgeFailChance()
+    end
+    if playerIsParalyzed(battle) then
+      fail = math.min(0.90, fail + (S.PAR_REACT_FAIL_EXTRA or 0.25))
+    elseif kind ~= "dodge" then
+      return true
+    end
+    return r() >= fail
+  end
+
+  local function tryShakeOffParalysis(battle)
+    if not battle or not playerIsParalyzed(battle) then
+      return false
+    end
+    local r = (love and love.math and love.math.random) or math.random
+    if r() >= (S.PAR_SHAKE_OFF or 0.10) then
+      return false
+    end
+    local battler = battle.player
+    battler.mon.status = nil
+    battler.shownStatus = nil
+    return true
   end
 
   -- Rare physical connect that still arms COUNTER/HOLD (~20%).
   local function rollPhysicalCounterArm()
     local r = (love and love.math and love.math.random) or math.random
     return r() < 0.20
+  end
+
+  -- Light risk only — openings should feel rewarding, not coin-flippy.
+  S.COUNTER_EXTRA_MISS = 0.05
+  S.COUNTER_SNAPBACK_CHANCE = 0.40
+  S.COUNTER_SNAPBACK_MULT = 0.50 -- of the foe's stashed whiff estimate
+  local function rollCounterExtraMiss()
+    local r = (love and love.math and love.math.random) or math.random
+    return r() < S.COUNTER_EXTRA_MISS
+  end
+  local function rollCounterSnapBack()
+    local r = (love and love.math and love.math.random) or math.random
+    return r() < S.COUNTER_SNAPBACK_CHANCE
+  end
+
+  -- What the foe's whiff "would have" dealt (for their snap-back).
+  local function estimateMoveDamage(battle, user, target, move)
+    if not battle or not user or not target or not move then
+      return 10
+    end
+    local dmg = nil
+    local ok = pcall(function()
+      dmg = select(1, Damage.compute(
+        battle.ruleset, user, target, move, { rng = battle.rng }))
+    end)
+    if ok and type(dmg) == "number" and dmg > 0 then
+      return dmg
+    end
+    return math.max(1, math.floor((move.power or 40) * 0.45))
+  end
+
+  local function foeCounterBackDamage(state)
+    local base = (state and state.foeWhiffDamage) or 10
+    local mult = S.COUNTER_SNAPBACK_MULT or 0.50
+    return math.max(1, math.floor(base * mult))
   end
 
   -- Entrenched: foe rarely punches through max DEF (~18%).
@@ -468,7 +827,7 @@ return function(mod)
     return (rec.moves or 0) >= 2 and rec.damage >= 5
   end
 
-  local EFFORT_LINES = {
+  S.EFFORT_LINES = {
     "%s grew\nfrom the effort!",
     "%s learned\nfrom that fight!",
     "Hard fight-\n%s grew a bit!",
@@ -508,7 +867,7 @@ return function(mod)
       local def = battle.data and battle.data.pokemon and battle.data.pokemon[mon.species]
       name = def and def.name or "POKéMON"
     end
-    local line = pickLine(EFFORT_LINES) or "%s grew\nfrom the effort!"
+    local line = pickLine(S.EFFORT_LINES) or "%s grew\nfrom the effort!"
     battle:sayNext(line:format(name))
     return true
   end
@@ -576,6 +935,7 @@ return function(mod)
     if ev and ev.battle then
       resolvePendingDamage(ev.battle)
       clearCalloutPickState(ev.battle)
+      clearAmbientStance(ev.battle)
       revealPlayerPic(ev.battle, false)
     end
   end)
@@ -583,6 +943,51 @@ return function(mod)
   mod.events:on("battle.turn_started", function(ev)
     -- Keep cover buffs across the turn; only reset per-turn counter flags.
     resetMomentum(ev and ev.battle)
+    local battle = ev and ev.battle
+    if battle then
+      local st = momentumByBattle[battle]
+      -- Fresh roll each turn for deep-cover lock / same-turn dodge flag.
+      if st and st.temp then
+        st.temp.deepCover = false
+        st.temp.deepCoverRolled = false
+        st.temp.dodgedOk = false
+      end
+      if st then
+        st.dodgeWhiffDone = nil
+        st.keepDodgeMissAnim = nil
+        st.dodgeMissName = nil
+      end
+      publishChipState(battle)
+      dev.log(battle, "TURN start",
+        string.format("keepCounter=%s youTmp=%s foeTmp=%s",
+          (st and st.mode == "counter") and "Y" or "N",
+          dev.fmtTemp(st and st.temp),
+          dev.fmtTemp(st and st.enemyTemp)))
+      -- Shake-off text is queued in the later turn hook (needs pickFormatted).
+      if tryShakeOffParalysis(battle) then
+        -- Name/line inline — pickFormatted isn't in scope this early.
+        local p = battle.player
+        local me = (p and p.mon and type(p.mon.nickname) == "string"
+            and p.mon.nickname ~= "" and p.mon.nickname)
+          or (p and p.name)
+          or "POKéMON"
+        local line = me .. " shook off\nthe paralysis!"
+        local pool = S.PAR_SHAKE_CALLS
+        if type(pool) == "table" and #pool > 0 then
+          local rr = (love and love.math and love.math.random) or math.random
+          local tmpl = pool[rr(1, #pool)]
+          if type(tmpl) == "string" then
+            line = (tmpl:gsub("%%s", me, 1):gsub("%%s", me))
+          end
+        end
+        if type(battle.sayNext) == "function" then
+          battle:sayNext(line)
+        elseif type(battle.say) == "function" then
+          battle:say(line)
+        end
+        dev.log(battle, "PAR shake", "cured")
+      end
+    end
   end)
 
   mod.events:on("battle.battler_switched", function(ev)
@@ -613,15 +1018,23 @@ return function(mod)
         cover = false,
         picHidden = false,
         entrenched = false,
+        entrenchTurns = 0,
+        hidAway = false,
+        coverSpot = nil,
+        deepCover = false,
+        deepCoverRolled = false,
+        dodgedOk = false,
       }
       ms.mode = nil
       ms.boosted = false
+      publishChipState(battle)
     elseif side == "enemy" then
       local ms = momentumState(battle)
       ms.enemyTemp = { evasion = 0, defense = 0, cover = false }
       ms.enemyMode = nil
       ms.enemyBoosted = false
       ms.enemyReactedThisTurn = false
+      publishChipState(battle)
     end
     -- New battler may already be low.
     checkLowHp(battle, ev.battler)
@@ -635,6 +1048,11 @@ return function(mod)
     local rec = effortRec(ev.battle, mon)
     if rec then
       rec.moves = (rec.moves or 0) + 1
+    end
+    -- Damaging attack this turn — used for same-round counter after a dodge.
+    local move = ev.move
+    if move and (move.power or 0) > 0 and move.category ~= "status" then
+      momentumState(ev.battle).playerActedThisTurn = true
     end
   end)
 
@@ -678,6 +1096,7 @@ return function(mod)
       local state = momentumState(ev.battle)
       state.mode = "counter"
       state.boosted = false
+      dev.log(ev.battle, "ARM counter", "physical-connect ~20%")
     end
     if user and user.isPlayer and target and not target.isPlayer
         and (ev.damage or 0) > 0 and not foeMoveIsSpecial(ev.move)
@@ -685,6 +1104,7 @@ return function(mod)
       local state = momentumState(ev.battle)
       state.enemyMode = "counter"
       state.enemyBoosted = false
+      dev.log(ev.battle, "ARM foeCounter", "physical-connect ~20%")
     end
     -- In cover / breakthrough messaging after a hit lands.
     if target and (ev.damage or 0) > 0 then
@@ -700,20 +1120,29 @@ return function(mod)
   -- Miss creates the opening: foe whiffs you → you can COUNTER next.
   -- Same for trainer foes when you miss them.
   -- Dodge cover miss: keep the move anim so the attack still plays.
+  -- Counter swings have a light extra miss (~5%); a miss sometimes lets
+  -- the foe snap back for half their stashed whiff damage.
   mod.hooks:wrap("battle.accuracy", function(next, ctx)
-    local hit = next(ctx)
     if not opt("momentum_counter") or not ctx then
-      return hit
+      return next(ctx)
     end
     local move = ctx.move
     if not move or (move.power or 0) <= 0 or move.category == "status" then
-      return hit
+      return next(ctx)
     end
     local user, target, battle = ctx.user, ctx.target, ctx.battle
     if not battle or not user or not target then
-      return hit
+      return next(ctx)
     end
     local state = momentumState(battle)
+    local countering = user.isPlayer and not target.isPlayer
+        and state.mode == "counter" and not state.boosted
+
+    local hit = next(ctx)
+    if hit and countering and rollCounterExtraMiss() then
+      hit = false
+    end
+
     if not hit then
       local function coverName(battler)
         if battler and battler.mon and type(battler.mon.nickname) == "string"
@@ -722,22 +1151,55 @@ return function(mod)
         end
         return (battler and battler.name) or "POKéMON"
       end
-      if target.isPlayer and state.temp and state.temp.cover then
+      -- Keep miss anim only for dodge/hide cover — not brace DEF.
+      local function isDodgeHide(temp)
+        return temp and temp.cover
+            and ((temp.evasion or 0) > 0 or temp.hidAway or temp.picHidden)
+      end
+      if target.isPlayer and isDodgeHide(state.temp) then
         state.keepDodgeMissAnim = true
         state.dodgeMissName = coverName(target)
-      elseif (not target.isPlayer) and state.enemyTemp and state.enemyTemp.cover then
+      elseif (not target.isPlayer) and isDodgeHide(state.enemyTemp) then
         state.keepDodgeMissAnim = true
         state.dodgeMissName = coverName(target)
       end
-      if target.isPlayer and not user.isPlayer then
+      if countering then
+        -- Your counter whiffed — may snap-back (rolled in resolve).
+        state.counterWhiffed = true
+        state.mode = nil
+        state.boosted = false
+      elseif target.isPlayer and not user.isPlayer then
         state.mode = "counter"
         state.boosted = false
+        state.foeWhiffDamage = estimateMoveDamage(battle, user, target, move)
+        -- Same-turn COUNTER! only after a successful dodge into a miss.
+        -- (Menu is queued later — after miss anim + dodge-whiff text.)
+        if state.temp and state.temp.cover and state.temp.dodgedOk then
+          state.offerSameTurnCounter = true
+          -- Going second: replace the move chosen at turn start.
+          if not state.playerActedThisTurn then
+            state.replaceQueuedPlayerAction = true
+          end
+          dev.log(battle, "ARM counter",
+            string.format("dodge-miss sameTurn=%s replace=%s",
+              "Y",
+              state.replaceQueuedPlayerAction and "Y" or "N"))
+        else
+          dev.log(battle, "ARM counter",
+            state.temp and state.temp.cover
+              and "foe-miss (cover, no dodgedOk)"
+              or "foe-miss (no cover)")
+        end
       elseif user.isPlayer and not target.isPlayer then
         local kind = battle.kind
         if kind == "trainer" or kind == "link" then
           state.enemyMode = "counter"
           state.enemyBoosted = false
+          dev.log(battle, "ARM foeCounter", "you-missed")
         end
+      end
+      if countering then
+        dev.log(battle, "COUNTER whiff", "extra-miss/snapback")
       end
     end
     return hit
@@ -754,6 +1216,10 @@ return function(mod)
     local state = momentumByBattle[battle]
     if state then
       state.breakthroughPending = nil
+    end
+    -- Quiet beat: occasional trainer chatter when nothing's in cover.
+    if maybeEnqueueIdleBanter then
+      maybeEnqueueIdleBanter(battle)
     end
   end)
 
@@ -773,7 +1239,9 @@ return function(mod)
         end
         state.temp.defense = 0
         state.temp.entrenched = false
+        state.temp.entrenchTurns = 0
         state.breakthroughPending = true
+        dev.log(battle, "ENTRENCH break", "temp DF stripped for hit")
       end
     end
     local dmg, info = next(ctx)
@@ -792,12 +1260,14 @@ return function(mod)
         and state.mode == "counter" and not state.boosted then
       state.boosted = true
       dmg = math.max(1, math.floor(dmg * 5 / 4))
+      dev.log(battle, "DMG +25%", "your counter")
       return dmg, info
     end
     if user and not user.isPlayer and target and target.isPlayer
         and state.enemyMode == "counter" and not state.enemyBoosted then
       state.enemyBoosted = true
       dmg = math.max(1, math.floor(dmg * 5 / 4))
+      dev.log(battle, "DMG +25%", "foe counter")
       return dmg, info
     end
     return dmg, info
@@ -805,7 +1275,7 @@ return function(mod)
 
   -- Replace "X grew to level N!" with a generic line. StatBox + move
   -- learning still queue right after via uiNext / learnMove.
-  local LEVEL_UP_LINES = {
+  S.LEVEL_UP_LINES = {
     "Your POKéMON has\ngrown stronger!",
     "Your POKéMON looks\nmore powerful!",
     "Your POKéMON's power\nhas surged!",
@@ -814,7 +1284,7 @@ return function(mod)
 
   -- Anime-style trainer callouts for "NAME\nused MOVE!" (not item use).
   -- Wild battles keep the vanilla line. Trainer foes use the trainer's name.
-  local PLAYER_MOVE_CALLS = {
+  S.PLAYER_MOVE_CALLS = {
     "%s!\nUse %s!",
     "%s, use\n%s!",
     "Go! %s!\n%s!",
@@ -829,7 +1299,7 @@ return function(mod)
     "%s!\n%s! Go!",
   }
   -- When the foe looks weak (same threshold as LOW HP AT).
-  local PLAYER_FINISH_CALLS = {
+  S.PLAYER_FINISH_CALLS = {
     "Finish it!\n%s! %s!",
     "%s!\nFinish it!",
     "%s!\nFinish it! %s!",
@@ -842,7 +1312,17 @@ return function(mod)
     "Finish them!\n%s! %s!",
   }
   -- After your move announce, when a physical counter is armed.
-  local PLAYER_COUNTER_CALLS = {
+  -- Going second (foe already acted): announce becomes this line.
+  S.AUTO_COUNTER_CALLS = {
+    "%s!\nCounter with %s!",
+    "Now, %s!\nCounter- %s!",
+    "%s!\nHit back! %s!",
+    "Counter!\n%s, use %s!",
+  }
+  -- formatAutoCounterCall is defined after pickFormatted (Lua locals are
+  -- not visible above their declaration — calling early binds a nil global).
+  local formatAutoCounterCall
+  S.PLAYER_COUNTER_CALLS = {
     AUTO = {
       "Now, %s!\n%s!",
       "%s!\nHit back! %s!",
@@ -869,7 +1349,7 @@ return function(mod)
     },
   }
   -- Style-flavored dodge / brace bases (mon name = %s).
-  local DODGE_STYLE = {
+  S.DODGE_STYLE = {
     AUTO = {
       "%s!\nDodge it!",
       "Dodge, %s!",
@@ -895,7 +1375,7 @@ return function(mod)
       "Stylish,\n%s! Move!",
     },
   }
-  local BRACE_STYLE = {
+  S.BRACE_STYLE = {
     AUTO = {
       "%s!\nGet ready!",
       "%s!\nBrace yourself!",
@@ -922,7 +1402,7 @@ return function(mod)
     },
   }
   -- Terrain lines: first %s = mon. Keep short for the text box.
-  local DODGE_SCENE = {
+  S.DODGE_SCENE = {
     cave = {
       "%s!\nOnto that rock!",
       "%s!\nBehind the rocks!",
@@ -969,7 +1449,7 @@ return function(mod)
       "Clear the floor,\n%s!",
     },
   }
-  local BRACE_SCENE = {
+  S.BRACE_SCENE = {
     cave = {
       "%s!\nBrace on the rock!",
       "%s!\nDig in here!",
@@ -1008,7 +1488,7 @@ return function(mod)
     },
   }
   -- Type spice (checked against player curTypes).
-  local DODGE_TYPE = {
+  S.DODGE_TYPE = {
     FLYING = {
       "%s!\nFly up high!",
       "%s!\nTake the air!",
@@ -1062,7 +1542,7 @@ return function(mod)
       "%s!\nBob and weave!",
     },
   }
-  local BRACE_TYPE = {
+  S.BRACE_TYPE = {
     FIGHTING = {
       "%s!\nGuard up!",
       "%s!\nTough it out!",
@@ -1089,7 +1569,7 @@ return function(mod)
   }
   -- Named characters only (gym leaders, E4, etc.). Class titles like
   -- YOUNGSTER / JR.TRAINER use foe mon callouts instead — no "TRAINER!".
-  local NAMED_TRAINERS = {
+  S.NAMED_TRAINERS = {
     BROCK = true,
     MISTY = true,
     ["LT.SURGE"] = true,
@@ -1107,7 +1587,7 @@ return function(mod)
     ROCKET = true,
   }
   -- trainer, mon, move — softer "NAME:" lead-in, not "NAME!"
-  local TRAINER_MOVE_CALLS = {
+  S.TRAINER_MOVE_CALLS = {
     "%s:\n%s, use %s!",
     "%s:\n%s! %s!",
     "%s:\nGo, %s! %s!",
@@ -1116,7 +1596,7 @@ return function(mod)
     "%s:\nDo it, %s! %s!",
   }
   -- Foe Pokémon callouts when the trainer label is a generic class.
-  local FOE_MOVE_CALLS = {
+  S.FOE_MOVE_CALLS = {
     "%s!\nUse %s!",
     "%s, use\n%s!",
     "Go, %s!\n%s!",
@@ -1151,6 +1631,9 @@ return function(mod)
 
   local function formatCall(template, a, b, c)
     local _, n = template:gsub("%%s", "")
+    if n <= 0 then
+      return template
+    end
     if n >= 3 then
       return template:format(a, b, c)
     end
@@ -1166,6 +1649,13 @@ return function(mod)
       return nil
     end
     return formatCall(t, a, b, c)
+  end
+
+  formatAutoCounterCall = function(me, moveName)
+    me = me or "POKéMON"
+    moveName = moveName or "MOVE"
+    return pickFormatted(S.AUTO_COUNTER_CALLS, me, moveName)
+      or (me .. "!\nCounter with " .. moveName .. "!")
   end
 
   local function enemyLooksWeak(battle)
@@ -1195,7 +1685,7 @@ return function(mod)
     if key:match("^RIVAL%d*$") then
       return nil
     end
-    if NAMED_TRAINERS[key] then
+    if S.NAMED_TRAINERS[key] then
       return name
     end
     -- Rival overlay uses the save's rival name (e.g. BLUE) — keep it.
@@ -1207,7 +1697,7 @@ return function(mod)
   end
 
   -- Battle text box is 18 glyphs wide (Theme.textBox.maxCols).
-  local BATTLE_TEXT_COLS = 18
+  S.BATTLE_TEXT_COLS = 18
 
   local function battleGlyphLen(s)
     local n = 0
@@ -1218,7 +1708,7 @@ return function(mod)
   end
 
   local function fitsBattleLine(s)
-    return battleGlyphLen(s) <= BATTLE_TEXT_COLS
+    return battleGlyphLen(s) <= S.BATTLE_TEXT_COLS
   end
 
   -- Keep anime callouts inside the 2-line box; spill to a 3rd line or CONT.
@@ -1257,14 +1747,25 @@ return function(mod)
   end
 
   local function rewriteMoveCallText(battle, text)
-    if not opt("anime_move_calls") then
-      return text
-    end
     local mon, move = parseUsedMoveText(text)
     if not mon then
       return text
     end
     local bare, isEnemy = stripEnemyPrefix(mon)
+    -- Frozen / asleep: no trainer orders — leave the engine's status/move text.
+    if isEnemy and enemyStatusLocked(battle) then
+      return text
+    end
+    if (not isEnemy) and playerStatusLocked(battle) then
+      return text
+    end
+    -- Armed counter: announce IS "Counter with X!" — no generic callout under it.
+    if not isEnemy and playerHasCounter(battle) then
+      return formatAutoCounterCall(bare, move)
+    end
+    if not opt("anime_move_calls") then
+      return text
+    end
     if isEnemy then
       local kind = battle and battle.kind
       -- Wild: leave "Enemy X used Y!" alone.
@@ -1277,57 +1778,53 @@ return function(mod)
         if fitted then
           return fitted
         end
-        return pickFormatted(TRAINER_MOVE_CALLS, trainer, bare, move)
+        return pickFormatted(S.TRAINER_MOVE_CALLS, trainer, bare, move)
           or (trainer .. ":\n" .. bare .. ", use " .. move .. "!")
       end
       return formatEnemyMoveCall(nil, bare, move)
-        or pickFormatted(FOE_MOVE_CALLS, bare, move)
+        or pickFormatted(S.FOE_MOVE_CALLS, bare, move)
         or (bare .. "!\nUse " .. move .. "!")
     end
-    -- Finish / counter / dodge are separate queue pages after the announce.
-    return pickFormatted(PLAYER_MOVE_CALLS, bare, move)
+    return pickFormatted(S.PLAYER_MOVE_CALLS, bare, move)
       or (bare .. "!\nUse " .. move .. "!")
   end
 
   local function rewriteLevelUpText(text)
     if opt("generic_level_up") and isGrewToLevelText(text) then
-      return pickLine(LEVEL_UP_LINES) or "Your POKéMON has\ngrown stronger!"
+      return pickLine(S.LEVEL_UP_LINES) or "Your POKéMON has\ngrown stronger!"
     end
     return text
   end
 
-  local EXP_GAIN_LINES = {
-    "%s grew\nfrom the battle!",
-    "%s gained\nexperience!",
-    "%s learned\nfrom that fight!",
-    "A hard lesson-\n%s grew!",
-  }
-
-  local function rewriteExpGainText(text)
-    if not opt("generic_level_up") then
-      return text
-    end
+  -- Hide EXP share / EXP.ALL / boosted-EXP dialogue. Level-up lines stay.
+  local function isExpGainDialogue(text)
     local s = tostring(text or "")
+    if s == "" or isGrewToLevelText(s) then
+      return false
+    end
     local lower = s:lower()
-    if not (lower:find("exp", 1, true) or lower:find("experience", 1, true)) then
-      return text
+    if lower:find("exp. points", 1, true) or lower:find("exp points", 1, true) then
+      return true
     end
-    if not s:find("%d") then
-      return text
+    if lower:find("experience", 1, true) then
+      return true
     end
-    local name = s:match("^([^\n]+)%s+gained")
-      or s:match("^([^\n]+) gained")
-    if not name or name == "" then
-      name = "Your POKéMON"
+    if lower:find("exp.all", 1, true) or lower:find("exp all", 1, true) then
+      return true
     end
-    name = name:gsub("%s+$", "")
-    local line = pickLine(EXP_GAIN_LINES) or "%s grew\nfrom the battle!"
-    return line:format(name)
+    if lower:find("gained", 1, true)
+        and (lower:find("exp", 1, true) or lower:find("boosted", 1, true)) then
+      return true
+    end
+    -- Scrolled second page: "123 EXP. Points!"
+    if lower:find("exp", 1, true) and lower:find("point", 1, true) then
+      return true
+    end
+    return false
   end
 
   local function rewriteBattleText(battle, text)
     text = rewriteLevelUpText(text)
-    text = rewriteExpGainText(text)
     return rewriteMoveCallText(battle, text)
   end
 
@@ -1444,23 +1941,23 @@ return function(mod)
     end
 
     if kind == "dodge" then
-      add(DODGE_STYLE[style] or DODGE_STYLE.AUTO, style == "SHOWY" and 2 or 1)
-      add(DODGE_SCENE[scene], 2)
+      add(S.DODGE_STYLE[style] or S.DODGE_STYLE.AUTO, style == "SHOWY" and 2 or 1)
+      add(S.DODGE_SCENE[scene], 2)
       for ty, on in pairs(types) do
         if on then
-          add(DODGE_TYPE[ty], 2)
+          add(S.DODGE_TYPE[ty], 2)
         end
       end
     elseif kind == "brace" then
-      add(BRACE_STYLE[style] or BRACE_STYLE.AUTO, 1)
-      add(BRACE_SCENE[scene], 1)
+      add(S.BRACE_STYLE[style] or S.BRACE_STYLE.AUTO, 1)
+      add(S.BRACE_SCENE[scene], 1)
       for ty, on in pairs(types) do
         if on then
-          add(BRACE_TYPE[ty], 2)
+          add(S.BRACE_TYPE[ty], 2)
         end
       end
     elseif kind == "counter" then
-      local lines = PLAYER_COUNTER_CALLS[style] or PLAYER_COUNTER_CALLS.AUTO
+      local lines = S.PLAYER_COUNTER_CALLS[style] or S.PLAYER_COUNTER_CALLS.AUTO
       local defDrop = (style == "SHOWY" or style == "BOLD") and 2 or 1
       add(lines, defDrop)
     end
@@ -1481,116 +1978,374 @@ return function(mod)
     return line, entry.boost or 1
   end
 
-  local DODGE_FAIL_CALLS = {
-    "%s!\nToo slow!",
-    "%s!\nCouldn't dodge!",
-    "No time,\n%s!",
-    "%s!\nDidn't make it!",
-    "Almost,\n%s! Too late!",
+  S.DODGE_FAIL_CALLS = {
+    "...but it was\ntoo slow!",
   }
-  -- In cover, but the attack still connected.
-  local COVER_HIT_CALLS = {
+  -- Narrator line for a failed dodge (bottom text box, not a speech bubble).
+  S.DODGE_TOO_SLOW = "...but it was\ntoo slow!"
+  S.PAR_REACT_FAIL = "...but it couldn't\nmove right!"
+  S.PAR_SHAKE_CALLS = {
+    "%s shook off\nthe paralysis!",
+    "%s's body\nlimbered up!",
+    "%s fought through\nthe paralysis!",
+    "The paralysis\nleft %s!",
+  }
+  local function isDodgeFailNarrator(text)
+    if type(text) ~= "string" then
+      return false
+    end
+    if text == S.PAR_REACT_FAIL or text == S.DODGE_TOO_SLOW then
+      return true
+    end
+    return text:find("but it was", 1, true) ~= nil
+        and text:lower():find("too slow", 1, true) ~= nil
+  end
+  local function reactFailLine(battle, kind)
+    if playerIsParalyzed(battle) then
+      return S.PAR_REACT_FAIL
+    end
+    if kind == "dodge" then
+      return S.DODGE_TOO_SLOW
+    end
+    return S.PAR_REACT_FAIL
+  end
+  -- Real hide pierced — never plain sidestep, never brace/entrench.
+  S.COVER_HIT_CALLS = {
     "But it found\n%s!",
     "Still got hit,\n%s!",
-    "No escape-\n%s was hit!",
     "%s!\nHit through cover!",
-    "They saw\n%s anyway!",
+    "Cover wasn't\nenough!",
   }
   -- Miss while dodging — replaces vanilla "attack missed!".
-  local DODGE_WHIFF_CALLS = {
+  S.DODGE_WHIFF_CALLS = {
     "But %s\ndodged aside!",
     "%s slipped\naway!",
     "Too slow!\n%s dodged!",
     "The attack\nwhiffed past!",
     "%s!\nSafe in cover!",
   }
+  -- Evasive hide (PATH / grass / fly / …): chance for extra EVADE.
+  -- Light buff vs plain sidestep — brush/cover should feel worth picking.
+  S.VANISH_CHANCE = 0.40
+  S.VANISH_EVADE_BONUS = 1
+  S.VANISH_CALLS = {
+    "Vanished from\nthe foe's sight!",
+    "%s vanished from\nsight!",
+    "Out of the foe's\nsight!",
+    "%s slipped from\nview!",
+    "Gone from view!",
+    "%s melted into\ncover!",
+    "Can't be seen!",
+    "%s winked out of\nsight!",
+  }
+  -- Weighted EVADE rolls so dodge strength isn't fixed by the menu pick.
+  -- basic = plain DODGE sidestep; hide = PATH / grass / fly / dive / …
+  -- Hide leans a touch higher so grass/cover reads as safer than a sidestep.
+  S.DODGE_EVADE_ROLL = {
+    basic = { 1, 1, 1, 1, 2, 2 },
+    hide = { 1, 2, 2, 2, 2, 3, 3, 3, 3, 4 },
+  }
+  S.DODGE_EVADE_HIGH_CALLS = {
+    "Sharp instincts!",
+    "Perfect timing!",
+    "%s moved like\na blur!",
+    "What a read!",
+  }
   -- Foe punches through your entrenched guard (DEF stripped for this hit).
-  local BREAKTHROUGH_CALLS = {
+  S.BREAKTHROUGH_CALLS = {
     "Broke through\nthe guard!",
     "The defense\nshattered!",
     "Pushed past\n%s!",
     "Guard broken!\n%s!",
   }
-  local LEAVE_COVER_CALLS = {
+  S.LEAVE_COVER_CALLS = {
     "%s!\nLeft cover!",
     "Breaking cover,\n%s!",
     "%s!\nComing out!",
     "Leave cover,\n%s! Strike!",
+    "%s!\nCome out!",
+    "Out of hiding,\n%s!",
+    "%s!\nSurface and\nstrike!",
+  }
+  -- Stay in a real hide — mon stays tucked away (pic hidden).
+  S.HOLD_POSITION_CALLS = {
+    "%s!\nHold on!",
+    "Stay in cover,\n%s!",
+    "%s!\nKeep hiding!",
+    "Hold tight,\n%s!",
+    "%s!\nDon't come out!",
+    "Stay put,\n%s!",
+    "%s!\nKeep cover!",
+    "Stay ready\nin cover, %s!",
+  }
+  -- Random deep-cover lock: can't leave (tree / dive / boulder / …).
+  S.DEEP_COVER_CHANCE = 0.30
+  S.DEEP_COVER_CALLS = {
+    TREE = {
+      "%s is still\nup the tree!",
+      "%s can't climb\ndown yet!",
+      "Still perched-\n%s, hold!",
+    },
+    BRUSH = {
+      "%s is deep in\nthe brush!",
+      "Can't leave the\nthicket yet!",
+    },
+    GRASS = {
+      "%s is buried\nin the grass!",
+      "Still hidden in\nthe tall grass!",
+    },
+    ROCK = {
+      "%s is pinned\nbehind a rock!",
+      "Can't leave the\nboulder yet!",
+    },
+    STONE = {
+      "%s ducks behind\nthe stone!",
+      "Still behind the\nstone!",
+    },
+    CLIFF = {
+      "%s is stuck up\nthe cliff!",
+      "Can't descend\nyet!",
+    },
+    LEDGE = {
+      "%s clings to\nthe ledge!",
+      "Still on the\nledge!",
+    },
+    ["FLY UP"] = {
+      "%s is still\nhigh above!",
+      "%s can't land\nyet!",
+      "Still airborne-\nhold!",
+    },
+    DIVE = {
+      "%s is still\nunderwater!",
+      "%s can't surface\nyet!",
+      "Deep below-\nhold breath!",
+    },
+    SPLASH = {
+      "%s is still\nin the water!",
+      "Can't leave the\nwaves yet!",
+    },
+    SHORE = {
+      "%s hugs the\nshoreline!",
+      "Still along the\nshore!",
+    },
+    CART = {
+      "%s is tucked\nbehind the cart!",
+      "Still using the\ncart for cover!",
+    },
+    ALLEY = {
+      "%s is deep in\nthe alley!",
+      "Can't leave the\nalley yet!",
+    },
+    PILLAR = {
+      "%s stays behind\nthe pillar!",
+      "Still using the\npillar!",
+    },
+    SHADOW = {
+      "%s is lost in\nthe dark!",
+      "Still in the\nshadows!",
+    },
+    COVER = {
+      "%s can't leave\ncover yet!",
+      "Still dug in-\nhold!",
+    },
+    WALL = {
+      "%s presses to\nthe wall!",
+      "Still using the\nwall!",
+    },
+    _default = {
+      "%s can't leave\ncover yet!",
+      "%s is stuck in\nhiding!",
+      "Too deep in\ncover-hold!",
+      "%s needs a\nmoment more!",
+    },
+  }
+  S.SCENE_COVER_SPOT = {
+    forest = "TREE",
+    cave = "ROCK",
+    water = "DIVE",
+    mountain = "CLIFF",
+    grave = "STONE",
+    route = "GRASS",
+    city = "CART",
+    gym = "PILLAR",
+    indoor = "COVER",
+  }
+  -- STATUS CHIPS: cover label → short English (fits under mon name).
+  S.CHIP_SPOT_PHRASE = {
+    GRASS = "in brush",
+    BRUSH = "in brush",
+    TREE = "up a tree",
+    ROCK = "behind rocks",
+    BOULDER = "behind rocks",
+    LEDGE = "on a ledge",
+    CLIFF = "on a cliff",
+    STONE = "by a stone",
+    SHADOW = "in the dark",
+    CART = "by a cart",
+    ALLEY = "in an alley",
+    PATH = "off the path",
+    PILLAR = "by pillars",
+    COURT = "on court",
+    WALL = "by a wall",
+    COVER = "in cover",
+    ["FLY UP"] = "in the air",
+    DIVE = "underwater",
+    SPLASH = "in water",
+    SHORE = "by water",
+    ZIP = "zipping by",
+    BURST = "in smoke",
+    FADE = "faded out",
+    SENSE = "out of mind",
+  }
+  S.CHIP_FALLBACK_SPOT = "in cover"
+  -- Idle pulses while braced / hiding during the command menu.
+  S.AMBIENT_DELAY = 2.2
+  S.AMBIENT_DELAY_JITTER = 1.0
+  S.AMBIENT_BRACE_MOVES = {
+    "HARDEN", "WITHDRAW", "DEFENSE_CURL", "HARDEN", "MEDITATE",
+  }
+  S.AMBIENT_ENTRENCH_MOVES = {
+    "HARDEN", "BARRIER", "WITHDRAW", "ACID_ARMOR", "HARDEN",
+  }
+  -- Spot-themed loops (grass → GROWTH, dig spots → DIG, water → SURF…).
+  S.AMBIENT_HIDE_MOVES = {
+    GRASS = { "GROWTH", "RAZOR_LEAF", "GROWTH", "VINE_WHIP" },
+    BRUSH = { "GROWTH", "RAZOR_LEAF", "STUN_SPORE" },
+    TREE = { "GROWTH", "RAZOR_LEAF", "LEECH_SEED" },
+    DIVE = { "SURF", "WITHDRAW", "BUBBLE", "CLAMP" },
+    SPLASH = { "SURF", "WATER_GUN", "BUBBLE" },
+    SHORE = { "SURF", "WATER_GUN", "SAND_ATTACK" },
+    ROCK = { "DIG", "ROCK_THROW", "HARDEN" },
+    STONE = { "DIG", "ROCK_THROW", "HARDEN" },
+    LEDGE = { "DIG", "QUICK_ATTACK" },
+    CLIFF = { "DIG", "FLY", "ROCK_SLIDE" },
+    ["FLY UP"] = { "FLY", "GUST", "WING_ATTACK" },
+    PATH = { "DIG", "SAND_ATTACK", "DOUBLE_TEAM" },
+    CART = { "DOUBLE_TEAM", "SMOKESCREEN", "DIG" },
+    ALLEY = { "SMOKESCREEN", "DOUBLE_TEAM", "DIG" },
+    SHADOW = { "NIGHT_SHADE", "TELEPORT", "LICK" },
+    PILLAR = { "BARRIER", "HARDEN", "REFLECT" },
+    WALL = { "BARRIER", "HARDEN", "REFLECT" },
+    COURT = { "DOUBLE_TEAM", "QUICK_ATTACK" },
+    COVER = { "DIG", "DOUBLE_TEAM", "MINIMIZE" },
+    ZIP = { "FLASH", "THUNDER_WAVE", "DOUBLE_TEAM" },
+    BURST = { "SMOKESCREEN", "EMBER", "FIRE_SPIN" },
+    FADE = { "TELEPORT", "NIGHT_SHADE" },
+    SENSE = { "CONFUSION", "TELEPORT", "DISABLE" },
+  }
+  -- Entrench hold: locked stance until a counter opening (or max turns).
+  S.ENTRENCH_MAX_TURNS = 3
+  S.STAY_ENTRENCHED_CALLS = {
+    "Stay entrenched,\n%s!",
+    "%s!\nHold the trench!",
+    "Keep digging in,\n%s!",
+    "%s!\nStay firm!",
+    "Don't break,\n%s!",
+    "%s!\nWeather it!",
+  }
+  S.BREAK_ENTRENCH_CALLS = {
+    "%s!\nBreak stance!",
+    "Enough-\n%s, move!",
+    "%s!\nCan't hold!",
   }
   -- Simple trainer-foe auto reactions — opposing trainer monologue, not
   -- narrator lines like "hid in the grass".
   -- With personal trainer name: (trainer, mon). Generic class: (mon) only.
-  local TRAINER_FOE_DODGE_CALLS = {
+  S.TRAINER_FOE_DODGE_CALLS = {
     "%s:\n%s, dodge!",
     "%s:\nDodge it, %s!",
     "%s:\n%s, get aside!",
     "%s:\nMove, %s!",
     "%s:\n%s, now-dodge!",
   }
-  local FOE_DODGE_CALLS = {
+  S.FOE_DODGE_CALLS = {
     "%s!\nDodge it!",
     "%s, get\naside!",
     "%s!\nMove!",
     "Quick,\n%s! Dodge!",
   }
-  local TRAINER_FOE_DODGE_FAIL_CALLS = {
-    "%s:\nToo slow, %s!",
-    "%s:\n%s, no!",
-    "%s:\nMissed it,\n%s!",
-  }
-  local FOE_DODGE_FAIL_CALLS = {
-    "%s!\nToo slow!",
-    "%s!\nCouldn't dodge!",
-    "No escape,\n%s!",
-  }
-  local TRAINER_FOE_BRACE_CALLS = {
+  S.TRAINER_FOE_BRACE_CALLS = {
     "%s:\n%s, brace!",
     "%s:\nDig in, %s!",
     "%s:\n%s, hold firm!",
     "%s:\nStand firm,\n%s!",
   }
-  local FOE_BRACE_CALLS = {
+  S.FOE_BRACE_CALLS = {
     "%s!\nBrace!",
     "%s, dig\nin!",
     "%s!\nHold firm!",
     "Stand firm,\n%s!",
   }
-  local TRAINER_FOE_COUNTER_CALLS = {
+  S.TRAINER_FOE_COUNTER_CALLS = {
     "%s:\n%s, hit back!",
     "%s:\nCounter,\n%s!",
     "%s:\nNow, %s!\nStrike!",
   }
-  local FOE_COUNTER_CALLS = {
+  S.FOE_COUNTER_CALLS = {
     "%s!\nHit back!",
     "%s!\nCounter!",
     "Now, %s!\nStrike!",
   }
-  local TRAINER_FOE_AGAIN_CALLS = {
+  -- You whiffed your counter — they punish the opening.
+  S.TRAINER_FOE_COUNTER_BACK_CALLS = {
+    "%s:\nToo slow!\n%s, counter!",
+    "%s:\n%s!\nPunish that!",
+    "%s:\nGot you!\nCounter, %s!",
+  }
+  S.FOE_COUNTER_BACK_CALLS = {
+    "%s!\nCounters!",
+    "Too slow!\n%s hits back!",
+    "%s!\nPunished!",
+  }
+  S.TRAINER_FOE_AGAIN_CALLS = {
     "%s:\nAgain, %s!",
     "%s:\n%s, once more!",
     "%s:\nDon't stop,\n%s!",
+    "%s:\nThey're open!\n%s, again!",
+    "%s:\nKeep going,\n%s!",
+    "%s:\n%s!\nOne more!",
+    "%s:\nDon't let up!",
+    "%s:\nHit 'em\nagain, %s!",
   }
-  local FOE_AGAIN_CALLS = {
+  S.FOE_AGAIN_CALLS = {
     "%s!\nAgain!",
     "%s, once\nmore!",
     "Don't stop,\n%s!",
+    "They're open!\n%s, again!",
+    "%s!\nOne more!",
+    "Don't let up!\n%s!",
   }
-  local TRAINER_FOE_LEAVE_COVER_CALLS = {
+  S.TRAINER_FOE_LEAVE_COVER_CALLS = {
     "%s:\n%s, break cover!",
     "%s:\nCome out, %s!",
     "%s:\n%s, now-strike!",
   }
-  local FOE_LEAVE_COVER_CALLS = {
+  S.FOE_LEAVE_COVER_CALLS = {
     "%s!\nBreak cover!",
     "Come out,\n%s!",
     "%s, now-\nstrike!",
   }
-  local AGAIN_CALLS = {
+  S.AGAIN_CALLS = {
     "%s!\nAgain!",
     "%s!\nOne more!",
     "Don't stop!\n%s!",
     "%s!\nKeep going!",
     "Again!\n%s!",
+    "Opening!\nHit 'em again!",
+    "They flinched!\nOne more time!",
+    "Now's your\nchance, %s!",
+    "Don't let up!\n%s!",
+    "Press it!\n%s, again!",
+    "You've got\n'em! Again!",
+    "They're open!\nStrike again!",
+    "%s!\nFinish that!",
+    "Keep the\npressure on!",
+    "One more hit,\n%s!",
+    "Go again,\n%s!",
+    "That rattled\n'them! Again!",
+    "Don't give\n'them room!",
+    "You have an\nopening-again!",
+    "%s!\nHit 'em again!",
   }
 
   local function enemyMonName(battle)
@@ -1616,6 +2371,757 @@ return function(mod)
       or (monName .. "!")
   end
 
+  -- Personality buckets from oppClass / trainer name (Gen 1 classes).
+  local function trainerPersona(battle)
+    local cls = tostring(battle and battle.oppClass or ""):upper()
+    local name = tostring(battle and battle.trainer and battle.trainer.name or ""):upper()
+    local blob = cls .. " " .. name
+    local function has(s)
+      return blob:find(s, 1, true) ~= nil
+    end
+    if has("RIVAL") then
+      return "rival"
+    end
+    if has("ROCKET") or has("BURGLAR") or has("GIOVANNI") then
+      return "evil"
+    end
+    if has("BROCK") or has("MISTY") or has("SURGE") or has("ERIKA")
+        or has("KOGA") or has("SABRINA") or has("BLAINE")
+        or has("LORELEI") or has("BRUNO") or has("AGATHA") or has("LANCE") then
+      return "gym"
+    end
+    if has("YOUNGSTER") or has("BUG_CATCHER") or has("BUG CATCHER")
+        or has("LASS") or has("JR_TRAINER") or has("JR.TRAINER")
+        or has("SCHOOL") then
+      return "kid"
+    end
+    if has("COOLTRAINER") or has("ACE") or has("BLACKBELT")
+        or has("BLACKBELT") or has("BIKER") or has("CUE_BALL")
+        or has("BIRD_KEEPER") or has("TAMER") then
+      return "cocky"
+    end
+    if has("CHANNELER") or has("GHOST") then
+      return "spooky"
+    end
+    if has("SUPER_NERD") or has("SCIENTIST") or has("POKEMANIAC")
+        or has("ENGINEER") or has("PSYCHIC") then
+      return "nerd"
+    end
+    if has("GENTLEMAN") or has("BEAUTY") or has("SAILOR")
+        or has("HIKER") or has("FISHER") or has("SWIMMER") then
+      return "chill"
+    end
+    return "generic"
+  end
+
+  local function banterSpeaker(battle)
+    return personalTrainerName(battle)
+      or (battle.trainer and battle.trainer.name)
+      or "TRAINER"
+  end
+
+  -- speaker (+ optional mon). Persona lines when you or they send out.
+  -- player lines: (speaker, your mon). enemy lines: (speaker, their mon).
+  S.BANTER = {
+    kid = {
+      player = {
+        "%s:\nA %s, huh?!\nLooks tough!",
+        "%s:\nWow, a %s!",
+        "%s:\n%s looks\nso cool!",
+        "%s:\nHi, %s!\nLet's play!",
+        "%s:\nWhoa!\nA real %s!",
+        "%s:\n%s?!\nI want one!",
+        "%s:\nYour %s\nis awesome!",
+        "%s:\nNeat! A %s!",
+        "%s:\nIs %s\nyour favorite?",
+        "%s:\nA %s...\nI'm nervous!",
+      },
+      enemy = {
+        "%s:\nGo, %s!",
+        "%s:\nDo your best,\n%s!",
+        "%s:\nI believe in\n%s!",
+        "%s:\nYou can do it,\n%s!",
+        "%s:\nShow them,\n%s!",
+        "%s:\nReady, %s?!",
+        "%s:\nPlease win,\n%s!",
+        "%s:\nGo go go,\n%s!",
+      },
+      idle = {
+        "%s:\nThis is fun!",
+        "%s:\nYou're good!",
+        "%s:\nNice moves!",
+        "%s:\nWow!",
+        "%s:\nMy heart's\nracing!",
+        "%s:\nBest battle\never!",
+        "%s:\nDon't go easy!",
+        "%s:\nI'm learning\nso much!",
+        "%s:\nAgain! Again!",
+        "%s:\nThis rules!",
+      },
+      ahead = {
+        "%s:\nAm I winning?!",
+        "%s:\nYes! Go me!",
+        "%s:\nI'm doing it!",
+        "%s:\nSee? I'm good!",
+      },
+      behind = {
+        "%s:\nUh-oh...",
+        "%s:\nWait, no fair!",
+        "%s:\nI can still\ncatch up!",
+        "%s:\nDon't cry...\nfocus!",
+      },
+      player_weak = {
+        "%s:\nOne more?\nMaybe?",
+        "%s:\nYour mon looks\ntired...",
+        "%s:\nHang in there!",
+      },
+      self_weak = {
+        "%s:\nOw ow ow!",
+        "%s:\nWe're okay!\n...Right?",
+        "%s:\nDon't give up!",
+      },
+      long = {
+        "%s:\nSo long...\nbut cool!",
+        "%s:\nMy legs are\ntired!",
+        "%s:\nStill going?!",
+      },
+    },
+    cocky = {
+      player = {
+        "%s:\nA %s?\nThat all?",
+        "%s:\n%s? Hah!\nWeak!",
+        "%s:\nDon't bore me\nwith %s!",
+        "%s:\n%s...\nEasy prey!",
+        "%s:\n%s? Cute.\nNot enough!",
+        "%s:\nBringing %s?\nBold.",
+        "%s:\nI've beaten\nbetter than %s!",
+        "%s:\n%s won't\nlast a minute!",
+        "%s:\nStand aside,\n%s!",
+        "%s:\nTry harder than\n%s next time!",
+      },
+      enemy = {
+        "%s:\nCrush them,\n%s!",
+        "%s:\nShow off, %s!",
+        "%s:\nNo contest!",
+        "%s:\nFlex on them,\n%s!",
+        "%s:\nEnd this,\n%s!",
+        "%s:\nMake it flashy,\n%s!",
+        "%s:\nDon't blink-\n%s!",
+        "%s:\nOwn the field,\n%s!",
+      },
+      idle = {
+        "%s:\nToo easy!",
+        "%s:\nWake me when\nit's over!",
+        "%s:\nIs that it?",
+        "%s:\nYawn...",
+        "%s:\nSpeed it up!",
+        "%s:\nI'm barely\ntrying!",
+        "%s:\nCome on,\nimpress me!",
+        "%s:\nPredictable!",
+        "%s:\nI've seen\nworse... barely!",
+        "%s:\nStep it up!",
+      },
+      ahead = {
+        "%s:\nOutmatched!",
+        "%s:\nAs expected!",
+        "%s:\nToo slow!",
+        "%s:\nKnow your\nleague!",
+        "%s:\nThis is why\nI'm top tier!",
+        "%s:\nDon't look so\nsurprised!",
+      },
+      behind = {
+        "%s:\nHmph-fine!",
+        "%s:\nDon't celebrate!",
+        "%s:\nA fluke.\nNothing more!",
+        "%s:\nTch... lucky!",
+        "%s:\nI'm just\ntoying with you!",
+      },
+      player_weak = {
+        "%s:\nFinish it!",
+        "%s:\nThey're done!",
+        "%s:\nTap out already!",
+        "%s:\nOne hit left.\nMaybe.",
+        "%s:\nSmell the\ndefeat!",
+      },
+      self_weak = {
+        "%s:\nWhatever-\nstill winning!",
+        "%s:\nI meant to\ntake that!",
+        "%s:\nCute hit.\nMy turn!",
+      },
+      long = {
+        "%s:\nDragging this?\nRude!",
+        "%s:\nWrap it up!",
+        "%s:\nI'm getting\nbored again!",
+      },
+    },
+    evil = {
+      player = {
+        "%s:\nA %s...?\nHand it over!",
+        "%s:\n%s?\nPathetic!",
+        "%s:\nThat %s\nis in our way!",
+        "%s:\nHmm, a %s...\nUseful!",
+        "%s:\n%s looks ripe\nfor taking!",
+        "%s:\nWe'll crush %s\nand move on!",
+        "%s:\nAnother %s\nto break!",
+        "%s:\nKeep %s out of\nRocket business!",
+        "%s:\n%s... won't\nsave you!",
+        "%s:\nSteal? Later.\nBeat %s first!",
+      },
+      enemy = {
+        "%s:\nGet them, %s!",
+        "%s:\nMake it hurt!",
+        "%s:\nNo mercy!",
+        "%s:\nRuin them,\n%s!",
+        "%s:\nShow no pity,\n%s!",
+        "%s:\nTear in,\n%s!",
+        "%s:\nObey me, %s!",
+        "%s:\nMake them\nscream, %s!",
+      },
+      idle = {
+        "%s:\nPrepare to\nsuffer!",
+        "%s:\nTeam Rocket\nrules!",
+        "%s:\nHeh heh heh...",
+        "%s:\nNo escape!",
+        "%s:\nYour hopes end\nhere!",
+        "%s:\nWe always win\nin the end!",
+        "%s:\nSquirm a\nlittle more!",
+        "%s:\nCrime pays-\nwatch!",
+        "%s:\nHand over the\ncash later!",
+        "%s:\nDarkness suits\nthis fight!",
+      },
+      ahead = {
+        "%s:\nYes... suffer!",
+        "%s:\nAll according\nto plan!",
+        "%s:\nBroken already?",
+        "%s:\nMusic to my\nears!",
+        "%s:\nFall for Team\nRocket!",
+      },
+      behind = {
+        "%s:\nImpossible...!",
+        "%s:\nYou'll regret\nthat!",
+        "%s:\nA setback-\nnothing more!",
+        "%s:\nBoss won't like\nthis...",
+      },
+      player_weak = {
+        "%s:\nBeg for mercy!",
+        "%s:\nIt's over!",
+        "%s:\nKneel!",
+        "%s:\nFinish the\nworm!",
+        "%s:\nYour mon is\ndone!",
+      },
+      self_weak = {
+        "%s:\nHow dare you!",
+        "%s:\nThis changes\nnothing!",
+        "%s:\nI'll make you\npay double!",
+      },
+      long = {
+        "%s:\nStop stalling\nand lose!",
+        "%s:\nOur time is\nmoney!",
+        "%s:\nEndurance?\nHow quaint!",
+      },
+    },
+    gym = {
+      player = {
+        "%s:\nA %s, huh?\nInteresting!",
+        "%s:\n%s...\nShow me its skill!",
+        "%s:\nSo you chose\n%s!",
+        "%s:\nThat %s\nlooks trained!",
+        "%s:\n%s carries your\npride, yes?",
+        "%s:\nA worthy %s.\nCome then!",
+        "%s:\nI see the care\nin that %s!",
+        "%s:\n%s... let's\ntest its spirit!",
+        "%s:\nGym rules:\nhold nothing back!",
+        "%s:\nYour %s meets\nmy standard!",
+      },
+      enemy = {
+        "%s:\nGo, %s!",
+        "%s:\nThis is a real\nbattle!",
+        "%s:\nDon't hold\nback!",
+        "%s:\nShow our gym's\nstrength, %s!",
+        "%s:\nStand tall,\n%s!",
+        "%s:\nEarn this win,\n%s!",
+        "%s:\nPress the\nadvantage, %s!",
+        "%s:\nBattle with\nhonor, %s!",
+      },
+      idle = {
+        "%s:\nStay focused!",
+        "%s:\nGood-keep it\nup!",
+        "%s:\nNot bad!",
+        "%s:\nProve yourself!",
+        "%s:\nRead the next\nexchange!",
+        "%s:\nBreathe. Then\nstrike!",
+        "%s:\nThat's the\nspirit!",
+        "%s:\nPressure makes\ndiamonds!",
+        "%s:\nA Leader expects\nyour best!",
+        "%s:\nDon't freeze-\nadapt!",
+      },
+      ahead = {
+        "%s:\nFeel the gap\nin skill!",
+        "%s:\nPush harder!",
+        "%s:\nThis is gym-\nlevel play!",
+        "%s:\nCan you climb\nback?",
+        "%s:\nExperience\ntalks!",
+      },
+      behind = {
+        "%s:\nWell done-\ndon't stop!",
+        "%s:\nYou've grown!",
+        "%s:\nImpressive...\nagain!",
+        "%s:\nI won't yield\neasily!",
+        "%s:\nGood! Make me\nwork for it!",
+      },
+      player_weak = {
+        "%s:\nFinish with\npride!",
+        "%s:\nOne decisive\nblow!",
+        "%s:\nYour mon is\non the ropes!",
+      },
+      self_weak = {
+        "%s:\nA Leader still\nstands!",
+        "%s:\nPain sharpens\nfocus!",
+        "%s:\nNow it gets\nserious!",
+      },
+      long = {
+        "%s:\nA true test of\nendurance!",
+        "%s:\nThis is a fine\nbattle!",
+        "%s:\nLong battles\nforge trainers!",
+        "%s:\nNeither backing\ndown-good!",
+      },
+    },
+    rival = {
+      player = {
+        "%s:\nA %s, huh?!\nLooks tough!\n...As if!",
+        "%s:\n%s?!\nDon't make me\nlaugh!",
+        "%s:\nThat %s?\nPathetic!",
+        "%s:\nOh, a %s...\nSmell ya later!",
+        "%s:\n%s?\nStill weak!",
+        "%s:\nHah! A %s?\nWhat a joke!",
+        "%s:\nBringing %s?\nOutclassed!",
+        "%s:\n%s won't\nsave you!",
+        "%s:\n%s again?\nPredictable!",
+        "%s:\nYour precious\n%s? Please!",
+        "%s:\nGramps would\nlaugh at %s!",
+        "%s:\nI outgrew %s\nalready!",
+      },
+      enemy = {
+        "%s:\nGo! %s!",
+        "%s:\nWatch this!",
+        "%s:\nI'm the best!",
+        "%s:\nShow them up,\n%s!",
+        "%s:\nCrush this\nchump!",
+        "%s:\nEasy win,\n%s!",
+        "%s:\nMake it hurt,\n%s!",
+        "%s:\nDon't hold back!",
+        "%s:\nMy %s eats\nlosers!",
+        "%s:\nStyle points,\n%s!",
+        "%s:\nWipe that look\noff- %s!",
+        "%s:\nTeach them,\n%s!",
+      },
+      idle = {
+        "%s:\nBored yet?",
+        "%s:\nI'm just\nwarming up!",
+        "%s:\nYou call this\na fight?",
+        "%s:\nTry harder!",
+        "%s:\nStill think\nyou can win?",
+        "%s:\nHahaha!",
+        "%s:\nMy grandpa's\nstronger!",
+        "%s:\nGive it up!",
+        "%s:\nYou're wasting\nmy time!",
+        "%s:\nCome on, make\nit fun!",
+        "%s:\nI've got places\nto be!",
+        "%s:\nSmell ya-\nsoon!",
+        "%s:\nThat all the\nfire you've got?",
+        "%s:\nKeep up if you\ncan!",
+      },
+      ahead = {
+        "%s:\nTold you I was\nbetter!",
+        "%s:\nThis is too\neasy!",
+        "%s:\nYou're finished!",
+        "%s:\nHah! Know your\nplace!",
+        "%s:\nMaybe forfeit?",
+        "%s:\nI'm in a whole\nother league!",
+        "%s:\nShould've stayed\nhome!",
+        "%s:\nWho's the loser\nnow?!",
+      },
+      behind = {
+        "%s:\nLucky shot...",
+        "%s:\nDon't get cocky!",
+        "%s:\nThat won't\nhappen again!",
+        "%s:\nTch-whatever!",
+        "%s:\nI'm not done\nyet!",
+        "%s:\nBeginner's\nluck!",
+        "%s:\nYou just got\nlucky, twerp!",
+        "%s:\nI'll wipe that\ngrin off!",
+      },
+      player_weak = {
+        "%s:\nLook at that\nHP!",
+        "%s:\nAlmost done!",
+        "%s:\nOne more hit!",
+        "%s:\nGoing down!",
+        "%s:\nSavor it-\nyou lose!",
+        "%s:\nSay goodbye!",
+        "%s:\nAny last\nwords?",
+      },
+      self_weak = {
+        "%s:\nN-no big deal!",
+        "%s:\nI meant to do\nthat!",
+        "%s:\nShut up!",
+        "%s:\nThis isn't\nover!",
+        "%s:\nYou'll pay for\nthat!",
+        "%s:\nDon't you dare\nlaugh!",
+        "%s:\nI was going\neasy!",
+      },
+      long = {
+        "%s:\nStill dragging\nthis out?",
+        "%s:\nHurry up and\nlose!",
+        "%s:\nI'm getting\nimpatient!",
+        "%s:\nEnd this\nalready!",
+        "%s:\nWhat, writing\na novel?!",
+        "%s:\nFinish strong\nor fold!",
+      },
+    },
+    spooky = {
+      player = {
+        "%s:\nA %s...\nOoooh...",
+        "%s:\n%s...\nSpirits stir...",
+        "%s:\nThat %s...\nHow dreadful!",
+        "%s:\n%s walks with\nshadows...",
+        "%s:\nI feel a chill\nfrom %s...",
+        "%s:\n%s... will you\nscream for us?",
+        "%s:\nThe veil thins\nnear %s...",
+        "%s:\nSuch a living\n%s... curious!",
+      },
+      enemy = {
+        "%s:\nRise, %s!",
+        "%s:\nHaunt them!",
+        "%s:\nFrom beyond...",
+        "%s:\nAwaken, %s!",
+        "%s:\nDrain their\nhope, %s!",
+        "%s:\nWhisper ruin,\n%s!",
+        "%s:\nPossess the\nfield, %s!",
+        "%s:\nNight falls-\n%s!",
+      },
+      idle = {
+        "%s:\nI sense fear...",
+        "%s:\nThe spirits\nwatch...",
+        "%s:\nHee hee hee...",
+        "%s:\nDo you hear\nthem too?",
+        "%s:\nThis place\nremembers...",
+        "%s:\nYour pulse is\nloud...",
+        "%s:\nDon't look\nbehind you...",
+        "%s:\nCold air...\ngood omen!",
+        "%s:\nThe candles\nflicker for you!",
+        "%s:\nJoin us...\neventually!",
+      },
+      ahead = {
+        "%s:\nYes... sink...",
+        "%s:\nYour light\nfades!",
+        "%s:\nThe spirits\napprove!",
+        "%s:\nTerror suits\nyou!",
+      },
+      behind = {
+        "%s:\nImpossible\nwarmth...!",
+        "%s:\nThe dead grow\nrestless!",
+        "%s:\nA bright spark\n...annoying!",
+      },
+      player_weak = {
+        "%s:\nOne step from\nthe grave!",
+        "%s:\nSay goodnight!",
+        "%s:\nYour soul\nwavers!",
+      },
+      self_weak = {
+        "%s:\nPain is only\na whisper!",
+        "%s:\nWe do not\nstay down!",
+        "%s:\nFrom ash...\nagain!",
+      },
+      long = {
+        "%s:\nAn endless\nvigil...",
+        "%s:\nTime means\nnothing here!",
+        "%s:\nStill bound to\nthis duel...",
+      },
+    },
+    nerd = {
+      player = {
+        "%s:\nA %s!\nFascinating!",
+        "%s:\n%s...\nStatistically\nnotable!",
+        "%s:\nHmm, %s...\nInteresting data!",
+        "%s:\n%s matches my\nmodels... mostly!",
+        "%s:\nRecording %s\nfor science!",
+        "%s:\nA %s specimen!\nExcellent!",
+        "%s:\n%s's typing...\nintriguing!",
+        "%s:\nI'll need notes\non that %s!",
+        "%s:\nProbability\nfavors... wait!",
+        "%s:\n%s appears\nwell-trained!",
+      },
+      enemy = {
+        "%s:\nDeploy %s!",
+        "%s:\nOptimal pick:\n%s!",
+        "%s:\nAs calculated!",
+        "%s:\nInitialize,\n%s!",
+        "%s:\nRun protocol\n%s!",
+        "%s:\nVariable %s-\nengage!",
+        "%s:\nHypothesis:\n%s wins!",
+        "%s:\nField test-\n%s!",
+      },
+      idle = {
+        "%s:\nAs expected!",
+        "%s:\nInteresting\ndata!",
+        "%s:\nHypothesis\nholds!",
+        "%s:\nRecalculating...",
+        "%s:\nVariance within\ntolerance!",
+        "%s:\nNote to self:\nstudy that!",
+        "%s:\nFascinating\nexchange!",
+        "%s:\nMy charts\npredicted this!",
+        "%s:\nPeer review\npending!",
+        "%s:\nScience is\nwinning!",
+      },
+      ahead = {
+        "%s:\nResult matches\nforecast!",
+        "%s:\nSuperior\nparameters!",
+        "%s:\nYour error\nmargin grows!",
+        "%s:\nQ.E.D.!",
+      },
+      behind = {
+        "%s:\nAnomaly\ndetected!",
+        "%s:\nRecalibrate!\nQuickly!",
+        "%s:\nOutliers...\nhumbling!",
+        "%s:\nI must revise\nmy thesis!",
+      },
+      player_weak = {
+        "%s:\nCritical HP\nthreshold!",
+        "%s:\nOne more data\npoint to KO!",
+        "%s:\nCollapse is\nimminent!",
+      },
+      self_weak = {
+        "%s:\nUnexpected\ndamage spike!",
+        "%s:\nStill within\nrecovery!",
+        "%s:\nPain is just\nfeedback!",
+      },
+      long = {
+        "%s:\nSample size:\ngetting large!",
+        "%s:\nA lengthy\ntrial... good!",
+        "%s:\nEndurance is\na variable too!",
+      },
+    },
+    chill = {
+      player = {
+        "%s:\nA %s, huh?\nLooks tough!",
+        "%s:\nFine %s\nyou've got!",
+        "%s:\n%s, eh?\nGood luck!",
+        "%s:\nNice pick-\n%s!",
+        "%s:\nRespect for\nthat %s!",
+        "%s:\n%s seems\nwell cared for!",
+        "%s:\nA solid %s.\nLet's enjoy!",
+        "%s:\nHey there,\n%s!",
+        "%s:\nNo hard feelings\neither way!",
+        "%s:\n%s... this'll\nbe pleasant!",
+      },
+      enemy = {
+        "%s:\nGo on, %s!",
+        "%s:\nSteady now!",
+        "%s:\nLet's enjoy\nthis!",
+        "%s:\nEasy does it,\n%s!",
+        "%s:\nYou've got\nthis, %s!",
+        "%s:\nSmooth and\nsteady, %s!",
+        "%s:\nTake your time,\n%s!",
+        "%s:\nHave fun out\nthere, %s!",
+      },
+      idle = {
+        "%s:\nNice pace!",
+        "%s:\nWell fought!",
+        "%s:\nCarry on!",
+        "%s:\nGood clean\nfight!",
+        "%s:\nLove a fair\nbattle!",
+        "%s:\nNo rush-\ndo your thing!",
+        "%s:\nYou're sharp\ntoday!",
+        "%s:\nThis is the\ngood stuff!",
+        "%s:\nBreathe in...\nbattle out!",
+        "%s:\nRespect either\nway!",
+      },
+      ahead = {
+        "%s:\nLooks like my\nedge for now!",
+        "%s:\nHang in-you're\ndoing fine!",
+        "%s:\nI've got a bit\nof room!",
+      },
+      behind = {
+        "%s:\nYou've got me\non the ropes!",
+        "%s:\nNicely done-\ntruly!",
+        "%s:\nI'm impressed!\nReally!",
+      },
+      player_weak = {
+        "%s:\nYour mon's\nfading...",
+        "%s:\nTough spot-\nstay calm!",
+        "%s:\nOne more good\nhit maybe!",
+      },
+      self_weak = {
+        "%s:\nOof-that\nstung!",
+        "%s:\nWe're alright!\nStill in it!",
+        "%s:\nShaky... but\nsmiling!",
+      },
+      long = {
+        "%s:\nA leisurely\nslugfest!",
+        "%s:\nNo place I'd\nrather be!",
+        "%s:\nLong battles\nare the best!",
+      },
+    },
+    generic = {
+      player = {
+        "%s:\nA %s, huh?!\nLooks tough!",
+        "%s:\nOh, a %s!",
+        "%s:\n%s, eh?\nLet's battle!",
+        "%s:\nThat %s\nlooks ready!",
+        "%s:\nSo it's %s!\nAlright!",
+        "%s:\nA %s...\nHere we go!",
+        "%s:\nFacing %s?\nOkay!",
+        "%s:\nYour %s looks\nsharp!",
+        "%s:\nBring it,\n%s!",
+        "%s:\nI've trained\nfor %s!",
+      },
+      enemy = {
+        "%s:\nGo, %s!",
+        "%s:\nYou're up!",
+        "%s:\nDo it!",
+        "%s:\nI choose you,\n%s!",
+        "%s:\nLet's win this,\n%s!",
+        "%s:\nTrust me, %s!",
+        "%s:\nNow, %s!",
+        "%s:\nGive it your\nall, %s!",
+      },
+      idle = {
+        "%s:\nCome on!",
+        "%s:\nLet's go!",
+        "%s:\nKeep it up!",
+        "%s:\nFocus!",
+        "%s:\nWe can do\nthis!",
+        "%s:\nStay sharp!",
+        "%s:\nNice exchange!",
+        "%s:\nDon't blink!",
+        "%s:\nPush forward!",
+        "%s:\nBattle on!",
+      },
+      ahead = {
+        "%s:\nWe've got the\nlead!",
+        "%s:\nKeep pressing!",
+        "%s:\nLooking good!",
+      },
+      behind = {
+        "%s:\nWe're not out\nyet!",
+        "%s:\nTurn it around!",
+        "%s:\nDig deep!",
+      },
+      player_weak = {
+        "%s:\nThey're nearly\ndone!",
+        "%s:\nFinish strong!",
+        "%s:\nAlmost there!",
+      },
+      self_weak = {
+        "%s:\nHold on!",
+        "%s:\nWe can still\nwin!",
+        "%s:\nNot yet!",
+      },
+      long = {
+        "%s:\nWhat a drawn-\nout fight!",
+        "%s:\nEndurance\nwins battles!",
+        "%s:\nStill standing-\ngood!",
+      },
+    },
+  }
+
+  local function rollTrainerBanter()
+    local r = (love and love.math and love.math.random) or math.random
+    return r() < 0.70
+  end
+
+  local function battlerHpRatio(battler)
+    local mon = battler and battler.mon
+    local max = mon and mon.stats and mon.stats.hp
+    if not max or max <= 0 then
+      return 1
+    end
+    return (mon.hp or 0) / max
+  end
+
+  -- Build a context-weighted idle pool (ahead/behind/low HP/long fight).
+  local function pickContextualIdleLine(battle, persona, speaker)
+    local pack = S.BANTER[persona] or S.BANTER.generic
+    local pools = {}
+    local function add(list, weight)
+      if type(list) ~= "table" or #list == 0 then
+        return
+      end
+      weight = weight or 1
+      for _ = 1, weight do
+        pools[#pools + 1] = list
+      end
+    end
+    add(pack.idle or S.BANTER.generic.idle, 1)
+    local pr = battlerHpRatio(battle.player)
+    local er = battlerHpRatio(battle.enemy)
+    local turn = tonumber(battle.turnCount) or 0
+    if er > pr + 0.18 then
+      add(pack.ahead, persona == "rival" and 3 or 2)
+    elseif pr > er + 0.18 then
+      add(pack.behind, persona == "rival" and 3 or 2)
+    end
+    if pr <= 0.35 then
+      add(pack.player_weak, persona == "rival" and 3 or 2)
+    end
+    if er <= 0.35 then
+      add(pack.self_weak, persona == "rival" and 3 or 2)
+    end
+    if turn >= 6 then
+      add(pack.long, persona == "rival" and 2 or 1)
+    end
+    if #pools == 0 then
+      return pickFormatted(S.BANTER.generic.idle, speaker)
+    end
+    local r = (love and love.math and love.math.random) or math.random
+    local list = pools[r(1, #pools)]
+    local ms = momentumState(battle)
+    -- Prefer a line we didn't just use.
+    for _ = 1, 6 do
+      local line = pickFormatted(list, speaker)
+      if line and line ~= ms.lastIdleBanterLine then
+        return line
+      end
+    end
+    return pickFormatted(list, speaker)
+  end
+
+  local function isPlayerSendOutText(text)
+    local s = tostring(text or "")
+    if s:match("^Go! ") or s:match("^Do it! ") or s:match("^Get'm! ") then
+      return true
+    end
+    local low = s:lower()
+    return low:find("enemy's weak", 1, true) ~= nil
+  end
+
+  local function isEnemySendOutText(text)
+    return tostring(text or ""):find("sent\nout ", 1, true) ~= nil
+  end
+
+  local maybeEnqueueSendBanter
+
+  -- Dodge/hide cover only (EVADE / hidAway) — brace DEF must not use these lines.
+  -- Dodge/hide for miss-anim / whiff text (plain sidestep counts).
+  local function isDodgeCoverTemp(temp)
+    if not temp or not temp.cover then
+      return false
+    end
+    return (temp.evasion or 0) > 0 or temp.hidAway == true or temp.picHidden == true
+  end
+
+  -- Only a real hide/fly spot earns "found in cover!" — not sidestep or brace.
+  local function isPierceableHideTemp(temp)
+    if not temp or temp.hidAway ~= true then
+      return false
+    end
+    -- Bracing / entrenched is a guard, not a hide.
+    if temp.entrenched or ((temp.defense or 0) > 0 and (temp.evasion or 0) <= 0) then
+      return false
+    end
+    return true
+  end
+
   announceCoverHit = function(battle, target)
     if not opt("momentum_counter") or not battle or not target then
       return
@@ -1627,25 +3133,27 @@ return function(mod)
     if state.breakthroughPending and target and target.isPlayer then
       state.breakthroughPending = false
       local name = playerMonName(battle)
-      local line = pickFormatted(BREAKTHROUGH_CALLS, name)
+      local line = pickFormatted(S.BREAKTHROUGH_CALLS, name)
         or "Broke through\nthe guard!"
       if type(battle.sayNext) == "function" then
         battle:sayNext(line)
       end
-    end
-    local inCover = false
-    local name = nil
-    if target.isPlayer and state.temp and state.temp.cover then
-      inCover = true
-      name = playerMonName(battle)
-    elseif (not target.isPlayer) and state.enemyTemp and state.enemyTemp.cover then
-      inCover = true
-      name = enemyMonName(battle)
-    end
-    if not inCover then
+      -- Entrench breakthrough already narrated — don't also say "found in cover!".
       return
     end
-    local line = pickFormatted(COVER_HIT_CALLS, name)
+    local inHide = false
+    local name = nil
+    if target.isPlayer and isPierceableHideTemp(state.temp) then
+      inHide = true
+      name = playerMonName(battle)
+    elseif (not target.isPlayer) and isPierceableHideTemp(state.enemyTemp) then
+      inHide = true
+      name = enemyMonName(battle)
+    end
+    if not inHide then
+      return
+    end
+    local line = pickFormatted(S.COVER_HIT_CALLS, name)
       or ("But it found\n" .. (name or "POKéMON") .. "!")
     if type(battle.sayNext) == "function" then
       battle:sayNext(line)
@@ -1654,17 +3162,58 @@ return function(mod)
 
   rewriteDodgeMissText = function(battle, text)
     if type(text) ~= "string" or not text:lower():find("attack missed", 1, true) then
-      return text
+      return text, false
     end
     local state = battle and momentumByBattle[battle]
     if not state or not state.keepDodgeMissAnim then
-      return text
+      return text, false
+    end
+    -- Counter already armed / firing — don't revive a stale dodge-whiff line.
+    if state.sameTurnCounterQueued or state.sameTurnCounterStrike
+        or state.dodgeWhiffDone then
+      state.keepDodgeMissAnim = false
+      state.dodgeMissName = nil
+      return text, false
     end
     local name = state.dodgeMissName or "POKéMON"
     state.keepDodgeMissAnim = false
     state.dodgeMissName = nil
-    return pickFormatted(DODGE_WHIFF_CALLS, name)
+    state.dodgeWhiffDone = true
+    local line = pickFormatted(S.DODGE_WHIFF_CALLS, name)
       or ("But " .. name .. "\ndodged aside!")
+    -- Signal wrapBattleSay to park COUNTER! after this miss line + anim.
+    return line, true
+  end
+
+  -- Drop orphaned dodge-miss lines that somehow landed after COUNTER!.
+  local function scrubLateDodgeWhiff(battle)
+    local state = battle and momentumByBattle[battle]
+    if state then
+      state.keepDodgeMissAnim = false
+      state.dodgeMissName = nil
+      state.dodgeWhiffDone = true
+    end
+    local q = battle and battle.queue
+    if type(q) ~= "table" then
+      return
+    end
+    for i = #q, 1, -1 do
+      local row = q[i]
+      if type(row) == "table" and type(row.text) == "string" then
+        local t = row.text:lower()
+        if row.arDodgeWhiff
+            or t:find("attack missed", 1, true)
+            or t:find("dodged aside", 1, true)
+            or t:find("slipped", 1, true) and t:find("away", 1, true)
+            or t:find("whiffed past", 1, true)
+            or t:find("safe in cover", 1, true) then
+          table.remove(q, i)
+          if battle.nextInsert and i <= battle.nextInsert then
+            battle.nextInsert = math.max(0, battle.nextInsert - 1)
+          end
+        end
+      end
+    end
   end
 
   local function trainerFoeReactionsOn(battle)
@@ -1676,12 +3225,18 @@ return function(mod)
   end
 
   -- Auto foe dodge/brace once per turn when you attack (trainer battles).
-  -- Returns reactionText, buffList, trackTempBuffs.
+  -- Returns reactionText, buffList, trackTempBuffs, failNarrator.
+  -- On a failed dodge: reactionText is still the trainer order (bubble), and
+  -- failNarrator is the bottom-box "...but it was too slow!" (no bubble).
   local function tryFoeCoverReaction(battle, moveDef)
     if not trainerFoeReactionsOn(battle) or not moveDef then
       return nil
     end
     if (moveDef.power or 0) <= 0 or moveDef.category == "status" then
+      return nil
+    end
+    -- Frozen / asleep foes can't take dodge/brace orders.
+    if enemyStatusLocked(battle) then
       return nil
     end
     local state = momentumState(battle)
@@ -1691,24 +3246,28 @@ return function(mod)
     state.enemyReactedThisTurn = true
     local foe = enemyMonName(battle)
     if foeMoveIsSpecial(moveDef) then
+      local line = pickFoeTrainerLine(
+        battle, S.TRAINER_FOE_DODGE_CALLS, S.FOE_DODGE_CALLS, foe)
       if not rollDodgeSuccess() then
-        local fail = pickFoeTrainerLine(
-          battle, TRAINER_FOE_DODGE_FAIL_CALLS, FOE_DODGE_FAIL_CALLS, foe)
-        return fail, nil, false
+        dev.log(battle, "FOE dodge", "FAIL")
+        if line then
+          return line, nil, false, S.DODGE_TOO_SLOW
+        end
+        return S.DODGE_TOO_SLOW, nil, false, nil
       end
       state.enemyTemp.cover = true
-      local line = pickFoeTrainerLine(
-        battle, TRAINER_FOE_DODGE_CALLS, FOE_DODGE_CALLS, foe)
+      dev.log(battle, "FOE dodge", "OK EV+1")
       return line, {
         { who = "enemy", stat = "evasion", delta = 1 },
-      }, true
+      }, true, nil
     end
-    state.enemyTemp.cover = true
+    -- Brace is a guard, not a hide — don't mark dodge cover.
     local line = pickFoeTrainerLine(
-      battle, TRAINER_FOE_BRACE_CALLS, FOE_BRACE_CALLS, foe)
+      battle, S.TRAINER_FOE_BRACE_CALLS, S.FOE_BRACE_CALLS, foe)
+    dev.log(battle, "FOE brace", "OK DF+1")
     return line, {
       { who = "enemy", stat = "defense", delta = 1 },
-    }, true
+    }, true, nil
   end
 
   local function rollEnemyCounter()
@@ -1722,7 +3281,7 @@ return function(mod)
   end
 
   -- Player-facing pick options per scene (label shown in menu).
-  local SCENE_PICK = {
+  S.SCENE_PICK = {
     cave = {
       { label = "ROCK", line = "%s!\nOnto that rock!", boost = 2 },
       { label = "LEDGE", line = "%s!\nUp that ledge!", boost = 2 },
@@ -1769,7 +3328,7 @@ return function(mod)
       { label = "DODGE", line = "%s!\nDodge it!", boost = 1 },
     },
   }
-  local SCENE_BRACE_PICK = {
+  S.SCENE_BRACE_PICK = {
     cave = {
       { label = "ROCK", line = "%s!\nBrace on the rock!", boost = 2 },
       { label = "DIG IN", line = "%s!\nDig in here!", boost = 2 },
@@ -1817,7 +3376,7 @@ return function(mod)
       { label = "GUARD", line = "%s!\nGuard up!", boost = 2 },
     },
   }
-  local TYPE_PICK_EXTRA = {
+  S.TYPE_PICK_EXTRA = {
     FLYING = { label = "FLY UP", line = "%s!\nFly up high!", boost = 2 },
     WATER = { label = "DIVE", line = "%s!\nDive aside!", boost = 2 },
     ELECTRIC = { label = "ZIP", line = "%s!\nZip aside!", boost = 2 },
@@ -1833,7 +3392,16 @@ return function(mod)
   local origRunDamaging = EffectRegistry.runDamaging
 
   -- Callout pages need a beat so they aren't instant.
-  local CALLOUT_AUTO_DELAY = 55
+  S.CALLOUT_AUTO_DELAY = 55
+  -- Trainer slides on-screen while their banter line plays.
+  S.BANTER_CAMEO_IN = 14
+  S.BANTER_CAMEO_OUT = 12
+  -- 3D-BTL: orbit toward side-on (0..1) while the trainer talks.
+  S.BANTER_CAMEO_ORBIT = 0.38
+  -- Speech bubbles: slower glyphs; after typing they wait for A/B (no auto).
+  S.BUBBLE_AUTO_DELAY = 75 -- kept for non-bubble fallbacks / legacy callers
+  -- Effective frames/glyph while a bubble is up (engine slow is 5).
+  S.BUBBLE_CHAR_DELAY = 7
 
   local function enqueuePromptAfter(battle, text)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
@@ -1843,16 +3411,673 @@ return function(mod)
     table.insert(battle.queue, battle.nextInsert, { text = text })
   end
 
-  local function enqueueAutoAfter(battle, text, delay)
+  -- Route battle dialogue into player / foe / narrator bubbles.
+  local function inferBubbleSide(battle, text)
+    if not opt("speech_bubbles") then
+      return nil
+    end
+    local s = tostring(text or "")
+    if s == "" then
+      return nil
+    end
+    local mon = parseUsedMoveText(s)
+    if mon then
+      local _, isEnemy = stripEnemyPrefix(mon)
+      if isEnemy then
+        return enemyStatusLocked(battle) and "narrator" or "foe"
+      end
+      return playerStatusLocked(battle) and "narrator" or "player"
+    end
+    local trainer = personalTrainerName(battle)
+    if trainer and #trainer > 0 and s:sub(1, #trainer + 1) == (trainer .. ":") then
+      return "foe"
+    end
+    local lower = s:lower()
+    local narrHints = {
+      "faint", "hurt by", "asleep", "frozen", "paralyz", "poison",
+      "burn", "attack missed", "doesn't affect", "critical",
+      "effective", "dodged", "whiffed", "came to", "woke up",
+      "too slow", "couldn't dodge", "found ", "hit through",
+    }
+    for i = 1, #narrHints do
+      if lower:find(narrHints[i], 1, true) then
+        return "narrator"
+      end
+    end
+    local me = playerMonName(battle)
+    if me ~= "" and (s:find(me .. "!", 1, true) == 1
+        or s:find(me .. "\n", 1, true) == 1
+        or s:find(me .. " ", 1, true) == 1) then
+      return playerStatusLocked(battle) and "narrator" or "player"
+    end
+    local foe = enemyMonName(battle)
+    if foe ~= "" and (s:find("Enemy " .. foe, 1, true)
+        or s:find(foe .. "!", 1, true) == 1
+        or s:find(foe .. "\n", 1, true) == 1) then
+      return "foe"
+    end
+    if s:find("Enemy ", 1, true) == 1 then
+      return "narrator"
+    end
+    return "narrator"
+  end
+
+  -- Tag a queue item as a bubble. forceWait (default true) clears auto so
+  -- the player can finish reading before A/B — needed once the classic box
+  -- is hidden.
+  local function markBubbleWait(item, bubble, forceWait)
+    if type(item) ~= "table" or not bubble or not opt("speech_bubbles") then
+      return false
+    end
+    item.bubble = bubble
+    if forceWait ~= false then
+      item.auto = nil
+      item.autoDelay = nil
+    end
+    return true
+  end
+
+  local function enqueueAutoAfter(battle, text, delay, bubble)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
       return
     end
     battle.nextInsert = (battle.nextInsert or 0) + 1
+    local item = { text = text }
+    -- With bubbles on, untagged lines become narrator (no classic text box).
+    if bubble == nil and opt("speech_bubbles") then
+      bubble = inferBubbleSide(battle, text) or "narrator"
+    end
+    if not markBubbleWait(item, bubble) then
+      item.auto = true
+      item.autoDelay = delay or S.CALLOUT_AUTO_DELAY
+    end
+    table.insert(battle.queue, battle.nextInsert, item)
+  end
+
+  maybeEnqueueSendBanter = function(battle, originalText)
+    if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
+      return
+    end
+    if not rollTrainerBanter() then
+      return
+    end
+    local aboutPlayer = isPlayerSendOutText(originalText)
+    local aboutEnemy = isEnemySendOutText(originalText)
+    if not aboutPlayer and not aboutEnemy then
+      return
+    end
+    local persona = trainerPersona(battle)
+    local pack = S.BANTER[persona] or S.BANTER.generic
+    local speaker = banterSpeaker(battle)
+    local line
+    if aboutPlayer then
+      local mon = playerMonName(battle)
+      line = pickFormatted(pack.player, speaker, mon)
+        or (speaker .. ":\nA " .. mon .. ", huh?!\nLooks tough!")
+    else
+      local mon = enemyMonName(battle)
+      line = pickFormatted(pack.enemy, speaker, mon)
+        or (speaker .. ":\nGo, " .. mon .. "!")
+    end
+    -- Don't splice the line between "Go!" and the POOF — wait until the
+    -- mon is actually on the field (sendingOut / POOF finished).
+    local state = momentumState(battle)
+    state.pendingSendBanter = {
+      line = line,
+      side = aboutPlayer and "player" or "enemy",
+    }
+    state.sendBanterArmFrames = 8
+    if aboutPlayer and battle.sendingOut then
+      state.sawSendOut = true
+      state.sendBanterArmFrames = nil
+    elseif aboutEnemy and battle.enemySendingOut then
+      state.sawSendOut = true
+      state.sendBanterArmFrames = nil
+    end
+  end
+
+  local function queueHasPoof(battle)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return false
+    end
+    for i = 1, #battle.queue do
+      local row = battle.queue[i]
+      if row and row.anim == "POOF_ANIM" then
+        return true
+      end
+    end
+    return false
+  end
+
+  -- Banter cameo: slide the enemy trainer pic in from the right while their
+  -- line is up. Flat battles draw in battle.overlay. Under 3D-BTL the fight
+  -- is in the world — briefly show the intro trainer on the enemy billboard
+  -- and ease the camera toward that side. Packed as one table for LuaJIT.
+  local BanterCameo = {}
+  BanterCameo.OW_MODS = { "DRAMATIC_SHAPE", "DRAMALESS_SHAPE", "potato_voxel" }
+
+  function BanterCameo.owLive(battle)
+    if type(battle) ~= "table" or not mod.find then
+      return false
+    end
+    for i = 1, #BanterCameo.OW_MODS do
+      local handle = mod.find(BanterCameo.OW_MODS[i])
+      local lib = handle and handle.exports and handle.exports.lib
+      if lib and type(lib.require) == "function" then
+        local ok, OW = pcall(lib.require, "OverworldBattle")
+        if ok and type(OW) == "table" and type(OW.enabled) == "function"
+            and OW.enabled() then
+          -- Only when this fight is actually staged on the map.
+          local staged = true
+          if type(OW.shot) == "function" then
+            staged = OW.shot() and true or false
+          end
+          if staged and type(OW.battle) == "function" then
+            local live = OW.battle()
+            if live and live ~= battle then
+              staged = false
+            end
+          end
+          if staged then
+            return true, lib
+          end
+        end
+      end
+    end
+    return false
+  end
+
+  function BanterCameo.armCam(lib, cameo)
+    if not (lib and cameo and type(lib.require) == "function") then
+      return false
+    end
+    local ok, Cam = pcall(lib.require, "BattleCam")
+    if not (ok and type(Cam) == "table") then
+      return false
+    end
+    -- BACK SPRITES pins half the composition; swinging breaks it.
+    if Cam.steerable == false then
+      return false
+    end
+    cameo.cam = Cam
+    cameo.prevOrbitGoal = tonumber(Cam.orbitGoal) or 0
+    cameo.prevPitchGoal = tonumber(Cam.pitchGoal) or 0
+    -- Mild nudge — hard side-on swung the foe/trainer out of frame.
+    local target = S.BANTER_CAMEO_ORBIT or 0.38
+    if (cameo.prevOrbitGoal or 0) < target then
+      Cam.orbitGoal = target
+    end
+    cameo.cameoOrbit = Cam.orbitGoal
+    return true
+  end
+
+  function BanterCameo.releaseCam(cameo)
+    local Cam = cameo and cameo.cam
+    if not Cam then
+      return
+    end
+    if cameo.prevOrbitGoal ~= nil then
+      Cam.orbitGoal = cameo.prevOrbitGoal
+    end
+    if cameo.prevPitchGoal ~= nil then
+      Cam.pitchGoal = cameo.prevPitchGoal
+    end
+    cameo.cam = nil
+  end
+
+  -- 3D-BTL: put the trainer on the enemy world billboard (same seam as the
+  -- battle intro). Stadium.covers yields to the pic while this is set.
+  function BanterCameo.showTrainer(battle, cameo)
+    if not (battle and cameo and cameo.ow) or cameo.forcedTrainer then
+      return
+    end
+    if not (battle.trainerPic or battle.enemyTrainerImage) then
+      return
+    end
+    cameo.prevShowEnemyTrainer = battle.showEnemyTrainer and true or false
+    battle.showEnemyTrainer = true
+    cameo.forcedTrainer = true
+  end
+
+  function BanterCameo.hideTrainer(battle, cameo)
+    if not (battle and cameo and cameo.forcedTrainer) then
+      return
+    end
+    battle.showEnemyTrainer = cameo.prevShowEnemyTrainer and true or false
+    cameo.forcedTrainer = false
+  end
+
+  function BanterCameo.image(battle)
+    if type(battle) ~= "table" then
+      return nil
+    end
+    local img = battle.enemyTrainerImage or battle.trainerPic
+    if not img then
+      return nil
+    end
+    if type(battle.picImage) == "function" and battle.trainerPic then
+      local ok, painted = pcall(battle.picImage, battle, battle.trainerPic)
+      if ok and painted then
+        return painted
+      end
+    end
+    return img
+  end
+  function BanterCameo.stillShowing(battle, line)
+    if type(battle) ~= "table" then
+      return false
+    end
+    local cur = battle.current
+    if cur and cur.arBanter then
+      return true
+    end
+    if line and cur and cur.text == line then
+      return true
+    end
+    if line and battle._arLastBubbleText == line then
+      return true
+    end
+    return false
+  end
+  function BanterCameo.progress(cameo)
+    if not cameo then
+      return 0
+    end
+    local t
+    if cameo.mode == "in" then
+      local dur = S.BANTER_CAMEO_IN or 14
+      t = math.min(1, (cameo.frame or 0) / math.max(1, dur))
+    elseif cameo.mode == "out" then
+      local dur = S.BANTER_CAMEO_OUT or 12
+      t = 1 - math.min(1, (cameo.frame or 0) / math.max(1, dur))
+    else
+      t = 1
+    end
+    return t * t * (3 - 2 * t)
+  end
+  function BanterCameo.start(battle, line)
+    if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
+      return
+    end
+    if battle.showEnemyTrainer then
+      return
+    end
+    local ow = BanterCameo.owLive(battle)
+    if not ow and not BanterCameo.image(battle) then
+      return
+    end
+    if ow and not (battle.trainerPic or battle.enemyTrainerImage) then
+      return
+    end
+    local state = momentumState(battle)
+    state.banterCameoWanted = line or true
+  end
+  function BanterCameo.tick(battle)
+    if type(battle) ~= "table" then
+      return
+    end
+    local state = momentumByBattle[battle]
+    if not state then
+      return
+    end
+    local cameo = state.banterCameo
+    local wanted = state.banterCameoWanted
+    local cur = battle.current
+
+    if not cameo and wanted and cur and cur.arBanter then
+      if not battle.showEnemyTrainer then
+        local ow, lib = BanterCameo.owLive(battle)
+        if ow or BanterCameo.image(battle) then
+          state.banterCameo = {
+            mode = "in",
+            frame = 0,
+            line = cur.text or (wanted ~= true and wanted) or nil,
+            ow = ow and true or false,
+          }
+          cameo = state.banterCameo
+          if ow then
+            BanterCameo.armCam(lib, cameo)
+            BanterCameo.showTrainer(battle, cameo)
+          end
+        end
+      end
+      state.banterCameoWanted = nil
+    end
+
+    if not cameo then
+      return
+    end
+
+    -- Keep the banter orbit pinned while the line is up (player steer can
+    -- fight it otherwise).
+    if cameo.ow and cameo.cam and cameo.mode ~= "out" and cameo.cameoOrbit then
+      cameo.cam.orbitGoal = cameo.cameoOrbit
+    end
+
+    if cameo.mode == "in" then
+      cameo.frame = (cameo.frame or 0) + 1
+      if cameo.frame >= (S.BANTER_CAMEO_IN or 14) then
+        cameo.mode = "hold"
+        cameo.frame = 0
+      end
+    elseif cameo.mode == "hold" then
+      if not BanterCameo.stillShowing(battle, cameo.line) then
+        cameo.mode = "out"
+        cameo.frame = 0
+        BanterCameo.releaseCam(cameo)
+      end
+    elseif cameo.mode == "out" then
+      cameo.frame = (cameo.frame or 0) + 1
+      if cameo.frame >= (S.BANTER_CAMEO_OUT or 12) then
+        BanterCameo.hideTrainer(battle, cameo)
+        BanterCameo.releaseCam(cameo)
+        state.banterCameo = nil
+      end
+    end
+  end
+  function BanterCameo.draw(battle)
+    if not opt("trainer_banter") then
+      return
+    end
+    local state = battle and momentumByBattle[battle]
+    local cameo = state and state.banterCameo
+    if not cameo or not love or not love.graphics then
+      return
+    end
+    -- 3D-BTL: trainer is on the world billboard via showEnemyTrainer.
+    if cameo.ow then
+      return
+    end
+    if battle.showEnemyTrainer then
+      return
+    end
+    local img = BanterCameo.image(battle)
+    if not img or type(img.getDimensions) ~= "function" then
+      return
+    end
+
+    local t = BanterCameo.progress(cameo)
+    if t <= 0 then
+      return
+    end
+
+    local iw, ih = img:getDimensions()
+    -- Same enemy-intro box Gen 2 / Gen3 switch overlay uses: tile (12,0), 7×7.
+    local boxX, boxY, boxSize = 96, 0, 56
+    local scale = 1
+    if type(battle.picScale) == "function" then
+      local path = battle.enemyTrainerPath
+          or (battle.trainer and (battle.trainer.picJessieJames or battle.trainer.pic))
+      local ok, value = pcall(battle.picScale, battle, path, nil, false)
+      if ok and tonumber(value) then
+        scale = tonumber(value)
+      end
+    end
+    local px = boxX + (boxSize - iw * scale) / 2
+    local py = boxY + (boxSize - ih * scale)
+    px = px + (1 - t) * boxSize
+
+    local g = love.graphics
+    g.push("all")
+    g.setColor(1, 1, 1, 1)
+    local drew = false
+    local okPal, Palettes = pcall(require, "src.world.gen2.Palettes")
+    local okGbc, GbcPalette = pcall(require, "src.render.GbcPalette")
+    local class = battle.enemyTrainerClass
+        or (battle.trainer and (battle.trainer.class or battle.trainer.id))
+    local colors = okPal and battle.palettes and type(Palettes.trainerColors) == "function"
+        and Palettes.trainerColors(battle.palettes, class) or nil
+    local function body()
+      g.draw(img, px, py, 0, scale, scale)
+    end
+    if colors and okGbc and GbcPalette and type(GbcPalette.with) == "function"
+        and (type(GbcPalette.available) ~= "function" or GbcPalette.available()) then
+      drew = pcall(GbcPalette.with, colors, body)
+    end
+    if not drew then
+      body()
+    end
+    g.pop()
+  end
+
+  local function flushPendingSendBanter(battle)
+    if not battle then
+      return
+    end
+    local state = momentumByBattle[battle]
+    if not state or not state.pendingSendBanter then
+      return
+    end
+    local pending = state.pendingSendBanter
+    local sending = (pending.side == "player" and battle.sendingOut)
+        or (pending.side == "enemy" and battle.enemySendingOut)
+    if sending then
+      state.sawSendOut = true
+      state.sendBanterArmFrames = nil
+      return
+    end
+    if queueHasPoof(battle) then
+      state.sawSendOut = true
+      state.sendBanterArmFrames = nil
+      return
+    end
+    if state.sendBanterArmFrames and state.sendBanterArmFrames > 0 then
+      state.sendBanterArmFrames = state.sendBanterArmFrames - 1
+      return
+    end
+    -- Ready: send-out finished and POOF is gone.
+    state.pendingSendBanter = nil
+    state.sawSendOut = nil
+    state.sendBanterArmFrames = nil
+    if type(battle.queue) ~= "table" then
+      return
+    end
+    local item = { text = pending.line, arBanter = true }
+    if not markBubbleWait(item, "foe") then
+      item.auto = true
+      item.autoDelay = S.CALLOUT_AUTO_DELAY
+    end
+    table.insert(battle.queue, 1, item)
+    BanterCameo.start(battle, pending.line)
+  end
+
+  maybeEnqueueIdleBanter = function(battle)
+    if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
+      return
+    end
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return
+    end
+    local ms = momentumState(battle)
+    -- Skip while anything cinematic / cover-related is going on.
+    if ms.awaitingPick or ms.pendingDamage or ms.againInProgress then
+      return
+    end
+    local t = ms.temp or {}
+    if t.picHidden or t.cover or t.entrenched then
+      return
+    end
+    local et = ms.enemyTemp or {}
+    if et.cover then
+      return
+    end
+    local turn = tonumber(battle.turnCount) or 0
+    if turn < 1 then
+      return
+    end
+    local last = ms.lastIdleBanterTurn or 0
+    local persona = trainerPersona(battle)
+    local gap = (persona == "rival") and 1 or 2
+    if turn - last < gap then
+      return
+    end
+    local chance = (persona == "rival") and 0.48 or 0.20
+    local r = (love and love.math and love.math.random) or math.random
+    if r() >= chance then
+      return
+    end
+    local speaker = banterSpeaker(battle)
+    local line = pickContextualIdleLine(battle, persona, speaker)
+      or (speaker .. ":\nCome on!")
+    ms.lastIdleBanterTurn = turn
+    ms.lastIdleBanterLine = line
+    local item = { text = line, arBanter = true }
+    if not markBubbleWait(item, "foe") then
+      item.auto = true
+      item.autoDelay = S.CALLOUT_AUTO_DELAY
+    end
+    table.insert(battle.queue, item)
+    BanterCameo.start(battle, line)
+  end
+
+  local function tagQueueBubble(battle, bubble, forceWait)
+    if not opt("speech_bubbles") or not battle or not bubble then
+      return
+    end
+    local item = battle.queue and battle.queue[battle.nextInsert]
+    if item and item.text then
+      markBubbleWait(item, bubble, forceWait)
+    end
+  end
+
+  -- After you whiff a counter (and snap-back rolls): half their whiff estimate.
+  local function queueFoeCounterBack(battle)
+    if not battle or type(battle.queue) ~= "table" then
+      return
+    end
+    local state = momentumState(battle)
+    local dmg = foeCounterBackDamage(state)
+    state.foeWhiffDamage = nil
+    state.counterWhiffed = nil
+    local foe = enemyMonName(battle)
+    local line = pickFoeTrainerLine(
+      battle, S.TRAINER_FOE_COUNTER_BACK_CALLS, S.FOE_COUNTER_BACK_CALLS, foe)
+      or ("Too slow!\n" .. foe .. " counters!")
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    do
+      local item = { text = line }
+      if not markBubbleWait(item, "foe") then
+        item.auto = true
+        item.autoDelay = S.CALLOUT_AUTO_DELAY
+      end
+      table.insert(battle.queue, battle.nextInsert, item)
+    end
+    battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
-      text = text,
-      auto = true,
-      autoDelay = delay or CALLOUT_AUTO_DELAY,
+      arFx = true,
+      fn = function()
+        local player = battle.player
+        if not player or not player.mon or (player.mon.hp or 0) <= 0 then
+          return
+        end
+        if battle.fx then
+          battle.fx.shake = math.max(battle.fx.shake or 0, 14)
+        end
+        if battle.picFxFor then
+          local pf = battle:picFxFor(player)
+          if pf then
+            pf.kind, pf.t = "blink", 0
+            pf.hidden = nil
+          end
+        end
+        local dealt = battle:applyDamage(player, dmg)
+        if type(battle.sayNextAuto) == "function" and (dealt or 0) > 0 then
+          -- Keep it short; HP bar drain already sells the hit.
+        end
+        if player.mon.hp <= 0 and type(battle.onFaint) == "function" then
+          battle:onFaint(player)
+        end
+        checkLowHp(battle, player)
+      end,
     })
+  end
+
+  -- After a counter attempt resolves: sometimes snap-back on whiff.
+  local function resolvePlayerCounterAttempt(battle, connected)
+    local state = battle and momentumByBattle[battle]
+    if not state then
+      return false
+    end
+    if state.counterWhiffed then
+      state.counterWhiffed = nil
+      if rollCounterSnapBack() then
+        queueFoeCounterBack(battle)
+        dev.log(battle, "COUNTER snapback", "foe answers the whiff")
+        return true
+      end
+      -- Whiffed the opening, but no punish this time.
+      state.foeWhiffDamage = nil
+      dev.log(battle, "COUNTER whiff", "no snapback")
+      return false
+    end
+    if connected then
+      state.foeWhiffDamage = nil
+    end
+    return false
+  end
+
+  -- Re-arm Stadium / Battle Cinematics attack cameras for swings we fire
+  -- outside a normal resolveTurn (Again!, same-turn COUNTER!, menu waits…).
+  local function resetBattleCamera(battle)
+    clearAmbientStance(battle)
+    local bc = mod.find and mod.find("BATTLE_CINEMATICS")
+    if bc and bc.exports and type(bc.exports.activity) == "function" then
+      pcall(bc.exports.activity)
+    end
+  end
+
+  local function emitMoveUsed(battle, user, target, move, opts)
+    opts = opts or {}
+    if not battle or not user or not move then
+      return
+    end
+    local payload = {
+      battle = battle,
+      user = user,
+      target = target,
+      move = move,
+      isCalled = opts.isCalled == true,
+    }
+    -- Prefer the shared Runtime bus when present so BC / Stadium FX hear us.
+    local okRt, Runtime = pcall(require, "src.mods.Runtime")
+    if okRt and Runtime and Runtime.events and type(Runtime.events.emit) == "function" then
+      pcall(Runtime.events.emit, Runtime.events, "battle.move_used", payload)
+      return
+    end
+    if mod.events and type(mod.events.emit) == "function" then
+      pcall(mod.events.emit, mod.events, "battle.move_used", payload)
+    end
+  end
+
+  local function signalAttackPresentation(battle, user, target, move, opts)
+    resetBattleCamera(battle)
+    emitMoveUsed(battle, user, target, move, opts)
+  end
+
+  local function queueMoveAttackAnim(battle, move, attackerIsPlayer)
+    if not battle or type(battle.queue) ~= "table" or not move then
+      return nil
+    end
+    local moveId = move.id or move.index
+    if not moveId then
+      return nil
+    end
+    moveId = tostring(moveId):upper()
+    local moves = battle.data and battle.data.moves
+    if type(moves) == "table" and not moves[moveId] and move.name then
+      local byName = findMoveByName(battle, move.name)
+      if byName and byName.id then
+        moveId = tostring(byName.id):upper()
+      end
+    end
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    local row = {
+      anim = moveId,
+      attackerIsPlayer = attackerIsPlayer and true or false,
+    }
+    table.insert(battle.queue, battle.nextInsert, row)
+    battle.moveAnimRow = row
+    return row
   end
 
   -- True second strike after a counter (separate anim + damage roll).
@@ -1887,17 +4112,30 @@ return function(mod)
     end
 
     state.againInProgress = true
+    dev.log(battle, "AGAIN!", foeSide and "foe" or "you")
     local line
     if foeSide then
       line = pickFoeTrainerLine(
-        battle, TRAINER_FOE_AGAIN_CALLS, FOE_AGAIN_CALLS, monName or enemyMonName(battle))
+        battle, S.TRAINER_FOE_AGAIN_CALLS, S.FOE_AGAIN_CALLS, monName or enemyMonName(battle))
     else
-      line = pickFormatted(AGAIN_CALLS, monName or playerMonName(battle))
+      line = pickFormatted(S.AGAIN_CALLS, monName or playerMonName(battle))
         or ((monName or "POKéMON") .. "!\nAgain!")
     end
-    enqueueAutoAfter(battle, line, CALLOUT_AUTO_DELAY)
-    -- Force a fresh anim row (don't reuse the first strike's moveAnimRow).
+    enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, foeSide and "foe" or "player")
+    -- Arm the camera RIGHT BEFORE the second anim — doing it during the first
+    -- hit's damage resolve races BC (it latches the still-playing first anim,
+    -- then clears pending before Again! swings).
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    table.insert(battle.queue, battle.nextInsert, {
+      arFx = true,
+      fn = function()
+        signalAttackPresentation(battle, user, target, move, { isCalled = true })
+      end,
+    })
     battle.moveAnimRow = nil
+    if queueMoveAttackAnim(battle, move, user.isPlayer == true) then
+      battle.nextInsert = (battle.nextInsert or 0) + 1
+    end
     local stripped = {
       neverMiss = true,
       hitCount = function()
@@ -1911,7 +4149,7 @@ return function(mod)
 
   local function buildPickChoices(kind, battle)
     local scene = battleScene(battle)
-    local tableFor = kind == "brace" and SCENE_BRACE_PICK or SCENE_PICK
+    local tableFor = kind == "brace" and S.SCENE_BRACE_PICK or S.SCENE_PICK
     local list = tableFor[scene] or tableFor.route or {}
     local choices = {}
     for i = 1, #list do
@@ -1920,8 +4158,8 @@ return function(mod)
     if kind == "dodge" then
       local types = playerTypeSet(battle)
       for ty, on in pairs(types) do
-        if on and TYPE_PICK_EXTRA[ty] then
-          choices[#choices + 1] = TYPE_PICK_EXTRA[ty]
+        if on and S.TYPE_PICK_EXTRA[ty] then
+          choices[#choices + 1] = S.TYPE_PICK_EXTRA[ty]
         end
       end
     end
@@ -1935,28 +4173,71 @@ return function(mod)
     return choices
   end
 
+  local function indexOfMoveAnim(battle)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return nil
+    end
+    local want = battle.moveAnimRow
+    if want then
+      for i, row in ipairs(battle.queue) do
+        if row == want then
+          return i
+        end
+      end
+    end
+    -- Engine-queued attack anim. Skip our dodge/brace sparkles (arFx) —
+    -- those used to steal this slot and shove REACT!/damage past the swing,
+    -- so hit text only showed after you picked at end of turn.
+    for i, row in ipairs(battle.queue) do
+      if type(row) == "table" and row.anim and not row.arFx then
+        return i
+      end
+    end
+    return nil
+  end
+
+  -- resolveTurn queues executeAction / endOfTurn as plain { fn = ... } rows.
+  -- Never resume deferred damage or counter UI after those — that delays
+  -- OPENING!/COUNTER! until the next turn's attack.
+  -- Our own picFx / helper rows are tagged arFx so we don't treat them as
+  -- turn scripts.
+  local function indexOfNextTurnScript(battle)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return nil
+    end
+    for i, row in ipairs(battle.queue) do
+      if type(row) == "table" and type(row.fn) == "function" and not row.arFx then
+        return i
+      end
+    end
+    return nil
+  end
+
+  -- Cursor for battle:sayNext / waitNext when resuming a deferred hit.
+  -- sayNext does `nextInsert = nextInsert + 1` before inserting, so return
+  -- the index of the row we want messages to FOLLOW (the move anim). Using
+  -- animIdx+1 here shoved "It doesn't affect…" / effectiveness text past
+  -- endOfTurn.
+  local function resumeInsertIndex(battle)
+    local animIdx = indexOfMoveAnim(battle)
+    if animIdx then
+      return animIdx
+    end
+    local fnIdx = indexOfNextTurnScript(battle)
+    if fnIdx then
+      return math.max(0, fnIdx - 1)
+    end
+    return math.max(0, #(battle.queue or {}))
+  end
+
   local function insertBeforeAnim(battle, item)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
       return
     end
-    local idx = nil
-    -- Prefer the foe move anim row, not a dodge hide we may have queued.
-    if battle.moveAnimRow then
-      for i, row in ipairs(battle.queue) do
-        if row == battle.moveAnimRow then
-          idx = i
-          break
-        end
-      end
-    end
-    if not idx then
-      for i, row in ipairs(battle.queue) do
-        if type(row) == "table" and row.anim then
-          idx = i
-          break
-        end
-      end
-    end
+    -- Prefer the real moveAnimRow. Do NOT fall back to the first row.anim —
+    -- dodge/brace sparkles (TELEPORT / HARDEN / …) would steal the slot and
+    -- shove menus/damage past the second mover.
+    local idx = indexOfMoveAnim(battle) or indexOfNextTurnScript(battle)
     if idx then
       table.insert(battle.queue, idx, item)
     else
@@ -1964,54 +4245,253 @@ return function(mod)
     end
   end
 
-  local function indexOfMoveAnim(battle)
+  -- Same-turn COUNTER! must appear before the next executeAction / endOfTurn.
+  local function insertBeforeTurnScript(battle, item)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
-      return nil
+      return
     end
-    local want = battle.moveAnimRow
-    if not want then
-      return nil
+    local idx = indexOfNextTurnScript(battle)
+    if idx then
+      table.insert(battle.queue, idx, item)
+    else
+      table.insert(battle.queue, 1, item)
     end
-    for i, row in ipairs(battle.queue) do
-      if row == want then
-        return i
-      end
-    end
-    return nil
   end
 
-  -- Dig charge = SLIDE_DOWN_ANIM; Fly charge = TELEPORT. Reuse those hides
-  -- even alongside Stadium/Dramaless — the GB pic hide still reads well.
-  local function dodgeAnimFor(choice, battle)
+  -- Park COUNTER! after the foe's miss anim + dodge-whiff text (not before).
+  local function insertAfterMissAnim(battle, item)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return
+    end
+    local q = battle.queue
+    local animIdx = indexOfMoveAnim(battle)
+    local fnIdx = indexOfNextTurnScript(battle) or (#q + 1)
+    local start = animIdx and (animIdx + 1) or 1
+    local insertAt = fnIdx
+    for i = start, fnIdx - 1 do
+      local row = q[i]
+      if type(row) == "table" and (row.text or row.wait or row.anim or row.arFx) then
+        insertAt = i + 1
+      end
+    end
+    -- Also never land before the move anim itself.
+    if animIdx and insertAt <= animIdx then
+      insertAt = animIdx + 1
+    end
+    table.insert(q, insertAt, item)
+  end
+
+  -- Pick a Gen1 move id that exists in this battle's data (StadiumBattleFX
+  -- / Dramaless will restyle FLY, RAZOR_LEAF, DIG, SURF, … when loaded).
+  local function pickHideMoveAnim(battle, candidates)
+    local moves = battle and battle.data and battle.data.moves
+    if type(moves) ~= "table" or type(candidates) ~= "table" then
+      return nil
+    end
+    local ok = {}
+    for i = 1, #candidates do
+      local id = candidates[i]
+      if type(id) == "string" and moves[id] then
+        ok[#ok + 1] = id
+      end
+    end
+    if #ok == 0 then
+      return nil
+    end
+    return pickLine(ok) or ok[1]
+  end
+
+  -- Dig/Fly/leaf/surf-style hides: picFx motion + thematic move anim.
+  -- Labels map to distinct exits; move pools prefer Stadium leaf/fly FX.
+  local function dodgeAnimSpec(choice, battle)
     local label = ""
     if type(choice) == "table" then
       label = tostring(choice.label or ""):upper()
     elseif type(choice) == "string" then
       label = choice:upper()
     end
-    if label == "FLY UP" or label == "ZIP" or label == "BURST"
-        or label == "FADE" or label == "SENSE" then
-      return "TELEPORT"
-    end
-    if label == "DIVE" or label == "SPLASH" then
-      return "SLIDE_DOWN_ANIM"
-    end
+    -- STAY re-hide / auto path: reuse the remembered cover spot.
     if label == "" and battle then
-      local types = playerTypeSet(battle)
-      if types.FLYING or types.PSYCHIC or types.GHOST or types.ELECTRIC then
-        return "TELEPORT"
+      local st = momentumByBattle[battle]
+      if st and st.temp and st.temp.coverSpot then
+        label = tostring(st.temp.coverSpot):upper()
       end
     end
-    return "SLIDE_DOWN_ANIM"
+    local spec = {
+      pic = "slideDownHide",
+      wait = 20,
+      moves = { "DIG", "SLIDE_DOWN_ANIM", "DOUBLE_TEAM" },
+      emerge = { "DIG", "QUICK_ATTACK" },
+    }
+    local byLabel = {
+      ["FLY UP"] = {
+        pic = "slideUp", wait = 18,
+        moves = { "FLY", "WING_ATTACK", "GUST", "DRILL_PECK" },
+        emerge = { "FLY", "WING_ATTACK", "GUST" },
+      },
+      ["ZIP"] = {
+        pic = "slideOff", wait = 20,
+        moves = { "THUNDERBOLT", "THUNDER_WAVE", "QUICK_ATTACK", "FLASH" },
+        emerge = { "THUNDERBOLT", "QUICK_ATTACK" },
+      },
+      ["BURST"] = {
+        pic = "bounce", wait = 28,
+        moves = { "FLAMETHROWER", "FIRE_SPIN", "EMBER", "SMOKESCREEN" },
+        emerge = { "EMBER", "QUICK_ATTACK" },
+      },
+      ["FADE"] = {
+        pic = "blink", wait = 26,
+        moves = { "TELEPORT", "NIGHT_SHADE", "CONFUSE_RAY", "LICK" },
+        emerge = { "TELEPORT", "NIGHT_SHADE" },
+      },
+      ["SENSE"] = {
+        pic = "blink", wait = 22,
+        moves = { "PSYCHIC", "CONFUSION", "TELEPORT", "DISABLE" },
+        emerge = { "PSYCHIC", "TELEPORT" },
+      },
+      ["DIVE"] = {
+        pic = "slideDown", wait = 22,
+        moves = { "SURF", "WATERFALL", "BUBBLEBEAM", "CLAMP", "WITHDRAW" },
+        emerge = { "SURF", "WATERFALL", "BUBBLEBEAM" },
+      },
+      ["SPLASH"] = {
+        pic = "slideDown", wait = 20,
+        moves = { "SURF", "WATER_GUN", "BUBBLE", "BUBBLEBEAM" },
+        emerge = { "SURF", "WATER_GUN" },
+      },
+      ["SHORE"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "SURF", "WATER_GUN", "SAND_ATTACK" },
+        emerge = { "WATER_GUN", "QUICK_ATTACK" },
+      },
+      ["GRASS"] = {
+        pic = "slideDownHide", wait = 20,
+        moves = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE", "LEECH_SEED", "SLEEP_POWDER" },
+        emerge = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE" },
+      },
+      ["BRUSH"] = {
+        pic = "slideDownHide", wait = 20,
+        moves = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE", "STUN_SPORE" },
+        emerge = { "RAZOR_LEAF", "VINE_WHIP" },
+      },
+      ["TREE"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "RAZOR_LEAF", "VINE_WHIP", "LEECH_SEED", "FLY" },
+        emerge = { "RAZOR_LEAF", "FLY" },
+      },
+      ["ROCK"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "DIG", "ROCK_SLIDE", "ROCK_THROW", "STRENGTH" },
+        emerge = { "DIG", "ROCK_THROW" },
+      },
+      ["STONE"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "DIG", "ROCK_THROW", "HARDEN" },
+        emerge = { "DIG", "ROCK_THROW" },
+      },
+      ["LEDGE"] = {
+        pic = "slideUp", wait = 16,
+        moves = { "DIG", "QUICK_ATTACK", "STRENGTH" },
+        emerge = { "DIG", "QUICK_ATTACK" },
+      },
+      ["CLIFF"] = {
+        pic = "slideUp", wait = 18,
+        moves = { "FLY", "DIG", "STRENGTH", "ROCK_SLIDE" },
+        emerge = { "FLY", "DIG" },
+      },
+      ["CART"] = {
+        pic = "slideOff", wait = 20,
+        moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "SMOKESCREEN" },
+        emerge = { "QUICK_ATTACK", "DOUBLE_TEAM" },
+      },
+      ["ALLEY"] = {
+        pic = "slideOff", wait = 20,
+        moves = { "SMOKESCREEN", "DOUBLE_TEAM", "QUICK_ATTACK", "TOXIC" },
+        emerge = { "SMOKESCREEN", "QUICK_ATTACK" },
+      },
+      ["PATH"] = {
+        pic = "slideOff", wait = 18,
+        moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "AGILITY", "SAND_ATTACK" },
+        emerge = { "QUICK_ATTACK", "AGILITY" },
+      },
+      ["SHADOW"] = {
+        pic = "blink", wait = 24,
+        moves = { "NIGHT_SHADE", "CONFUSE_RAY", "LICK", "TELEPORT" },
+        emerge = { "NIGHT_SHADE", "TELEPORT" },
+      },
+      ["PILLAR"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "BARRIER", "LIGHT_SCREEN", "REFLECT", "HARDEN" },
+        emerge = { "BARRIER", "QUICK_ATTACK" },
+      },
+      ["COURT"] = {
+        pic = "slideOff", wait = 16,
+        moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "AGILITY" },
+        emerge = { "QUICK_ATTACK" },
+      },
+      ["WALL"] = {
+        pic = "slideHalf", wait = 18,
+        moves = { "BARRIER", "REFLECT", "HARDEN" },
+        emerge = { "BARRIER", "QUICK_ATTACK" },
+      },
+      ["COVER"] = {
+        pic = "slideDownHide", wait = 20,
+        moves = { "DOUBLE_TEAM", "MINIMIZE", "DIG", "HARDEN" },
+        emerge = { "DOUBLE_TEAM", "DIG" },
+      },
+      ["DODGE"] = {
+        pic = "slideOff", wait = 14,
+        moves = { "QUICK_ATTACK", "DOUBLE_TEAM" },
+        emerge = { "QUICK_ATTACK" },
+      },
+    }
+    if byLabel[label] then
+      spec = byLabel[label]
+    elseif label == "" and battle then
+      local types = playerTypeSet(battle)
+      if types.FLYING then
+        spec = byLabel["FLY UP"]
+      elseif types.WATER then
+        spec = byLabel["DIVE"]
+      elseif types.GRASS then
+        spec = byLabel["GRASS"]
+      elseif types.GHOST or types.PSYCHIC then
+        spec = byLabel["FADE"]
+      elseif types.FIRE then
+        spec = byLabel["BURST"]
+      elseif types.ELECTRIC then
+        spec = byLabel["ZIP"]
+      end
+    end
+    return spec, label
+  end
+
+  local function insertQueueAfter(battle, item)
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    table.insert(battle.queue, battle.nextInsert, item)
+  end
+
+  local function queueThematicMoveAnim(battle, moveId)
+    if not moveId or not battle or type(battle.queue) ~= "table" then
+      return
+    end
+    if not (battle.data and battle.data.moves and battle.data.moves[moveId]) then
+      return
+    end
+    insertQueueAfter(battle, {
+      anim = moveId,
+      attackerIsPlayer = true,
+      arFx = true,
+    })
   end
 
   enqueueDodgeHideAnim = function(battle, choice)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
       return
     end
+    local state = momentumState(battle)
+    state.temp.picHidden = true
     if battle.animationsOn and not battle:animationsOn() then
-      local state = momentumState(battle)
-      state.temp.picHidden = true
       local player = battle.player
       if player and battle.picFxFor then
         local pf = battle:picFxFor(player)
@@ -2021,38 +4501,367 @@ return function(mod)
       end
       return
     end
-    local anim = dodgeAnimFor(choice, battle)
-    battle.nextInsert = (battle.nextInsert or 0) + 1
-    table.insert(battle.queue, battle.nextInsert, {
-      anim = anim,
-      attackerIsPlayer = true,
+    local spec, label = dodgeAnimSpec(choice, battle)
+    local moveId = spec.move or pickHideMoveAnim(battle, spec.moves)
+    -- 1) Kick a picFx so the mon visibly ducks / flies / fades.
+    insertQueueAfter(battle, {
+      arFx = true,
+      fn = function()
+        if not battle.picFxFor or not battle.player then
+          return
+        end
+        local pf = battle:picFxFor(battle.player)
+        if not pf then
+          return
+        end
+        pf.kind, pf.t = spec.pic, 0
+        pf.hidden, pf.ox, pf.oy = nil, 0, 0
+        if battle.fx then
+          battle.fx.shake = math.max(battle.fx.shake or 0, 8)
+        end
+      end,
     })
-    momentumState(battle).temp.picHidden = true
-  end
-
-  enqueueBraceAnim = function(battle)
-    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
-      return
+    -- 2) Let the picFx play out.
+    insertQueueAfter(battle, { wait = spec.wait or 18, arFx = true })
+    -- 3) Thematic move anim (FLY / RAZOR_LEAF / DIG / SURF / …).
+    queueThematicMoveAnim(battle, moveId)
+    if moveId then
+      dev.log(battle, "HIDE anim",
+        tostring(label or "?") .. "→" .. tostring(moveId))
     end
-    battle.nextInsert = (battle.nextInsert or 0) + 1
-    table.insert(battle.queue, battle.nextInsert, {
+    -- 4) Stay hidden in cover afterward.
+    insertQueueAfter(battle, {
+      arFx = true,
       fn = function()
         if not battle.picFxFor or not battle.player then
           return
         end
         local pf = battle:picFxFor(battle.player)
         if pf then
-          -- Blink ends shown (unlike shakeBF, which clears the pic).
-          pf.kind, pf.t = "blink", 0
-          pf.hidden = nil
+          pf.kind, pf.t = nil, nil
+          pf.hidden = true
+          pf.ox, pf.oy = 0, 0
         end
       end,
     })
   end
 
+  enqueueBraceAnim = function(battle, opts)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+      return
+    end
+    opts = opts or {}
+    local foeSide = opts.foe == true
+    local side = foeSide and battle.enemy or battle.player
+    if not side then
+      return
+    end
+    if battle.animationsOn and not battle:animationsOn() then
+      return
+    end
+
+    local entrenched = opts.entrenched == true
+    -- Classic status anims that read as "toughen up" / shell / barrier.
+    -- Picked at random so brace/entrench don't always look identical.
+    local movePool = entrenched and {
+      "BARRIER", "ACID_ARMOR", "HARDEN", "WITHDRAW", "DEFENSE_CURL", "REFLECT",
+    } or {
+      "HARDEN", "WITHDRAW", "DEFENSE_CURL", "MEDITATE", "BIDE",
+      "BARRIER", "ACID_ARMOR",
+    }
+    local picPool = {
+      { pic = "blink", wait = 10 },
+      { pic = "bounce", wait = 14 },
+      { pic = "slideHalf", wait = 12 },
+      { pic = "blink", wait = 8, follow = "bounce", followWait = 12 },
+    }
+    local moveId = pickLine(movePool)
+    local pic = pickLine(picPool) or picPool[1]
+    local wait = pic.wait or 12
+    if entrenched then
+      wait = wait + 6
+    end
+    local shake = entrenched and 14 or 10
+
+    local items = {}
+    items[#items + 1] = {
+      arFx = true,
+      fn = function()
+        if not battle.picFxFor then
+          return
+        end
+        local battler = foeSide and battle.enemy or battle.player
+        if not battler then
+          return
+        end
+        local pf = battle:picFxFor(battler)
+        if pf then
+          pf.kind, pf.t = pic.pic, 0
+          pf.hidden = nil
+        end
+        if battle.fx then
+          battle.fx.shake = math.max(battle.fx.shake or 0, shake)
+        end
+      end,
+    }
+    items[#items + 1] = { wait = wait, arFx = true }
+    if pic.follow then
+      items[#items + 1] = {
+        arFx = true,
+        fn = function()
+          if not battle.picFxFor then
+            return
+          end
+          local battler = foeSide and battle.enemy or battle.player
+          if not battler then
+            return
+          end
+          local pf = battle:picFxFor(battler)
+          if pf then
+            pf.kind, pf.t = pic.follow, 0
+          end
+        end,
+      }
+      items[#items + 1] = { wait = pic.followWait or 12, arFx = true }
+    end
+    if moveId and battle.data and battle.data.moves and battle.data.moves[moveId] then
+      items[#items + 1] = {
+        anim = moveId,
+        attackerIsPlayer = not foeSide,
+        arFx = true,
+      }
+    end
+    -- Clear leftover picFx so the real attack reads cleanly.
+    items[#items + 1] = {
+      arFx = true,
+      fn = function()
+        if not battle.picFxFor then
+          return
+        end
+        local battler = foeSide and battle.enemy or battle.player
+        if not battler then
+          return
+        end
+        local pf = battle:picFxFor(battler)
+        if pf and (pf.kind == pic.pic or pf.kind == pic.follow) then
+          pf.kind, pf.t = nil, nil
+        end
+      end,
+    }
+
+    if opts.beforeAnim then
+      -- insertBeforeAnim prepends at the anim index; reverse so order stays.
+      for i = #items, 1, -1 do
+        insertBeforeAnim(battle, items[i])
+      end
+    else
+      for i = 1, #items do
+        insertQueueAfter(battle, items[i])
+      end
+    end
+  end
+
+  -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
+  -- Drives animPlayer + picFx without stealing the FIGHT / STRIKE menus.
+  clearAmbientStance = function(battle)
+    local state = battle and momentumByBattle[battle]
+    local owned = battle and battle._arAmbientOwned
+    if battle then
+      battle._arAmbientOwned = nil
+    end
+    -- Stop leftover HARDEN/BARRIER pulses so the real attack anim can start
+    -- cleanly (entrench STRIKE was inheriting a busy animPlayer).
+    if owned and battle and battle.animPlayer then
+      local ap = battle.animPlayer
+      if type(ap.stop) == "function" then
+        pcall(ap.stop, ap)
+      elseif type(ap.start) == "function" then
+        -- No stop API: poke a finished state via isDone by clearing custom.
+        pcall(function()
+          ap.custom = false
+          ap.spec = nil
+          if ap.inner and type(ap.inner.stop) == "function" then
+            ap.inner:stop()
+          end
+        end)
+      end
+    end
+    if not state or not state.ambient then
+      return
+    end
+    local amb = state.ambient
+    state.ambient = nil
+    if amb.wasHidden and battle.picFxFor and battle.player
+        and state.temp and state.temp.picHidden then
+      local pf = battle:picFxFor(battle.player)
+      if pf then
+        pf.hidden = true
+      end
+    end
+  end
+
+  local function ambientMovePool(temp)
+    if not temp then
+      return nil
+    end
+    if temp.entrenched then
+      return S.AMBIENT_ENTRENCH_MOVES or S.AMBIENT_BRACE_MOVES
+    end
+    if (temp.defense or 0) > 0 and not temp.hidAway then
+      return S.AMBIENT_BRACE_MOVES
+    end
+    if temp.hidAway or temp.picHidden then
+      local spot = tostring(temp.coverSpot or ""):upper()
+      local bySpot = S.AMBIENT_HIDE_MOVES or {}
+      if spot ~= "" and bySpot[spot] then
+        return bySpot[spot]
+      end
+      local spec = dodgeAnimSpec({ label = spot }, nil)
+      return (spec and spec.moves) or { "DIG", "DOUBLE_TEAM" }
+    end
+    return nil
+  end
+
+  local function pickAmbientMove(battle, pool)
+    if type(pool) ~= "table" or #pool == 0 then
+      return nil
+    end
+    local moves = battle and battle.data and battle.data.moves
+    local ok = {}
+    for i = 1, #pool do
+      local id = pool[i]
+      if type(id) == "string" and moves and moves[id] then
+        ok[#ok + 1] = id
+      end
+    end
+    if #ok == 0 then
+      return nil
+    end
+    return pickLine(ok) or ok[1]
+  end
+
+  local function kickAmbientPicFx(battle, bracing)
+    if not battle or not battle.picFxFor or not battle.player then
+      return
+    end
+    local pf = battle:picFxFor(battle.player)
+    if not pf then
+      return
+    end
+    pf.kind, pf.t = bracing and "blink" or "bounce", 0
+    if battle.fx then
+      battle.fx.shake = math.max(battle.fx.shake or 0, bracing and 6 or 4)
+    end
+  end
+
+  tickAmbientStance = function(battle, dt)
+    if not opt("momentum_counter") or type(battle) ~= "table" then
+      return
+    end
+    local state = momentumByBattle[battle]
+    local phase = battle.phase
+    if phase ~= "menu" and phase ~= "moveSelect" then
+      clearAmbientStance(battle)
+      return
+    end
+    -- Frozen / asleep: no idle HARDEN/GROWTH pulses.
+    if playerStatusLocked(battle) then
+      clearAmbientStance(battle)
+      return
+    end
+    -- Don't fight real queue traffic / callout picks / an engine-owned anim.
+    if battle.current or (battle.queue and #battle.queue > 0)
+        or (battle.animPlaying and not battle._arAmbientOwned) then
+      clearAmbientStance(battle)
+      return
+    end
+    if not state or not state.temp then
+      return
+    end
+    if state.awaitingPick then
+      clearAmbientStance(battle)
+      return
+    end
+
+    dt = tonumber(dt) or (1 / 60)
+    if state.ambient then
+      local ap = battle.animPlayer
+      if ap and type(ap.update) == "function" then
+        pcall(ap.update, ap)
+      end
+      local done = true
+      if ap and type(ap.isDone) == "function" then
+        local ok, d = pcall(ap.isDone, ap)
+        if ok then
+          done = d ~= false
+        end
+      else
+        state.ambient.frames = (state.ambient.frames or 0) + 1
+        done = state.ambient.frames >= 40
+      end
+      if done then
+        clearAmbientStance(battle)
+        local r = (love and love.math and love.math.random) or math.random
+        local base = S.AMBIENT_DELAY or 2.2
+        local jit = S.AMBIENT_DELAY_JITTER or 1.0
+        state.ambientCd = base + r() * jit
+      end
+      return
+    end
+
+    local pool = ambientMovePool(state.temp)
+    if not pool then
+      state.ambientCd = nil
+      return
+    end
+    state.ambientCd = (state.ambientCd or 0.35) - dt
+    if state.ambientCd > 0 then
+      return
+    end
+
+    local moveId = pickAmbientMove(battle, pool)
+    local bracing = state.temp.entrenched
+        or ((state.temp.defense or 0) > 0 and not state.temp.hidAway)
+    local wasHidden = state.temp.picHidden == true
+    -- Briefly reveal for leaf/growth pulses so the anim reads on-screen.
+    if wasHidden and battle.picFxFor and battle.player then
+      local pf = battle:picFxFor(battle.player)
+      if pf then
+        pf.hidden = nil
+      end
+    end
+    kickAmbientPicFx(battle, bracing)
+
+    local started = false
+    local ap = battle.animPlayer
+    if moveId and ap and type(ap.start) == "function" then
+      -- Start without flipping battle.animPlaying — keeps FIGHT menus alive.
+      local ok = pcall(ap.start, ap, moveId, true)
+      if ok then
+        battle._arAmbientOwned = true
+        started = true
+        dev.log(battle, "AMBIENT", tostring(moveId)
+          .. (bracing and " brace" or " hide"))
+      end
+    end
+    state.ambient = {
+      moveId = moveId,
+      wasHidden = wasHidden,
+      bracing = bracing,
+      frames = 0,
+    }
+    if not started then
+      -- picFx-only fallback — short pulse, then wait the delay again.
+      state.ambient.frames = 28
+    end
+    state.ambientCd = 0
+  end
+
   revealPlayerPic = function(battle, withEmerge)
+    clearAmbientStance(battle)
     local state = battle and momentumByBattle[battle]
     local wasHidden = state and state.temp and state.temp.picHidden
+    local coverSpot = state and state.temp and state.temp.coverSpot
     if state and state.temp then
       state.temp.picHidden = false
     end
@@ -2076,8 +4885,21 @@ return function(mod)
       end
     end
     if withEmerge and type(battle.queue) == "table" then
+      -- Thematic "coming out" sparkle (same family as the hide).
+      local spec = dodgeAnimSpec({ label = coverSpot }, battle)
+      local emergeId = pickHideMoveAnim(battle, spec and spec.emerge or spec and spec.moves)
       battle.nextInsert = (battle.nextInsert or 0) + 1
-      table.insert(battle.queue, battle.nextInsert, { fn = showNow })
+      table.insert(battle.queue, battle.nextInsert, { fn = showNow, arFx = true })
+      if emergeId and battle.data and battle.data.moves and battle.data.moves[emergeId] then
+        battle.nextInsert = (battle.nextInsert or 0) + 1
+        table.insert(battle.queue, battle.nextInsert, {
+          anim = emergeId,
+          attackerIsPlayer = true,
+          arFx = true,
+        })
+        dev.log(battle, "EMERGE anim",
+          tostring(coverSpot or "?") .. "→" .. tostring(emergeId))
+      end
     else
       showNow()
     end
@@ -2110,16 +4932,52 @@ return function(mod)
     if not pending or not pending.moveDef then
       return
     end
-    local foeLine, foeBuffs, foeTrack = tryFoeCoverReaction(battle, pending.moveDef)
-    if not foeLine then
+    local foeLine, foeBuffs, foeTrack, failNarr =
+        tryFoeCoverReaction(battle, pending.moveDef)
+    if not foeLine and not failNarr then
       return
     end
     applyCalloutBuffs(battle, foeBuffs, foeTrack)
-    insertBeforeAnim(battle, {
-      text = foeLine,
-      auto = true,
-      autoDelay = CALLOUT_AUTO_DELAY,
-    })
+    -- If the real move anim is already gone from the queue, shouting / sparkles
+    -- would land after damage/faint — keep the silent buffs only.
+    if not indexOfMoveAnim(battle) then
+      return
+    end
+    -- Insert fail first, then order: each insertBeforeAnim lands before anim,
+    -- so later inserts sit earlier in the queue (order → fail → anim).
+    if failNarr then
+      insertBeforeAnim(battle, {
+        text = failNarr,
+        auto = true,
+        autoDelay = S.CALLOUT_AUTO_DELAY,
+      })
+    end
+    if foeLine then
+      local item = {
+        text = foeLine,
+        auto = true,
+        autoDelay = S.CALLOUT_AUTO_DELAY,
+      }
+      if not isDodgeFailNarrator(foeLine) then
+        markBubbleWait(item, "foe")
+      else
+        markBubbleWait(item, "narrator")
+      end
+      insertBeforeAnim(battle, item)
+    end
+    -- Physical brace: Harden-style sparkle on the foe before your hit.
+    if foeTrack and foeBuffs then
+      local braced = false
+      for i = 1, #foeBuffs do
+        if foeBuffs[i].stat == "defense" then
+          braced = true
+          break
+        end
+      end
+      if braced then
+        enqueueBraceAnim(battle, { foe = true, beforeAnim = true })
+      end
+    end
   end
 
   resolvePendingDamage = function(battle)
@@ -2154,8 +5012,7 @@ return function(mod)
     end
     flushPendingFoeReaction(battle)
     if type(battle.queue) == "table" then
-      local animIdx = indexOfMoveAnim(battle) or #battle.queue
-      battle.nextInsert = animIdx
+      battle.nextInsert = resumeInsertIndex(battle)
     end
     origRunDamaging(battle, pending.ctx, pending.record)
   end
@@ -2204,7 +5061,69 @@ return function(mod)
     if (move.power or 0) <= 0 or move.category == "status" then
       return false
     end
+    -- Frozen / asleep: can't dodge, brace, or take orders.
+    if playerStatusLocked(battle) then
+      return false
+    end
+    -- Deep in cover this turn — no dodge/brace orders.
+    if playerInDeepCover(battle) then
+      return false
+    end
+    -- Already hid/flew somewhere and chose STAY — keep that spot, no new menu.
+    if playerHoldingHide(battle) then
+      return false
+    end
+    -- Entrenched: weather the barrage until a counter opening (no new brace).
+    local st = momentumByBattle[battle]
+    if st and st.temp and st.temp.entrenched then
+      return false
+    end
     return threatWantsPick(battle, move)
+  end
+
+  -- Random EVADE stages for a successful dodge (menu or auto).
+  local function rollPlayerDodgeEvasion(isHide)
+    local pools = S.DODGE_EVADE_ROLL or {}
+    local pool = isHide and pools.hide or pools.basic
+    if type(pool) ~= "table" or #pool == 0 then
+      return isHide and 2 or 1
+    end
+    local n = pickLine(pool)
+    n = tonumber(n) or (isHide and 2 or 1)
+    return math.max(1, math.min(4, math.floor(n)))
+  end
+
+  -- Evasive hide (PATH / tree / dive / …): chance for +1 EVADE + flavor.
+  local function tryVanishEvasion(battle, me)
+    if not opt("momentum_counter") or not battle then
+      return 0
+    end
+    local state = momentumState(battle)
+    if not state.temp or not state.temp.hidAway then
+      return 0
+    end
+    local r = (love and love.math and love.math.random) or math.random
+    if r() >= (S.VANISH_CHANCE or 0.30) then
+      return 0
+    end
+    local bonus = S.VANISH_EVADE_BONUS or 1
+    applyCalloutBuffs(battle, {
+      { who = "player", stat = "evasion", delta = bonus },
+    }, true)
+    local line = pickFormatted(S.VANISH_CALLS, me)
+      or "Vanished from\nthe foe's sight!"
+    enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, nil)
+    dev.log(battle, "VANISH", "EV+" .. tostring(bonus))
+    return bonus
+  end
+
+  local function maybeQueueHighEvadeLine(battle, me, evadeBoost)
+    if (evadeBoost or 0) < 3 then
+      return
+    end
+    local line = pickFormatted(S.DODGE_EVADE_HIGH_CALLS, me)
+      or "Sharp instincts!"
+    enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, nil)
   end
 
   local function finishCalloutPick(battle, me, moveName, kind, choice)
@@ -2214,31 +5133,64 @@ return function(mod)
     state.pendingDamage = nil
     state.enemyActedThisTurn = true
 
-    local failed = kind == "dodge" and not rollDodgeSuccess()
+    local failed = not rollPlayerReactSuccess(battle, kind)
     if failed then
-      local fail = pickFormatted(DODGE_FAIL_CALLS, me)
-        or (me .. "!\nCouldn't dodge!")
+      -- Bottom box narrator — not a speech-bubble callout.
+      state.temp.dodgedOk = false
       table.insert(battle.queue, 1, {
-        text = fail,
+        text = reactFailLine(battle, kind),
         auto = true,
-        autoDelay = CALLOUT_AUTO_DELAY,
+        autoDelay = S.CALLOUT_AUTO_DELAY,
       })
+      dev.log(battle, "YOU " .. tostring(kind),
+        "FAIL pick=" .. tostring(choice and choice.label or "-")
+          .. (playerIsParalyzed(battle) and " PAR" or ""))
     else
       local line = formatCall(choice.line, me, moveName)
         or (me .. "!\n" .. (kind == "brace" and "Brace!" or "Dodge!"))
-      table.insert(battle.queue, 1, {
-        text = line,
-        auto = true,
-        autoDelay = CALLOUT_AUTO_DELAY,
-      })
+      do
+        local item = {
+          text = line,
+          auto = true,
+          autoDelay = S.CALLOUT_AUTO_DELAY,
+        }
+        markBubbleWait(item, "player")
+        table.insert(battle.queue, 1, item)
+      end
       battle.nextInsert = 1
       if kind == "dodge" then
         state.temp.cover = true
+        state.temp.dodgedOk = true
+        -- Plain "DODGE" is a sidestep — must strike next. Location/type
+        -- picks (GRASS, FLY UP, …) are a real hide: STAY allowed.
+        local label = tostring(choice.label or ""):upper()
+        state.temp.hidAway = (choice.boost or 1) >= 2
+            or (label ~= "" and label ~= "DODGE")
+        if state.temp.hidAway then
+          rememberCoverSpot(battle, label)
+        else
+          state.temp.coverSpot = nil
+        end
+        -- Non-deterministic EVADE: menu pick only sets the roll tier.
+        local evadeBoost = rollPlayerDodgeEvasion(state.temp.hidAway)
         applyCalloutBuffs(battle, {
-          { who = "player", stat = "evasion", delta = choice.boost or 1 },
+          { who = "player", stat = "evasion", delta = evadeBoost },
         }, true)
+        maybeQueueHighEvadeLine(battle, me, evadeBoost)
+        -- PATH / grass / fly / …: chance to vanish for extra EVADE.
+        if state.temp.hidAway then
+          local bonus = tryVanishEvasion(battle, me)
+          evadeBoost = evadeBoost + bonus
+        end
         enqueueDodgeHideAnim(battle, choice)
+        dev.log(battle, "YOU dodge",
+          string.format("OK %s EV+%d hide=%s spot=%s",
+            tostring(choice.label or "DODGE"),
+            evadeBoost,
+            state.temp.hidAway and "Y" or "N",
+            tostring(state.temp.coverSpot or "-")))
       else
+        state.temp.dodgedOk = false
         local boost = choice.boost or 1
         -- Strong brace: entrench at near-max DEF and wait for a counter opening.
         if boost >= 2 or choice.entrench or choice.guardLock then
@@ -2246,48 +5198,360 @@ return function(mod)
             and battle.player.stages.defense) or 0
           boost = math.max(1, 6 - cur)
           state.temp.entrenched = true
+          state.temp.entrenchTurns = 0
         end
         applyCalloutBuffs(battle, {
           { who = "player", stat = "defense", delta = boost },
         }, true)
-        enqueueBraceAnim(battle)
+        enqueueBraceAnim(battle, {
+          entrenched = state.temp.entrenched == true,
+        })
+        dev.log(battle, "YOU brace",
+          string.format("OK %s DF+%d entrench=%s",
+            tostring(choice.label or "BRACE"),
+            boost,
+            state.temp.entrenched and "Y" or "N"))
       end
     end
 
     if pending and pending.ctx then
-      -- Damage/faint text must come AFTER the foe's move anim, not after
-      -- our dodge hide (which also has row.anim).
-      local animIdx = indexOfMoveAnim(battle) or #battle.queue
-      battle.nextInsert = animIdx
-      -- If the move anim was cancelled/removed, still resolve damage at end.
-      if not indexOfMoveAnim(battle) and battle.cancelMoveAnim then
-        -- keep nextInsert at end of queue
-        battle.nextInsert = #battle.queue
-      end
+      -- sayNext increments nextInsert first — resumeInsertIndex returns the
+      -- anim index so "doesn't affect" / effectiveness land right after it.
+      battle.nextInsert = resumeInsertIndex(battle)
       origRunDamaging(battle, pending.ctx, pending.record)
     end
+    -- Same-turn COUNTER! is queued from wrapBattleSay after dodge-whiff text
+    -- (must wait for the miss anim + "dodged aside!" line).
+    -- Chip updates after the order is committed (not while the menu is open).
+    publishChipState(battle)
   end
 
-  local function queueCalloutPickMenu(battle, me, moveName, kind)
-    local choices = buildPickChoices(kind, battle)
-    insertBeforeAnim(battle, {
-      ui = function()
-        local items = {}
-        for i = 1, #choices do
-          local choice = choices[i]
-          items[#items + 1] = {
-            label = choice.label,
-            onSelect = function()
-              finishCalloutPick(battle, me, moveName, kind, choice)
-            end,
+  -- Custom callout picker: left-side panel with a title, away from the
+  -- foe's HUD (classic Menu at tx=11/ty=1 sat on top of them).
+  local function newCalloutPickModal(game, opts)
+    local Font = require("src.render.Font")
+    local Sound = require("src.core.Sound")
+    local choices = opts.choices or {}
+    local start = tonumber(opts.index) or 1
+    if start < 1 then
+      start = 1
+    end
+    if #choices > 0 and start > #choices then
+      start = #choices
+    end
+    local self = {
+      game = game,
+      title = tostring(opts.title or "DODGE!"),
+      subtitle = opts.subtitle and tostring(opts.subtitle) or nil,
+      choices = choices,
+      index = start,
+      cancelable = opts.cancelable == true,
+      onPick = opts.onPick,
+      onCancel = opts.onCancel,
+    }
+
+    local function hintFor(choice)
+      if not choice then
+        return ""
+      end
+      if choice.hint then
+        return tostring(choice.hint)
+      end
+      local line = tostring(choice.line or "")
+      line = line:gsub("%%s", ""):gsub("!", ""):gsub("\n", " ")
+      line = line:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+      if #line > 16 then
+        line = line:sub(1, 15) .. "."
+      end
+      return line
+    end
+
+    function self:update(dt)
+      local input = self.game.input
+      local n = #self.choices
+      if n < 1 then
+        return
+      end
+      if input:wasPressed("up") then
+        self.index = self.index > 1 and self.index - 1 or n
+      elseif input:wasPressed("down") then
+        self.index = self.index < n and self.index + 1 or 1
+      elseif input:wasPressed("a") then
+        Sound.play(self.game.data, "Press_AB")
+        local choice = self.choices[self.index]
+        self.game.stack:pop()
+        if self.onPick then
+          self.onPick(choice)
+        end
+      elseif self.cancelable
+          and (input:wasPressed("b") or input:wasPressed("start")) then
+        Sound.play(self.game.data, "Press_AB")
+        self.game.stack:pop()
+        if self.onCancel then
+          self.onCancel()
+        end
+      end
+    end
+
+    function self:draw()
+      local n = #self.choices
+      if n < 1 then
+        return
+      end
+      -- Measure labels; keep the box readable but on-screen (20 tiles wide).
+      local widest = #Font.split(self.title)
+      if self.subtitle then
+        widest = math.max(widest, #Font.split(self.subtitle))
+      end
+      for i = 1, n do
+        local label = tostring(self.choices[i].label or "")
+        widest = math.max(widest, #Font.split(label) + 2)
+        local hint = hintFor(self.choices[i])
+        if hint ~= "" then
+          widest = math.max(widest, #Font.split(hint) + 3)
+        end
+      end
+      local tw = math.min(18, math.max(11, widest + 2))
+      -- Title (1) + optional subtitle (1) + gap + n options (2 rows each).
+      local head = self.subtitle and 3 or 2
+      local th = head + n * 2 + 1
+      local tx = 1
+      -- Sit above the text box, on the player's side of the field.
+      local ty = math.max(1, 12 - th)
+      if ty + th > 12 then
+        th = 12 - ty
+      end
+
+      Font.drawBox(tx, ty, tw, th)
+      love.graphics.setColor(0, 0, 0, 1)
+      Font.draw(self.title, (tx + 1) * 8, (ty + 1) * 8)
+      local row = ty + 2
+      if self.subtitle then
+        Font.draw(self.subtitle, (tx + 1) * 8, row * 8)
+        row = row + 1
+      end
+      row = row + 1
+      for i = 1, n do
+        local choice = self.choices[i]
+        local y = row * 8
+        if i == self.index then
+          Font.drawCode(0xED, tx * 8 + 2, y)
+        end
+        Font.draw(tostring(choice.label or ""), (tx + 2) * 8, y)
+        local hint = hintFor(choice)
+        -- Hint on the same row if it fits; otherwise skip to keep the box tidy.
+        if hint ~= "" then
+          local label = tostring(choice.label or "")
+          local room = tw - 3 - #Font.split(label)
+          if room >= #Font.split(hint) + 1 then
+            Font.draw(hint, (tx + 3 + #Font.split(label)) * 8, y)
+          end
+        end
+        row = row + 2
+        if row >= ty + th - 1 then
+          break
+        end
+      end
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+
+    return self
+  end
+
+  local function finishSameTurnCounter(battle, choice)
+    local state = momentumState(battle)
+    state.sameTurnCounterQueued = nil
+    local replacing = state.replaceQueuedPlayerAction
+    -- Miss text belongs before COUNTER!; never replay it after the strike.
+    scrubLateDodgeWhiff(battle)
+    if not choice or choice.hold or tostring(choice.label or "") == "HOLD" then
+      state.mode = nil
+      state.boosted = false
+      state.foeWhiffDamage = nil
+      state.replaceQueuedPlayerAction = nil
+      dev.log(battle, "COUNTER! pick",
+        replacing and "HOLD keep-plan" or "HOLD skip")
+      publishChipState(battle)
+      -- Going second + HOLD: keep the move you picked at turn start.
+      return
+    end
+    local moveInst = choice.moveInst
+    if not moveInst or not battle.player or not battle.enemy then
+      state.mode = nil
+      state.boosted = false
+      state.replaceQueuedPlayerAction = nil
+      publishChipState(battle)
+      return
+    end
+    if (battle.player.mon and battle.player.mon.hp or 0) <= 0
+        or (battle.enemy.mon and battle.enemy.mon.hp or 0) <= 0 then
+      state.mode = nil
+      state.boosted = false
+      state.replaceQueuedPlayerAction = nil
+      publishChipState(battle)
+      return
+    end
+    -- Keep opening armed; announce becomes "Counter with X!" + boosted damage.
+    state.mode = "counter"
+    state.boosted = false
+    state.sameTurnCounterStrike = true
+    local moveName = tostring(choice.label or moveInst.id or "MOVE")
+    if replacing then
+      -- Swap the queued turn action for the move you just picked.
+      state.overridePlayerAction = moveInst
+      state.replaceQueuedPlayerAction = nil
+      dev.log(battle, "COUNTER! pick", "replace→" .. moveName)
+      publishChipState(battle)
+      return
+    end
+    -- You already attacked this turn: fire an extra counter strike now.
+    dev.log(battle, "COUNTER! pick", "extra→" .. moveName)
+    table.insert(battle.queue, 1, {
+      arFx = true,
+      fn = function()
+        if not battle.player or not battle.enemy then
+          return
+        end
+        if (battle.player.mon.hp or 0) <= 0 or (battle.enemy.mon.hp or 0) <= 0 then
+          state.mode = nil
+          publishChipState(battle)
+          return
+        end
+        -- Idle BC camera often takes over during the COUNTER! menu — snap it
+        -- back; performMove wrap + engine move_used re-arm the attack cam.
+        resetBattleCamera(battle)
+        battle:performMove(battle.player, battle.enemy, moveInst)
+      end,
+    })
+    publishChipState(battle)
+  end
+
+  maybeQueueSameTurnCounter = function(battle)
+    if not opt("momentum_counter") or not battle then
+      return
+    end
+    local state = momentumByBattle[battle]
+    if not state or not state.offerSameTurnCounter then
+      return
+    end
+    state.offerSameTurnCounter = nil
+    if playerStatusLocked(battle) then
+      dev.log(battle, "COUNTER! skip", "status-locked")
+      return
+    end
+    if state.sameTurnCounterQueued or not playerHasCounter(battle) then
+      dev.log(battle, "COUNTER! skip",
+        state.sameTurnCounterQueued and "already-queued"
+          or "not-armed")
+      return
+    end
+    if (battle.player and battle.player.mon and battle.player.mon.hp or 0) <= 0 then
+      state.mode = nil
+      return
+    end
+    if (battle.enemy and battle.enemy.mon and battle.enemy.mon.hp or 0) <= 0 then
+      state.mode = nil
+      return
+    end
+    state.sameTurnCounterQueued = true
+    local me = playerMonName(battle)
+    local replacing = state.replaceQueuedPlayerAction
+    local moves = battle.player and battle.player.curMoves or {}
+    local choices = {}
+    for i = 1, #moves do
+      local mv = moves[i]
+      if mv and not mv.struggle and (mv.pp or 0) > 0 then
+        local def = nil
+        if type(battle.moveDef) == "function" then
+          def = battle:moveDef(mv)
+        end
+        if not def then
+          def = findMoveByName(battle, mv.id or mv.name)
+        end
+        if def and (def.power or 0) > 0 and def.category ~= "status" then
+          choices[#choices + 1] = {
+            label = tostring(def.name or mv.id or "MOVE"),
+            hint = "PP " .. tostring(mv.pp),
+            moveInst = mv,
+            moveDef = def,
           }
         end
-        return Menu.new(battle.game, items, {
+      end
+    end
+    choices[#choices + 1] = {
+      label = "HOLD",
+      hint = replacing and "Keep plan" or "Skip counter",
+      hold = true,
+    }
+    -- After miss anim + dodge-whiff text — never before the foe's swing.
+    dev.log(battle, "COUNTER! menu",
+      replacing and "re-pick after miss anim" or "extra strike after miss anim")
+    insertAfterMissAnim(battle, {
+      ui = function()
+        return newCalloutPickModal(battle.game, {
+          title = "COUNTER!",
+          subtitle = replacing and "Pick a move" or me,
+          choices = choices,
           cancelable = false,
-          tx = 11,
-          ty = 1,
-          tw = 9,
+          onPick = function(choice)
+            finishSameTurnCounter(battle, choice)
+          end,
         })
+      end,
+    })
+    -- Opening is live after "dodged aside!" — chip can show ready-to-counter.
+    publishChipState(battle)
+  end
+
+  -- Serious hits: always offer Dodge AND Brace (anime — you can sidestep a
+  -- punch). preferredKind only sets the default cursor (special→dodge, etc.).
+  local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
+    preferredKind = (preferredKind == "brace") and "brace" or "dodge"
+    local openReactMenu, openFlavorMenu
+    openFlavorMenu = function(kind)
+      local choices = buildPickChoices(kind, battle)
+      return newCalloutPickModal(battle.game, {
+        title = (kind == "brace") and "BRACE!" or "DODGE!",
+        subtitle = me,
+        choices = choices,
+        -- B returns to REACT! so a mis-tap doesn't lock you in.
+        cancelable = true,
+        onPick = function(choice)
+          finishCalloutPick(battle, me, moveName, kind, choice)
+        end,
+        onCancel = function()
+          if battle.game and battle.game.stack then
+            battle.game.stack:push(openReactMenu())
+          else
+            finishCalloutPick(battle, me, moveName, kind, choices[1])
+          end
+        end,
+      })
+    end
+    openReactMenu = function()
+      return newCalloutPickModal(battle.game, {
+        title = "REACT!",
+        subtitle = me,
+        index = (preferredKind == "brace") and 2 or 1,
+        choices = {
+          { label = "DODGE", hint = "Evade / hide", kind = "dodge" },
+          { label = "BRACE", hint = "Guard / dig in", kind = "brace" },
+        },
+        cancelable = false,
+        onPick = function(choice)
+          local kind = (choice and choice.kind == "brace") and "brace" or "dodge"
+          if battle.game and battle.game.stack then
+            battle.game.stack:push(openFlavorMenu(kind))
+          else
+            local choices = buildPickChoices(kind, battle)
+            finishCalloutPick(battle, me, moveName, kind, choices[1])
+          end
+        end,
+      })
+    end
+    insertBeforeAnim(battle, {
+      ui = function()
+        return openReactMenu()
       end,
     })
   end
@@ -2305,59 +5569,74 @@ return function(mod)
       local line, drop = pickCallEntry("counter", battle, me, moveName)
       line = line or ("Now, " .. me .. "!\nHit back!")
       drop = drop or 1
-      table.insert(battle.queue, 1, {
-        text = line,
-        auto = true,
-        autoDelay = CALLOUT_AUTO_DELAY,
-      })
+      do
+        local item = {
+          text = line,
+          auto = true,
+          autoDelay = S.CALLOUT_AUTO_DELAY,
+        }
+        markBubbleWait(item, "player")
+        table.insert(battle.queue, 1, item)
+      end
       battle.nextInsert = 1
       applyCalloutBuffs(battle, {
         { who = "enemy", stat = "defense", delta = -drop, fromEnemy = true },
       }, false)
+      dev.log(battle, "OPENING! pick",
+        "COUNTER " .. tostring(moveName) .. " foeDF-" .. tostring(drop))
     else
       state.mode = nil
       state.boosted = false
+      state.foeWhiffDamage = nil
+      dev.log(battle, "OPENING! pick", "HOLD (clear arm)")
     end
 
     if pending and pending.ctx then
       -- Foe dodge/brace after your COUNTER/HOLD choice, before the hit.
       flushPendingFoeReaction(battle)
-      local animIdx = indexOfMoveAnim(battle) or #battle.queue
-      battle.nextInsert = animIdx
+      battle.nextInsert = resumeInsertIndex(battle)
       origRunDamaging(battle, pending.ctx, pending.record)
       if doCounter then
+        local connected = state.boosted
         -- Damage hook should have consumed the boost; clear arming either way.
         state.mode = nil
-        -- Anime follow-through: true second hit if the foe is still up.
-        tryAgainStrike(battle, pending.ctx, me, false)
+        if resolvePlayerCounterAttempt(battle, connected) then
+          -- Foe snap-back queued; skip Again!
+        elseif connected then
+          -- Anime follow-through: true second hit if the foe is still up.
+          tryAgainStrike(battle, pending.ctx, me, false)
+        end
       end
     elseif doCounter then
       state.mode = nil
       state.pendingFoeReaction = nil
+      state.foeWhiffDamage = nil
     end
   end
 
   local function queueCounterPickMenu(battle, me, moveName)
     insertBeforeAnim(battle, {
       ui = function()
-        return Menu.new(battle.game, {
-          {
-            label = "COUNTER",
-            onSelect = function()
-              finishCounterPick(battle, me, moveName, true)
-            end,
+        return newCalloutPickModal(battle.game, {
+          title = "OPENING!",
+          subtitle = me,
+          choices = {
+            {
+              label = "COUNTER",
+              hint = "Hit back harder",
+              line = "",
+            },
+            {
+              label = "HOLD",
+              hint = "Save the opening",
+              line = "",
+            },
           },
-          {
-            label = "HOLD",
-            onSelect = function()
-              finishCounterPick(battle, me, moveName, false)
-            end,
-          },
-        }, {
           cancelable = false,
-          tx = 11,
-          ty = 1,
-          tw = 9,
+          onPick = function(choice)
+            local doCounter = choice and tostring(choice.label) == "COUNTER"
+            finishCounterPick(battle, me, moveName, doCounter)
+          end,
         })
       end,
     })
@@ -2381,7 +5660,10 @@ return function(mod)
     return true
   end
 
-  local function shouldDeferForCounterPick(battle, ctx)
+  -- Any armed opening + your damaging attack: auto "Counter with X!" (+25%).
+  -- No OPENING! COUNTER/HOLD menu — that used to pop at turn-start before
+  -- anyone acted whenever a prior-turn opening was still armed.
+  local function shouldAutoCounter(battle, ctx)
     if not opt("momentum_counter") or not battle or not ctx then
       return false
     end
@@ -2390,6 +5672,10 @@ return function(mod)
       return false
     end
     if not move or (move.power or 0) <= 0 or move.category == "status" then
+      return false
+    end
+    -- Frozen / asleep: can't take a counter order.
+    if playerStatusLocked(battle) then
       return false
     end
     if not playerHasCounter(battle) then
@@ -2406,24 +5692,59 @@ return function(mod)
     if shouldDeferForCalloutPick(battle, ctx) then
       local state = momentumState(battle)
       local move = ctx.move
-      local kind = foeMoveIsSpecial(move) and "dodge" or "brace"
-      state.awaitingPick = kind
+      -- Cursor default only — menu always offers both Dodge and Brace.
+      local preferred = foeMoveIsSpecial(move) and "dodge" or "brace"
+      state.awaitingPick = "react"
       state.pendingDamage = { ctx = ctx, record = record }
       state.pickOfferedThisTurn = true
+      -- Pin the engine's attack anim so finishCalloutPick resumes after it
+      -- (not before endOfTurn). Without this, REACT! landed after the swing.
+      do
+        local animIdx = indexOfMoveAnim(battle)
+        local row = animIdx and battle.queue[animIdx]
+        if row and row.anim then
+          battle.moveAnimRow = row
+        end
+      end
       local me = playerMonName(battle)
       local moveName = tostring(move.name or move.id or "MOVE")
-      queueCalloutPickMenu(battle, me, moveName, kind)
+      dev.log(battle, "MENU react",
+        tostring(moveName) .. " prefer=" .. preferred .. " (defer hit)")
+      queueCalloutPickMenu(battle, me, moveName, preferred)
       return
     end
-    if shouldDeferForCounterPick(battle, ctx) then
+    -- Armed opening: auto counter (no OPENING! menu — same-turn COUNTER!
+    -- after a dodge miss is the interactive pick).
+    if shouldAutoCounter(battle, ctx) then
       local state = momentumState(battle)
-      local move = ctx.move
-      state.awaitingPick = "counter"
-      state.pendingDamage = { ctx = ctx, record = record }
       local me = playerMonName(battle)
+      local move = ctx.move
       local moveName = tostring(move.name or move.id or "MOVE")
-      queueCounterPickMenu(battle, me, moveName)
-      return
+      state.mode = "counter"
+      state.boosted = false
+      local drop = 1
+      local style = calloutStyle()
+      if style == "SHOWY" or style == "BOLD" then
+        drop = 2
+      end
+      dev.log(battle, "AUTO counter",
+        tostring(moveName) .. " foeDF-" .. tostring(drop)
+          .. (state.enemyActedThisTurn and " (2nd)" or " (1st)"))
+      applyCalloutBuffs(battle, {
+        { who = "enemy", stat = "defense", delta = -drop, fromEnemy = true },
+      }, false)
+      flushPendingFoeReaction(battle)
+      local result = origRunDamaging(battle, ctx, record)
+      local connected = state.boosted
+      state.mode = nil
+      publishChipState(battle)
+      if resolvePlayerCounterAttempt(battle, connected) then
+        return result
+      end
+      if connected then
+        tryAgainStrike(battle, ctx, me, false)
+      end
+      return result
     end
     local state = battle and momentumState(battle)
     local enemyCounterArmed = state
@@ -2439,7 +5760,9 @@ return function(mod)
     end
     if enemyCounterArmed then
       state.enemyMode = nil
+      publishChipState(battle)
     end
+    -- Same-turn COUNTER! waits for dodge-whiff text in wrapBattleSay.
     return result
   end
 
@@ -2460,6 +5783,7 @@ return function(mod)
     for i = 1, #buffs do
       local b = buffs[i]
       local who = b.who
+      local whoTag = tostring(who or "?")
       if who == "player" then
         who = battle.player
       elseif who == "enemy" then
@@ -2490,12 +5814,109 @@ return function(mod)
             end
           end
         end
+        if applied ~= 0 then
+          dev.log(battle, "BUFF",
+            string.format("%s %s %+d→%d%s",
+              whoTag, tostring(b.stat), applied, after,
+              trackTemp and " (temp)" or ""))
+        end
       end
     end
   end
 
-  -- Drop temporary dodge/brace stages when you leave cover to attack.
+  -- STAY is only for a real hide/fly spot — not a plain sidestep or brace.
+  playerCanStay = function(battle)
+    if not opt("momentum_counter") or not battle then
+      return false
+    end
+    local state = momentumState(battle)
+    local t = state.temp
+    return t and t.hidAway and (t.cover or t.picHidden)
+  end
+
+  -- Already holding a hide spot — don't ask grass/path again.
+  playerHoldingHide = function(battle)
+    if not battle then
+      return false
+    end
+    local state = momentumByBattle[battle]
+    local t = state and state.temp
+    return t and t.hidAway and (t.cover or t.picHidden)
+  end
+
+  playerInDeepCover = function(battle)
+    local state = battle and momentumByBattle[battle]
+    return state and state.temp and state.temp.deepCover == true
+  end
+
+  rememberCoverSpot = function(battle, label)
+    local state = momentumState(battle)
+    local spot = tostring(label or ""):upper()
+    if spot == "" or spot == "DODGE" then
+      spot = (S.SCENE_COVER_SPOT and S.SCENE_COVER_SPOT[battleScene(battle)])
+        or "COVER"
+    end
+    state.temp.coverSpot = spot
+    return spot
+  end
+
+  pickDeepCoverLine = function(battle)
+    local me = playerMonName(battle)
+    local state = momentumState(battle)
+    local spot = tostring((state.temp and state.temp.coverSpot) or ""):upper()
+    local pack = S.DEEP_COVER_CALLS or {}
+    local list = pack[spot] or pack._default
+    return pickFormatted(list, me)
+      or (me .. " can't leave\ncover yet!")
+  end
+
+  -- Keep the Dig/Fly-style hide while STAY-ing in cover.
+  ensurePlayerPicHidden = function(battle, withAnim)
+    local state = momentumState(battle)
+    local t = state.temp
+    if not t or not t.hidAway then
+      return
+    end
+    if t.picHidden and not withAnim then
+      local player = battle.player
+      if player and battle.picFxFor then
+        local pf = battle:picFxFor(player)
+        if pf then
+          pf.hidden = true
+        end
+      end
+      return
+    end
+    enqueueDodgeHideAnim(battle, { label = t.coverSpot or "COVER" })
+  end
+
+  -- ~30% while in a real hide: this turn you're stuck deep (no action/callout).
+  rollDeepCoverLock = function(battle)
+    if not playerCanStay(battle) then
+      return false
+    end
+    local state = momentumState(battle)
+    local t = state.temp
+    if t.deepCoverRolled then
+      return t.deepCover == true
+    end
+    t.deepCoverRolled = true
+    local r = (love and love.math and love.math.random) or math.random
+    if r() < (S.DEEP_COVER_CHANCE or 0.30) then
+      t.deepCover = true
+      if not t.coverSpot or t.coverSpot == "" then
+        rememberCoverSpot(battle, nil)
+      end
+      dev.log(battle, "DEEP cover",
+        "lock spot=" .. tostring(t.coverSpot or "?"))
+      publishChipState(battle)
+      return true
+    end
+    return false
+  end
+
   local function resolveCoverOnPlayerAttack(battle, monName)
+    clearAmbientStance(battle)
     local state = momentumState(battle)
     local temp = state.temp or { evasion = 0, defense = 0, cover = false, picHidden = false }
     local player = battle.player
@@ -2508,25 +5929,54 @@ return function(mod)
       end
     end
     local hadCover = temp.cover
+    -- Real hide/fly spot only — plain DODGE sidesteps must not shout "Coming out!".
+    local hadHide = temp.hidAway == true
     local goingFirst = not state.enemyActedThisTurn
-    -- Pop back onto the field when leaving cover.
-    revealPlayerPic(battle, hadCover)
+    if hadCover or hadHide or (temp.evasion or 0) ~= 0 or (temp.defense or 0) ~= 0 then
+      dev.log(battle, "CLEAR youCover",
+        string.format("hadCover=%s hide=%s first=%s was=%s",
+          hadCover and "Y" or "N",
+          hadHide and "Y" or "N",
+          goingFirst and "Y" or "N",
+          dev.fmtTemp(temp)))
+    end
+    -- Pop back onto the field when leaving a real hide (not a sidestep).
+    revealPlayerPic(battle, hadHide)
     state.temp = {
       evasion = 0,
       defense = 0,
       cover = false,
       picHidden = false,
       entrenched = false,
+      entrenchTurns = 0,
+      hidAway = false,
+      coverSpot = nil,
+      deepCover = false,
+      deepCoverRolled = false,
+      dodgedOk = false,
     }
 
-    if not opt("callout_buffs") or not hadCover or not goingFirst or not player then
+    -- Leaving a real hide to attack → "Coming out!" (any speed order).
+    -- Frozen / asleep: no trainer shout.
+    if not opt("callout_buffs") or not hadHide or not player
+        or playerStatusLocked(battle) then
+      publishChipState(battle)
       return nil
     end
-    -- Leaving cover to strike first is risky (silent — leave-cover line is enough).
-    silentStageDelta(player, "defense", -1)
-    local line = pickFormatted(LEAVE_COVER_CALLS, monName)
-      or (monName .. "!\nLeft cover!")
-    enqueueAutoAfter(battle, line, CALLOUT_AUTO_DELAY)
+    -- Leaving cover to strike first is riskier.
+    if goingFirst then
+      silentStageDelta(player, "defense", -1)
+    end
+    -- If COUNTER/HOLD is about to open, skip the leave-cover shout so the
+    -- two don't stack into one confusing beat.
+    if playerHasCounter(battle) then
+      publishChipState(battle)
+      return true
+    end
+    local line = pickFormatted(S.LEAVE_COVER_CALLS, monName)
+      or (monName .. "!\nComing out!")
+    enqueueAutoAfter(battle, line, nil, "player")
+    publishChipState(battle)
     return true
   end
 
@@ -2545,15 +5995,18 @@ return function(mod)
     end
     local hadCover = temp.cover
     state.enemyTemp = { evasion = 0, defense = 0, cover = false }
-    if not opt("callout_buffs") or not hadCover or not enemy then
+    if not opt("callout_buffs") or not hadCover or not enemy
+        or enemyStatusLocked(battle) then
+      publishChipState(battle)
       return nil
     end
     local line = pickFoeTrainerLine(
       battle,
-      TRAINER_FOE_LEAVE_COVER_CALLS,
-      FOE_LEAVE_COVER_CALLS,
+      S.TRAINER_FOE_LEAVE_COVER_CALLS,
+      S.FOE_LEAVE_COVER_CALLS,
       monName or enemyMonName(battle))
-    enqueueAutoAfter(battle, line, CALLOUT_AUTO_DELAY)
+    enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, "foe")
+    publishChipState(battle)
     return true
   end
 
@@ -2589,7 +6042,7 @@ return function(mod)
           and state.enemyMode == "counter" and not state.enemyBoosted then
         if rollEnemyCounter() then
           enemyCounterLine = pickFoeTrainerLine(
-            battle, TRAINER_FOE_COUNTER_CALLS, FOE_COUNTER_CALLS, bare)
+            battle, S.TRAINER_FOE_COUNTER_CALLS, S.FOE_COUNTER_CALLS, bare)
           -- Leave enemyMode armed so battle.damage still boosts.
         else
           state.enemyMode = nil
@@ -2603,26 +6056,76 @@ return function(mod)
         end
         return nil
       end
-      if foeMoveIsSpecial(moveDef) then
-        if not rollDodgeSuccess() then
-          local fail = pickFormatted(DODGE_FAIL_CALLS, me)
-            or (me .. "!\nCouldn't dodge!")
-          if enemyCounterLine then
-            return enemyCounterLine .. "\v" .. fail, nil, false
-          end
-          return fail, nil, false
+      -- Frozen / asleep: take the hit — no dodge/brace under fire.
+      if playerStatusLocked(battle) then
+        if state.temp then
+          state.temp.dodgedOk = false
         end
-        local line, boost = pickCallEntry("dodge", battle, me, moveName)
+        if enemyCounterLine then
+          return enemyCounterLine, nil, false
+        end
+        return nil
+      end
+      -- Deep cover this turn: take the hit silent (no dodge/brace callout).
+      if playerInDeepCover(battle) then
+        if enemyCounterLine then
+          return enemyCounterLine, nil, false
+        end
+        return nil
+      end
+      -- Still in a hide/fly spot from STAY — keep it, no new dodge/brace line.
+      if playerHoldingHide(battle) then
+        if enemyCounterLine then
+          return enemyCounterLine, nil, false
+        end
+        return nil
+      end
+      -- Entrenched: hold the trench; no new dodge/brace callouts.
+      if state.temp and state.temp.entrenched then
+        if enemyCounterLine then
+          return enemyCounterLine, nil, false
+        end
+        return nil
+      end
+      if foeMoveIsSpecial(moveDef) then
+        if not rollPlayerReactSuccess(battle, "dodge") then
+          state.temp.dodgedOk = false
+          if enemyCounterLine then
+            enqueueAutoAfter(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY, "foe")
+          end
+          return reactFailLine(battle, "dodge"), nil, false
+        end
+        local line, tierBoost = pickCallEntry("dodge", battle, me, moveName)
         line = line or (me .. "!\nDodge it!")
-        boost = boost or 1
+        tierBoost = tierBoost or 1
         state.temp.cover = true
+        state.temp.dodgedOk = true
+        state.temp.hidAway = (tierBoost or 1) >= 2
+        if state.temp.hidAway then
+          rememberCoverSpot(battle, nil)
+        end
+        -- Same random EVADE roll as the menu path (tier from the flavor pick).
+        local evadeBoost = rollPlayerDodgeEvasion(state.temp.hidAway)
         if enemyCounterLine then
           line = enemyCounterLine .. "\v" .. line
         end
+        if evadeBoost >= 3 then
+          local high = pickFormatted(S.DODGE_EVADE_HIGH_CALLS, me)
+            or "Sharp instincts!"
+          line = line .. "\v" .. high
+        end
         return line, {
-          { who = "player", stat = "evasion", delta = boost },
+          { who = "player", stat = "evasion", delta = evadeBoost },
         }, true
       end
+      if not rollPlayerReactSuccess(battle, "brace") then
+        state.temp.dodgedOk = false
+        if enemyCounterLine then
+          enqueueAutoAfter(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY, "foe")
+        end
+        return reactFailLine(battle, "brace"), nil, false
+      end
+      state.temp.dodgedOk = false
       local line, boost = pickCallEntry("brace", battle, me, moveName)
       line = line or (me .. "!\nGet ready!")
       boost = boost or 1
@@ -2631,6 +6134,7 @@ return function(mod)
           and battle.player.stages.defense) or 0
         boost = math.max(1, 6 - cur)
         state.temp.entrenched = true
+        state.temp.entrenchTurns = 0
       end
       if enemyCounterLine then
         line = enemyCounterLine .. "\v" .. line
@@ -2640,14 +6144,13 @@ return function(mod)
       }, true
     end
 
-    -- Your move announce.
-    if opt("anime_move_calls") and enemyLooksWeak(battle) then
-      return pickFormatted(PLAYER_FINISH_CALLS, bare, moveName)
-        or ("Finish it!\n" .. bare .. "!"), nil, false
-    end
-    -- Counter is a COUNTER/HOLD menu (deferred with the damage pipeline).
+    -- Counter announce is handled in rewriteMoveCallText (single page).
     if playerHasCounter(battle) then
       return nil
+    end
+    if opt("anime_move_calls") and enemyLooksWeak(battle) then
+      return pickFormatted(S.PLAYER_FINISH_CALLS, bare, moveName)
+        or ("Finish it!\n" .. bare .. "!"), nil, false
     end
     return nil
   end
@@ -2658,6 +6161,801 @@ return function(mod)
   local WideBattle = require("src.battle.WideBattle")
   local PartyMenu = require("src.ui.PartyMenu")
   local SummaryMenu = require("src.ui.SummaryMenu")
+
+  -- SPEECH BUBBLE mode: all battle dialogue rides in bubbles; classic box hidden.
+  local function bubbleSideActive(battle)
+    if not opt("speech_bubbles") or type(battle) ~= "table" then
+      return nil
+    end
+    if battle.phase ~= "messages" then
+      battle._arLastBubble = nil
+      battle._arLastBubbleText = nil
+      return nil
+    end
+    local cur = battle.current
+    if cur and cur.text and cur.text ~= "" then
+      local side = cur.bubble
+      if not side then
+        side = inferBubbleSide(battle, cur.text) or "narrator"
+        cur.bubble = side
+      end
+      battle._arLastBubble = side
+      battle._arLastBubbleText = cur.text
+      return side
+    end
+    -- Keep the last bubble up through move anim / CONT waits (pokered keeps
+    -- the announce text visible while the anim plays).
+    if battle._arLastBubbleText and (battle.animPlaying or battle.msgHold
+        or battle.msgWaiting or battle.msgPrompt
+        or (battle.shown and #battle.shown > 0)) then
+      return battle._arLastBubble
+    end
+    battle._arLastBubble = nil
+    battle._arLastBubbleText = nil
+    return nil
+  end
+
+  local function wrapBubbleText(text, maxPx)
+    local lines = {}
+    local raw = tostring(text or ""):gsub("\v", "\n")
+    local function flushWord(word)
+      while word ~= "" do
+        if Font.width(word) <= maxPx then
+          return word
+        end
+        local cut = 1
+        while cut < #word and Font.width(word:sub(1, cut + 1)) <= maxPx do
+          cut = cut + 1
+        end
+        if cut < 1 then
+          cut = 1
+        end
+        lines[#lines + 1] = word:sub(1, cut)
+        word = word:sub(cut + 1)
+      end
+      return ""
+    end
+    for chunk in (raw .. "\n"):gmatch("(.-)\n") do
+      chunk = chunk:match("^%s*(.-)%s*$") or chunk
+      if chunk ~= "" then
+        local line = ""
+        for word in chunk:gmatch("%S+") do
+          local trial = (line == "") and word or (line .. " " .. word)
+          if Font.width(trial) <= maxPx then
+            line = trial
+          else
+            if line ~= "" then
+              lines[#lines + 1] = line
+            end
+            line = flushWord(word)
+          end
+        end
+        if line ~= "" then
+          lines[#lines + 1] = line
+        end
+      end
+    end
+    return lines
+  end
+
+  local function bubbleVisibleText(battle)
+    local cur = battle and battle.current
+    if cur and cur.text and cur.text ~= "" then
+      return cur.text
+    end
+    return (battle and battle._arLastBubbleText) or ""
+  end
+
+  local function drawSpeechBubble(battle, side)
+    if not side or not love or not love.graphics then
+      return
+    end
+    local text = bubbleVisibleText(battle)
+    if text == "" then
+      return
+    end
+    local g = love.graphics
+    local narrator = (side == "narrator")
+    local maxInner = narrator and 136 or 120
+    local padX, padY = 6, 5
+    local lineH = 10
+    local lines = wrapBubbleText(text, maxInner)
+    if #lines == 0 then
+      lines[1] = ""
+    end
+    local maxLines = narrator and 5 or 6
+    if #lines > maxLines then
+      local trimmed = {}
+      for i = 1, maxLines - 1 do
+        trimmed[i] = lines[i]
+      end
+      trimmed[maxLines] = "..."
+      lines = trimmed
+    end
+    local contentW = 0
+    for i = 1, #lines do
+      contentW = math.max(contentW, Font.width(lines[i]))
+    end
+    contentW = math.max(40, math.min(maxInner, contentW))
+    local accentW = narrator and 0 or 3
+    local bw = contentW + padX * 2 + accentW
+    local bh = padY * 2 + #lines * lineH
+    -- Sit in the old text-box band (bottom of the 160×144 screen).
+    local floorY = 142
+    local x, y
+    if narrator then
+      x = math.floor((160 - bw) / 2)
+      y = floorY - bh
+    elseif side == "foe" then
+      x = 160 - bw - 2
+      y = floorY - bh
+    else
+      x = 2
+      y = floorY - bh
+    end
+    if y < 2 then
+      y = 2
+    end
+
+    local totalGlyphs = 0
+    local encoded = {}
+    for i = 1, #lines do
+      encoded[i] = Font.encode(lines[i])
+      totalGlyphs = totalGlyphs + #encoded[i]
+    end
+    local shownBudget = totalGlyphs
+    if battle.total and battle.total > 0 and battle.charIndex then
+      shownBudget = math.floor(totalGlyphs * (battle.charIndex / battle.total) + 0.5)
+    end
+
+    local fillR, fillG, fillB, fillA, edgeR, edgeG, edgeB, accentR, accentG, accentB
+    if narrator then
+      fillR, fillG, fillB, fillA = 0.98, 0.98, 0.94, 0.97
+      edgeR, edgeG, edgeB = 0.18, 0.18, 0.20
+      accentR, accentG, accentB = 0.45, 0.45, 0.48
+    elseif side == "foe" then
+      fillR, fillG, fillB, fillA = 1.00, 0.93, 0.78, 0.97
+      edgeR, edgeG, edgeB = 0.42, 0.20, 0.10
+      accentR, accentG, accentB = 0.78, 0.36, 0.18
+    else
+      fillR, fillG, fillB, fillA = 0.86, 0.94, 1.00, 0.97
+      edgeR, edgeG, edgeB = 0.10, 0.28, 0.42
+      accentR, accentG, accentB = 0.22, 0.52, 0.78
+    end
+    local rad = 4
+    g.push("all")
+    -- Soft layered shadow
+    g.setColor(0, 0, 0, 0.16)
+    g.rectangle("fill", x + 2, y + 3, bw, bh, rad, rad)
+    g.setColor(0, 0, 0, 0.22)
+    g.rectangle("fill", x + 1, y + 1, bw, bh, rad, rad)
+    -- Body + top sheen strip
+    g.setColor(fillR, fillG, fillB, fillA)
+    g.rectangle("fill", x, y, bw, bh, rad, rad)
+    g.setColor(1, 1, 1, 0.22)
+    g.rectangle("fill", x + 1, y + 1, bw - 2, math.max(3, math.floor(bh * 0.28)), rad - 1, rad - 1)
+    -- Side accent (trainer bubbles only)
+    if not narrator then
+      g.setColor(accentR, accentG, accentB, 0.95)
+      if side == "foe" then
+        g.rectangle("fill", x + bw - accentW - 1, y + 2, accentW, bh - 4, 1, 1)
+      else
+        g.rectangle("fill", x + 1, y + 2, accentW, bh - 4, 1, 1)
+      end
+    end
+    -- Borders
+    g.setColor(edgeR, edgeG, edgeB, 1)
+    g.setLineWidth(1)
+    g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1, rad, rad)
+    g.setColor(1, 1, 1, 0.40)
+    g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3,
+      math.max(1, rad - 1), math.max(1, rad - 1))
+    -- Tail points up toward the battlefield (bubbles sit along the bottom).
+    if not narrator then
+      local function drawTail(x1, y1, x2, y2, x3, y3)
+        g.setColor(fillR, fillG, fillB, fillA)
+        g.polygon("fill", x1, y1, x2, y2, x3, y3)
+        g.setColor(edgeR, edgeG, edgeB, 1)
+        g.line(x1, y1, x2, y2)
+        g.line(x2, y2, x3, y3)
+      end
+      if side == "foe" then
+        drawTail(x + bw - 16, y + 1, x + bw - 4, y - 7, x + bw - 26, y + 1)
+      else
+        drawTail(x + 16, y + 1, x + 4, y - 7, x + 26, y + 1)
+      end
+    end
+
+    local textX = (side == "player") and (x + padX + accentW) or (x + padX)
+    g.setColor(0, 0, 0, 1)
+    local left = shownBudget
+    local ty = y + padY
+    for i = 1, #lines do
+      local codes = encoded[i]
+      local tx = textX
+      for j = 1, #codes do
+        if left <= 0 then
+          break
+        end
+        Font.drawCode(codes[j], tx, ty)
+        tx = tx + (Font.advanceOf(codes[j]) or 8)
+        left = left - 1
+      end
+      ty = ty + lineH
+      if left <= 0 then
+        break
+      end
+    end
+    -- Continue cue when the page is waiting on A/B (blink ▼).
+    if (battle.msgWaiting or battle.msgPrompt) and (battle.frame or 0) % 60 < 30 then
+      g.setColor(edgeR, edgeG, edgeB, 0.95)
+      Font.drawCode(0xED, x + bw - 10, y + bh - 10)
+    end
+    g.setColor(1, 1, 1, 1)
+    g.pop()
+  end
+
+  -- True while chat bubbles own battle dialogue (hide classic / Gen3 text box).
+  local function bubblesOwnDialogue(battle)
+    if not opt("speech_bubbles") or type(battle) ~= "table" then
+      return false
+    end
+    if battle.phase ~= "messages" then
+      return false
+    end
+    if bubbleSideActive(battle) then
+      return true
+    end
+    return battle.current ~= nil
+        or battle.animPlaying
+        or battle.msgHold
+        or battle.msgWaiting
+        or battle.msgPrompt
+        or (battle.shown and #battle.shown > 0)
+  end
+
+  -- Keep drawTextArea lifecycle (scroll / typewriter) but paint nothing.
+  local function runDrawInvisible(fn, self, ...)
+    if not (love and love.graphics and type(fn) == "function") then
+      if type(fn) == "function" then
+        return fn(self, ...)
+      end
+      return
+    end
+    local g = love.graphics
+    g.push("all")
+    g.setScissor(0, 0, 0, 0)
+    local ok, a, b, c = pcall(fn, self, ...)
+    g.pop()
+    if not ok then
+      error(a, 0)
+    end
+    return a, b, c
+  end
+
+  mod.hooks:wrap("battle.bottom_ui_visible", function(next, who)
+    -- Hide the classic text box for all battle dialogue; bubbles carry it.
+    -- Keep the box for FIGHT / move menus (non-messages phases).
+    if bubblesOwnDialogue(who) then
+      return false
+    end
+    return next(who)
+  end)
+
+  -- Short mon name so chips stay readable on 160×144.
+  local function chipMonName(name)
+    name = tostring(name or "POKéMON")
+    if #name <= 9 then
+      return name
+    end
+    return name:sub(1, 8) .. "+"
+  end
+
+  local function chipSpotPhrase(spot)
+    spot = tostring(spot or ""):upper()
+    if spot == "" then
+      return S.CHIP_FALLBACK_SPOT or "in cover"
+    end
+    local map = S.CHIP_SPOT_PHRASE or {}
+    return map[spot] or (S.CHIP_FALLBACK_SPOT or "in cover")
+  end
+
+  local function chipLinesKey(lines)
+    if type(lines) ~= "table" then
+      return ""
+    end
+    return tostring(lines[1] or "") .. "\n" .. tostring(lines[2] or "")
+  end
+
+  -- Build narrative chip lines from live momentum (no numbers, no menu prompts).
+  local function buildChipNarrative(battle, foeSide)
+    local state = battle and momentumByBattle[battle]
+    if not state then
+      return nil
+    end
+    local name = chipMonName(
+      foeSide and enemyMonName(battle) or playerMonName(battle))
+    local temp = foeSide and (state.enemyTemp or {}) or (state.temp or {})
+    local counterArmed = (foeSide
+        and state.enemyMode == "counter" and not state.enemyBoosted)
+        or ((not foeSide) and state.mode == "counter" and not state.boosted)
+
+    -- Frozen / asleep: chips reflect helplessness (player side only for FRZ/SLP).
+    if not foeSide then
+      local mon = battle.player and battle.player.mon
+      local st = mon and mon.status
+      if st == "FRZ" then
+        return { name .. " is", "frozen solid!" }
+      end
+      if st == "SLP" then
+        return { name .. " is", "fast asleep!" }
+      end
+    end
+
+    if counterArmed then
+      return { name .. " is", "ready to counter!" }
+    end
+
+    if not foeSide and temp.deepCover then
+      local spot = chipSpotPhrase(temp.coverSpot)
+      if spot and spot ~= "in cover" and #spot <= 12 then
+        return { name .. " is", "stuck " .. spot }
+      end
+      return { name .. " is", "stuck deep!" }
+    end
+
+    if not foeSide and temp.entrenched then
+      return { name .. " is", "holding the trench!" }
+    end
+
+    if temp.hidAway then
+      return { name .. " is", "hiding " .. chipSpotPhrase(temp.coverSpot) }
+    end
+
+    if (temp.evasion or 0) >= 3 then
+      return { name .. " is", "hard to pin down!" }
+    end
+    if (temp.evasion or 0) > 0 or temp.cover then
+      return { name .. " is", "on guard!" }
+    end
+    if (temp.defense or 0) > 0 then
+      return { name .. " is", "bracing hard!" }
+    end
+    return nil
+  end
+
+  -- Commit chip text after callouts/state settle (never from awaitingPick).
+  publishChipState = function(battle)
+    if not battle or not opt("momentum_chips") or not opt("momentum_counter") then
+      return
+    end
+    local state = momentumState(battle)
+    local you = buildChipNarrative(battle, false)
+    local foe = buildChipNarrative(battle, true)
+    if chipLinesKey(you) ~= chipLinesKey(state.chipYou) then
+      state.chipPulseYou = 18
+    end
+    if chipLinesKey(foe) ~= chipLinesKey(state.chipFoe) then
+      state.chipPulseFoe = 18
+    end
+    state.chipYou = you
+    state.chipFoe = foe
+  end
+
+  local function drawMomentumChip(battle, foeSide)
+    if not opt("momentum_chips") or not opt("momentum_counter") then
+      return
+    end
+    if not (love and love.graphics) then
+      return
+    end
+    -- Skip while a big speech bubble owns that corner.
+    local bubble = bubbleSideActive(battle)
+    if bubble == (foeSide and "foe" or "player") then
+      return
+    end
+    local state = battle and momentumByBattle[battle]
+    -- Don't use `foe and chipFoe or chipYou` — nil chipFoe would fall through
+    -- to the player chip and draw a second SEADRA in foe colors.
+    local raw = state and (foeSide and state.chipFoe or (not foeSide and state.chipYou))
+    if not raw then
+      return
+    end
+    local g = love.graphics
+    local lineH = 8
+    local padX, padY = 3, 2
+    local accentW = 2
+    local maxBox = 88
+    local maxPx = maxBox - padX * 2 - accentW - 2
+    local function fitChipLine(s)
+      s = tostring(s or "")
+      if s == "" or Font.width(s) <= maxPx then
+        return s
+      end
+      local cut = #s
+      while cut > 1 and Font.width(s:sub(1, cut) .. "+") > maxPx do
+        cut = cut - 1
+      end
+      return s:sub(1, cut) .. "+"
+    end
+    local lines = {}
+    if #raw >= 2 then
+      lines[1] = fitChipLine(raw[1])
+      lines[2] = fitChipLine(raw[2])
+    else
+      local wrapped = wrapBubbleText(raw[1], maxPx)
+      for j = 1, math.min(2, #wrapped) do
+        lines[j] = wrapped[j]
+      end
+    end
+    if #lines == 0 then
+      return
+    end
+    local widest = 0
+    for i = 1, #lines do
+      widest = math.max(widest, Font.width(lines[i]))
+    end
+    local bw = math.min(maxBox, widest + padX * 2 + accentW + 1)
+    local bh = padY * 2 + #lines * lineH - 1
+    local x = foeSide and (160 - bw - 2) or 2
+    local y = 2
+    local fillR, fillG, fillB, edgeR, edgeG, edgeB, accentR, accentG, accentB
+    if foeSide then
+      fillR, fillG, fillB = 1.00, 0.94, 0.82
+      edgeR, edgeG, edgeB = 0.35, 0.18, 0.10
+      accentR, accentG, accentB = 0.72, 0.32, 0.18
+    else
+      fillR, fillG, fillB = 0.88, 0.95, 1.00
+      edgeR, edgeG, edgeB = 0.10, 0.22, 0.38
+      accentR, accentG, accentB = 0.20, 0.45, 0.72
+    end
+    local pulse = foeSide and (state.chipPulseFoe or 0) or (state.chipPulseYou or 0)
+    if pulse > 0 then
+      if foeSide then
+        state.chipPulseFoe = pulse - 1
+      else
+        state.chipPulseYou = pulse - 1
+      end
+    end
+    local pulseA = pulse > 0 and (0.92 + 0.08 * (pulse / 18)) or 0.92
+    g.push("all")
+    g.setColor(0, 0, 0, 0.22)
+    g.rectangle("fill", x + 1, y + 1, bw, bh, 2, 2)
+    g.setColor(fillR, fillG, fillB, pulseA)
+    g.rectangle("fill", x, y, bw, bh, 2, 2)
+    -- Thin accent bar (left = you, right = foe); brighten briefly on change.
+    local accentBoost = pulse > 0 and (0.95 + 0.05 * (pulse / 18)) or 0.95
+    g.setColor(accentR, accentG, accentB, accentBoost)
+    if foeSide then
+      g.rectangle("fill", x + bw - accentW - 1, y + 1, accentW, bh - 2)
+    else
+      g.rectangle("fill", x + 1, y + 1, accentW, bh - 2)
+    end
+    g.setColor(edgeR, edgeG, edgeB, 1)
+    g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1, 2, 2)
+    g.setColor(0, 0, 0, 1)
+    local textX = foeSide and (x + padX) or (x + padX + accentW)
+    local ty = y + padY
+    for i = 1, #lines do
+      Font.draw(lines[i], textX, ty)
+      ty = ty + lineH
+    end
+    g.setColor(1, 1, 1, 1)
+    g.pop()
+  end
+
+  mod.hooks:wrap("battle.overlay", function(next, battle)
+    next(battle)
+    BanterCameo.draw(battle)
+    drawMomentumChip(battle, false)
+    drawMomentumChip(battle, true)
+    local side = bubbleSideActive(battle)
+    if side then
+      drawSpeechBubble(battle, side)
+    end
+  end)
+
+  -- Slow speech-bubble typing a bit past the engine's "Slow" text speed.
+  do
+    local origUpdateQueue = BattleState.updateQueue
+    if type(origUpdateQueue) == "function" then
+      function BattleState.updateQueue(self)
+        flushPendingSendBanter(self)
+        local curItem = self and self.current
+        local shownLine = self and self.shown and self.shown[#self.shown]
+        local bubbleTyping = opt("speech_bubbles") and curItem and curItem.bubble
+            and self.phase == "messages"
+            and shownLine and self.codes
+            and #shownLine < #self.codes
+        if not bubbleTyping then
+          self._arBubbleAcc = 0
+          return origUpdateQueue(self)
+        end
+
+        local opts = self.game and self.game.save and self.game.save.options
+        local prevSpeed = opts and opts.textSpeed
+        if opts then
+          opts.textSpeed = 5
+        end
+
+        self._arBubbleAcc = (self._arBubbleAcc or 0) + 1
+        local beforeLen = #shownLine
+        local beforeIndex = self.charIndex or 0
+        if self._arBubbleAcc < S.BUBBLE_CHAR_DELAY then
+          -- Hold: run queue logic but don't emit a glyph this frame.
+          self.charTimer = 0
+          local result = origUpdateQueue(self)
+          if opts then
+            opts.textSpeed = prevSpeed
+          end
+          return result
+        end
+
+        -- Emit at most one glyph every S.BUBBLE_CHAR_DELAY frames.
+        self._arBubbleAcc = 0
+        self.charTimer = 4
+        local result = origUpdateQueue(self)
+        while #shownLine > beforeLen + 1 do
+          table.remove(shownLine)
+          self.charIndex = math.max(0, (self.charIndex or 0) - 1)
+        end
+        if #shownLine == beforeLen and (self.charIndex or 0) > beforeIndex then
+          self.charIndex = beforeIndex
+        end
+        if opts then
+          opts.textSpeed = prevSpeed
+        end
+        return result
+      end
+    end
+  end
+
+  -- FIGHT while hidden / entrenched: STAY, or STRIKE when an opening allows.
+  do
+    local function goMoveSelect(battle)
+      battle.phase = "moveSelect"
+      local moves = battle.player and battle.player.curMoves
+      local n = moves and #moves or 1
+      battle.moveIndex = math.min(battle.moveIndex or 1, n)
+      battle.moveSwapIndex = nil
+    end
+
+    local function clearPlayerEntrench(battle)
+      local state = momentumState(battle)
+      local temp = state.temp or {}
+      local player = battle.player
+      local def = temp.defense or 0
+      if player and player.stages and def ~= 0 then
+        silentStageDelta(player, "defense", -def)
+      end
+      temp.defense = 0
+      temp.entrenched = false
+      temp.entrenchTurns = 0
+      state.temp = temp
+      publishChipState(battle)
+    end
+
+    local function openStrikeOrStayMenu(battle)
+      if not battle or not battle.game or not battle.game.stack then
+        goMoveSelect(battle)
+        return
+      end
+      -- Random deep-cover turn: can't leave (tree / dive / boulder / …).
+      if rollDeepCoverLock(battle) then
+        ensurePlayerPicHidden(battle, false)
+        battle:resolveTurn({ special = "holdPosition" })
+        return
+      end
+      battle.phase = "menu"
+      battle.game.stack:push(newCalloutPickModal(battle.game, {
+        title = "COVER!",
+        subtitle = playerMonName(battle),
+        choices = {
+          { label = "STRIKE", hint = "Come out & attack", line = "" },
+          { label = "STAY", hint = "Hold cover / hide", line = "" },
+        },
+        cancelable = true,
+        onPick = function(choice)
+          local label = choice and tostring(choice.label) or ""
+          if label == "STAY" then
+            battle:resolveTurn({ special = "holdPosition" })
+          else
+            clearAmbientStance(battle)
+            goMoveSelect(battle)
+          end
+        end,
+        onCancel = function()
+          battle.phase = "menu"
+        end,
+      }))
+    end
+
+    local function openEntrenchMenu(battle)
+      if not battle or not battle.game or not battle.game.stack then
+        battle.phase = "menu"
+        return
+      end
+      local state = momentumState(battle)
+      local turns = (state.temp and state.temp.entrenchTurns) or 0
+      local maxed = turns >= (S.ENTRENCH_MAX_TURNS or 3)
+      local opening = playerHasCounter(battle)
+      local choices
+      if maxed then
+        choices = {
+          { label = "BREAK", hint = "Stance worn out", line = "" },
+        }
+      elseif opening then
+        choices = {
+          { label = "STRIKE", hint = "Use the opening", line = "" },
+          { label = "STAY", hint = "Stay entrenched", line = "" },
+        }
+      else
+        choices = {
+          { label = "STAY", hint = "Stay entrenched", line = "" },
+        }
+      end
+      battle.phase = "menu"
+      battle.game.stack:push(newCalloutPickModal(battle.game, {
+        title = "ENTRENCH!",
+        subtitle = playerMonName(battle),
+        choices = choices,
+        cancelable = true,
+        onPick = function(choice)
+          local label = choice and tostring(choice.label) or ""
+          if label == "STAY" then
+            battle:resolveTurn({ special = "holdPosition" })
+          elseif label == "BREAK" then
+            clearAmbientStance(battle)
+            clearPlayerEntrench(battle)
+            local me = playerMonName(battle)
+            local line = pickFormatted(S.BREAK_ENTRENCH_CALLS, me)
+              or (me .. "!\nBreak stance!")
+            if type(battle.sayNext) == "function" then
+              battle:sayNext(line)
+            end
+            tagQueueBubble(battle, "player")
+            goMoveSelect(battle)
+            dev.log(battle, "ENTRENCH break", "max turns / stance worn")
+          else
+            -- Leaving the trench to attack: kill idle BARRIER pulses now so
+            -- they can't delay the real move anim.
+            clearAmbientStance(battle)
+            goMoveSelect(battle)
+          end
+        end,
+        onCancel = function()
+          battle.phase = "menu"
+        end,
+      }))
+    end
+
+    local function playerIsEntrenched(battle)
+      if not opt("momentum_counter") or not battle then
+        return false
+      end
+      local state = momentumByBattle[battle]
+      return state and state.temp and state.temp.entrenched == true
+    end
+
+    local origUpdate = BattleState.update
+    if type(origUpdate) == "function" then
+      function BattleState.update(self, dt)
+        local phaseBefore = self.phase
+        local result = origUpdate(self, dt)
+        if phaseBefore == "menu" and self.phase == "moveSelect" then
+          -- Sleep / freeze: skip COVER!/ENTRENCH! (can't follow orders).
+          -- Paralysis still gets those menus — react rolls are just stiffer.
+          if not playerStatusLocked(self) then
+            if playerIsEntrenched(self) then
+              openEntrenchMenu(self)
+            elseif playerCanStay(self) then
+              openStrikeOrStayMenu(self)
+            end
+          end
+        end
+        -- Brace / hide idle sparkles (HARDEN, GROWTH, DIG…) between commands.
+        tickAmbientStance(self, dt)
+        BanterCameo.tick(self)
+        return result
+      end
+    end
+
+    local origExecuteAction = BattleState.executeAction
+    if type(origExecuteAction) == "function" then
+      function BattleState.executeAction(self, user, target, action)
+        -- Locked in a trench with no opening: can't swing — convert to STAY.
+        if user and user.isPlayer and action and action.special ~= "holdPosition" then
+          local state = momentumByBattle[self]
+          if state and state.temp and state.temp.deepCover then
+            action = { special = "holdPosition" }
+            dev.log(self, "DEEP cover", "force STAY (can't leave)")
+          elseif state and state.temp and state.temp.entrenched
+              and not playerHasCounter(self) then
+            local turns = state.temp.entrenchTurns or 0
+            if turns < (S.ENTRENCH_MAX_TURNS or 3) then
+              action = { special = "holdPosition" }
+              dev.log(self, "ENTRENCH lock", "force STAY (no opening)")
+            end
+          end
+        end
+        if action and action.special == "holdPosition"
+            and user and user.isPlayer then
+          if self.result then
+            return
+          end
+          if not user.mon or user.mon.hp <= 0 then
+            return
+          end
+          local me = playerMonName(self)
+          local state = momentumState(self)
+          local entrenched = state.temp and state.temp.entrenched
+          local deep = state.temp and state.temp.deepCover
+          local line
+          if deep then
+            -- Stuck up a tree / underwater / behind a boulder this turn.
+            ensurePlayerPicHidden(self, not (state.temp and state.temp.picHidden))
+            line = pickDeepCoverLine(self)
+            dev.log(self, "STAY deep",
+              "spot=" .. tostring(state.temp.coverSpot or "?"))
+          elseif entrenched then
+            state.temp.entrenchTurns = (state.temp.entrenchTurns or 0) + 1
+            line = pickFormatted(S.STAY_ENTRENCHED_CALLS, me)
+              or ("Stay entrenched,\n" .. me .. "!")
+            dev.log(self, "STAY entrench",
+              "turn " .. tostring(state.temp.entrenchTurns)
+                .. "/" .. tostring(S.ENTRENCH_MAX_TURNS or 3))
+            if state.temp.entrenchTurns >= (S.ENTRENCH_MAX_TURNS or 3) then
+              -- Stance worn out after this hold — clear at end of the order.
+              clearPlayerEntrench(self)
+              dev.log(self, "ENTRENCH end", "max stays reached")
+            end
+          else
+            -- Hold cover: keep the Dig/Fly-style hide on the field.
+            ensurePlayerPicHidden(self, not (state.temp and state.temp.picHidden))
+            line = pickFormatted(S.HOLD_POSITION_CALLS, me)
+              or (me .. "!\nHold on!")
+            dev.log(self, "STAY", "hold hide/cover spot="
+              .. tostring(state.temp and state.temp.coverSpot or "-"))
+          end
+          -- Frozen / asleep: keep stance silently — no trainer STAY shout.
+          if not playerStatusLocked(self) and line then
+            if type(self.sayNextAuto) == "function" then
+              self:sayNextAuto(line, S.BUBBLE_AUTO_DELAY or S.CALLOUT_AUTO_DELAY)
+            elseif type(self.sayNext) == "function" then
+              self:sayNext(line)
+            end
+            tagQueueBubble(self, "player")
+          end
+          publishChipState(self)
+          -- Cover / brace / entrench buffs stay (unless max just cleared).
+          return
+        end
+        -- After a dodge opening going second: use the counter move you picked.
+        if user and user.isPlayer then
+          local state = momentumByBattle[self]
+          if state and state.overridePlayerAction then
+            action = state.overridePlayerAction
+            state.overridePlayerAction = nil
+            dev.log(self, "OVERRIDE move",
+              tostring(action and (action.id or action.name) or "?"))
+          end
+        end
+        return origExecuteAction(self, user, target, action)
+      end
+    end
+  end
+
+  -- BC returns the camera on resolveTurn; our mid-turn swings (COUNTER!,
+  -- Again!, deferred hits) skip that. Snap idle orbit back on every performMove.
+  do
+    local origPerformMove = BattleState.performMove
+    if type(origPerformMove) == "function" then
+      function BattleState.performMove(self, user, target, moveInst, isCalled)
+        resetBattleCamera(self)
+        return origPerformMove(self, user, target, moveInst, isCalled)
+      end
+    end
+  end
 
   -- Keep Dig/Fly-style dodge hides through the foe's attack anim.
   do
@@ -2701,6 +6999,22 @@ return function(mod)
   -- Functions are not tables, so track wraps in a weak set.
   local patched = setmetatable({}, { __mode = "k" })
 
+  -- Classic white dialogue slab: run for state, paint nothing while bubbles speak.
+  do
+    local origTextArea = BattleState.drawTextArea
+    if type(origTextArea) == "function" and not patched[origTextArea] then
+      local function wrappedTextArea(self, ...)
+        if bubblesOwnDialogue(self) then
+          return runDrawInvisible(origTextArea, self, ...)
+        end
+        return origTextArea(self, ...)
+      end
+      patched[origTextArea] = true
+      patched[wrappedTextArea] = true
+      BattleState.drawTextArea = wrappedTextArea
+    end
+  end
+
   -- Must be after local BattleState / patched (Lua locals aren't visible above).
   local function willShowCalloutPick(battle, originalText)
     local mon, moveName = parseUsedMoveText(originalText)
@@ -2715,20 +7029,9 @@ return function(mod)
     return shouldOfferCalloutPick(battle, moveDef)
   end
 
-  local function willShowCounterPick(battle, originalText)
-    local mon, moveName = parseUsedMoveText(originalText)
-    if not mon or not moveName then
-      return false
-    end
-    local _, isEnemy = stripEnemyPrefix(mon)
-    if isEnemy then
-      return false
-    end
-    local moveDef = findMoveByName(battle, moveName)
-    if not moveDef or (moveDef.power or 0) <= 0 or moveDef.category == "status" then
-      return false
-    end
-    return playerHasCounter(battle)
+  -- OPENING! COUNTER/HOLD menu removed — openings auto-fire on your attack.
+  local function willShowCounterPick(_battle, _originalText)
+    return false
   end
 
   local function wrapBattleSay(methodName)
@@ -2737,6 +7040,10 @@ return function(mod)
       return
     end
     local wrapped = function(self, text, ...)
+      -- Suppress EXP share / EXP.ALL / boosted-EXP pages; keep level-ups.
+      if isExpGainDialogue(text) then
+        return
+      end
       -- Parse the engine's original announce before anime rewrite.
       local mon, moveName = parseUsedMoveText(text)
       local bare, isEnemy = nil, false
@@ -2745,8 +7052,44 @@ return function(mod)
       end
       local reaction, buffs, trackTemp = reactionAfterMoveAnnounce(self, text)
       -- Dodge cover miss: keep anim + replace vanilla "attack missed!".
-      text = rewriteDodgeMissText(self, text)
+      local dodgeWhiff
+      text, dodgeWhiff = rewriteDodgeMissText(self, text)
       local result = original(self, rewriteBattleText(self, text), ...)
+      if dodgeWhiff then
+        local item = self.queue and self.queue[self.nextInsert]
+        if type(item) == "table" and item.text then
+          item.arDodgeWhiff = true
+        end
+      end
+      -- After the foe's miss anim + "dodged aside!" text: offer COUNTER!.
+      if dodgeWhiff and maybeQueueSameTurnCounter then
+        maybeQueueSameTurnCounter(self)
+      elseif type(text) == "string"
+          and text:lower():find("attack missed", 1, true) then
+        -- Foe whiff without dodge cover still arms next-turn openings.
+        publishChipState(self)
+      end
+      -- Route every battle line into a bubble so the classic box can stay hidden.
+      -- Frozen / asleep: narrator bubble (no trainer voice), not the bottom box.
+      if opt("speech_bubbles") then
+        if mon then
+          local locked = isEnemy and enemyStatusLocked(self)
+              or ((not isEnemy) and playerStatusLocked(self))
+          if locked then
+            tagQueueBubble(self, "narrator")
+          else
+            tagQueueBubble(self, isEnemy and "foe" or "player")
+          end
+        else
+          -- Keep engine auto-advance when present; still draw as a bubble.
+          local side = inferBubbleSide(self, text) or "narrator"
+          local item = self.queue and self.queue[self.nextInsert]
+          local keepAuto = item and item.auto == true
+          tagQueueBubble(self, side, not keepAuto)
+        end
+      end
+      -- Opposing trainer shouts on send-outs (personality-flavored).
+      maybeEnqueueSendBanter(self, text)
       -- Let callouts finish (A/B) before dodge/brace or counter menus.
       if (methodName == "sayNextAuto" or methodName == "sayAuto")
           and (willShowCalloutPick(self, text) or willShowCounterPick(self, text)) then
@@ -2759,33 +7102,70 @@ return function(mod)
       -- After your announce is queued: drop temp dodge/brace stages.
       if mon and not isEnemy then
         resolveCoverOnPlayerAttack(self, bare or playerMonName(self))
-        -- Trainer foe may auto-dodge/brace before your hit resolves.
-        -- If COUNTER/HOLD is armed, stash that reaction until after the
-        -- menu — otherwise "couldn't dodge!" then COUNTER/HOLD feels wrong.
-        local moveDef = moveName and findMoveByName(self, moveName)
-        local damaging = moveDef and (moveDef.power or 0) > 0
-            and moveDef.category ~= "status"
-        if damaging and playerHasCounter(self) then
-          momentumState(self).pendingFoeReaction = { moveDef = moveDef }
+        local st = momentumState(self)
+        -- Same-round bonus counter: don't stack another foe dodge on top.
+        if st.sameTurnCounterStrike then
+          st.sameTurnCounterStrike = nil
         else
-          local foeLine, foeBuffs, foeTrack = tryFoeCoverReaction(self, moveDef)
-          if foeLine then
-            enqueueAutoAfter(self, foeLine, CALLOUT_AUTO_DELAY)
-            applyCalloutBuffs(self, foeBuffs, foeTrack)
+          -- Trainer foe may auto-dodge/brace before your hit resolves.
+          -- Only stash while the same-turn COUNTER! menu is still pending —
+          -- auto-counter from an entrench STRIKE / prior opening must react
+          -- here (before the anim), or brace sparkles land after damage/faint.
+          local moveDef = moveName and findMoveByName(self, moveName)
+          local damaging = moveDef and (moveDef.power or 0) > 0
+              and moveDef.category ~= "status"
+          if damaging and (st.sameTurnCounterQueued or st.offerSameTurnCounter) then
+            st.pendingFoeReaction = { moveDef = moveDef }
+          elseif damaging then
+            local foeLine, foeBuffs, foeTrack, failNarr =
+                tryFoeCoverReaction(self, moveDef)
+            if foeLine then
+              local foeBubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
+              enqueueAutoAfter(self, foeLine, S.CALLOUT_AUTO_DELAY, foeBubble)
+              applyCalloutBuffs(self, foeBuffs, foeTrack)
+              if foeTrack and foeBuffs then
+                local braced = false
+                for i = 1, #foeBuffs do
+                  if foeBuffs[i].stat == "defense" then
+                    braced = true
+                    break
+                  end
+                end
+                if braced then
+                  enqueueBraceAnim(self, { foe = true })
+                end
+              end
+              publishChipState(self)
+            end
+            if failNarr then
+              -- Narrator only — never a trainer speech bubble.
+              enqueueAutoAfter(self, failNarr, S.CALLOUT_AUTO_DELAY, "narrator")
+            end
           end
         end
       end
       if reaction then
-        enqueueAutoAfter(self, reaction, CALLOUT_AUTO_DELAY)
+        -- Failed dodges use the narrator bubble, not a trainer bubble.
+        local bubbleSide = "narrator"
+        if not isDodgeFailNarrator(reaction) then
+          bubbleSide = isEnemy and "foe" or "player"
+        end
+        enqueueAutoAfter(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide)
         applyCalloutBuffs(self, buffs, trackTemp)
         local st = momentumByBattle[self]
         if isEnemy and st and st.temp and trackTemp then
           if st.temp.cover then
+            if st.temp.hidAway then
+              tryVanishEvasion(self, playerMonName(self))
+            end
             enqueueDodgeHideAnim(self, nil)
           else
-            enqueueBraceAnim(self)
+            enqueueBraceAnim(self, {
+              entrenched = st.temp.entrenched == true,
+            })
           end
         end
+        publishChipState(self)
       end
       return result
     end
@@ -3001,6 +7381,21 @@ return function(mod)
       patched[origLive] = true
       patched[OverworldBattle.hudLive] = true
     end
+
+    -- Drop the frosted glass slab under the battle text box while bubbles speak.
+    if type(OverworldBattle.textRects) == "function"
+        and not patched[OverworldBattle.textRects] then
+      local origRects = OverworldBattle.textRects
+      OverworldBattle.textRects = function(battle)
+        local out = origRects(battle)
+        if bubblesOwnDialogue(battle) and type(out) == "table" then
+          out.box = nil
+        end
+        return out
+      end
+      patched[origRects] = true
+      patched[OverworldBattle.textRects] = true
+    end
   end
 
   -- Gen 3 Inspired UI (and similar) keep their own printText / HUD drawers as
@@ -3029,6 +7424,19 @@ return function(mod)
               return
             end
             return inner(text, ...)
+          end
+          patched[val] = true
+          patched[wrapped] = true
+          debug.setupvalue(fn, i, wrapped)
+        elseif name == "drawDialogue" then
+          -- Gen 3 Inspired UI paints its own cream dialogue panel; skip it
+          -- while SPEECH BUBBLE owns the message beat.
+          local inner = val
+          local wrapped = function(battle, ...)
+            if bubblesOwnDialogue(battle) then
+              return
+            end
+            return inner(battle, ...)
           end
           patched[val] = true
           patched[wrapped] = true
@@ -3279,6 +7687,29 @@ return function(mod)
     HudTiles.drawHPBar = prevHPBar
     if not ok then
       error(err, 0)
+    end
+  end
+
+  -- Dev overlay paints after the battle frame (classic + wide).
+  do
+    local origDraw = BattleState.draw
+    if type(origDraw) == "function" then
+      function BattleState.draw(self)
+        local result = origDraw(self)
+        -- Ambient menu pulses: ensure Stadium/Gen1 anim sprites paint even
+        -- if the engine skipped them outside a queued attack.
+        if self and self._arAmbientOwned and self.animPlayer then
+          local ap = self.animPlayer
+          if type(ap.drawSprites) == "function" then
+            pcall(ap.drawSprites, ap)
+          end
+          if type(ap.draw) == "function" then
+            pcall(ap.draw, ap)
+          end
+        end
+        dev.draw(self)
+        return result
+      end
     end
   end
 
