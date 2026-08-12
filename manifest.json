@@ -1,7 +1,7 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "2.0.8",
+  "version": "3.0.15",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -20,6 +20,6 @@
   "permissions": [
     "engine_internals"
   ],
-  "description": "Anime-style immersion: hide levels and HP, trainer callouts, dodge/brace/counter for you and trainer foes (temp buffs clear when attacking), underdog EXP and faint effort. Works with Gen 3 UI and Stadium companions.",
+  "description": "Anime-style immersion: hide levels and HP, trainer callouts, Focus Reactive Defense (Commit/Dodge/Cover/Brace/Entrench), underdog EXP and faint effort. Works with Gen 3 UI and Stadium companions.",
   "github": "businessmachines02/anime-realism"
 }
