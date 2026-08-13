@@ -1,15 +1,20 @@
 -- Field battle — layout helpers (axis, poses, foe find).
 --
--- Compact 5×3 pad along the fight axis:
---   trainer/player @ -2, player mon @ -1, center, enemy mon @ +1, foe @ +2
--- The short footprint keeps the cast readable in tight overworld locations.
--- Survey may expand walkable cells beyond this formation for free movement.
+-- Tight opening along the fight axis (mons adjacent, trainers one tile back):
+--   player trainer @ mon-1, player mon, enemy mon (adjacent), foe trainer @ mon+1
+-- Survey expands walkable cells beyond this for free movement during the fight.
 
 local Layout = {}
 
+-- Trainer stand-off behind each mon (pad cells along the fight axis).
+Layout.TRAINER_BACK = 1
+-- Gap between mon centers: 1 = adjacent tiles.
+Layout.MON_GAP = 1
+-- Lateral (dodge) half-width of the opening formation.
+Layout.LATERAL = 1
+-- Legacy aliases (wild anchor / older callers).
 Layout.HALF = 2
 Layout.MON = 1
-Layout.LATERAL = 1
 
 function Layout.copyPose(ent)
     if not ent then
@@ -125,26 +130,36 @@ function Layout.findFoeTrainer(ow, battle)
 end
 
 function Layout.wildAnchor(player)
-    local half = Layout.HALF * 2
+    -- Face a foe about one full tight-formation span away.
+    local span = (Layout.TRAINER_BACK or 1) * 2 + (Layout.MON_GAP or 1)
     local fx, fy = player.cellX or 0, player.cellY or 0
     local facing = player.facing or "up"
     if facing == "up" then
-        return fx, fy - half
+        return fx, fy - span
     end
     if facing == "down" then
-        return fx, fy + half
+        return fx, fy + span
     end
     if facing == "left" then
-        return fx - half, fy
+        return fx - span, fy
     end
-    return fx + half, fy
+    return fx + span, fy
 end
 
 function Layout.plan(px, py, fx, fy)
     local sx, sy = Layout.axisFrom(px, py, fx, fy)
     local midX = math.floor((px + fx) / 2)
     local midY = math.floor((py + fy) / 2)
-    local half, mon = Layout.HALF, Layout.MON
+    local gap = math.max(1, Layout.MON_GAP or 1)
+    local back = math.max(0, Layout.TRAINER_BACK or 1)
+    -- Mons sit on adjacent (or near) tiles around the midpoint.
+    -- gap=1 → player at mid, enemy at mid+1.
+    local monLo = math.floor((gap - 1) / 2)
+    local monHi = monLo + gap
+    local pMonX = midX - sx * monLo
+    local pMonY = midY - sy * monLo
+    local eMonX = midX + sx * monHi
+    local eMonY = midY + sy * monHi
     local playerFace = Layout.facingFromAxis(sx, sy)
     return {
         sx = sx,
@@ -153,14 +168,14 @@ function Layout.plan(px, py, fx, fy)
         midY = midY,
         playerFace = playerFace,
         foeFace = Layout.opposite(playerFace),
-        pCellX = midX - sx * half,
-        pCellY = midY - sy * half,
-        eCellX = midX + sx * half,
-        eCellY = midY + sy * half,
-        pMonX = midX - sx * mon,
-        pMonY = midY - sy * mon,
-        eMonX = midX + sx * mon,
-        eMonY = midY + sy * mon,
+        pCellX = pMonX - sx * back,
+        pCellY = pMonY - sy * back,
+        eCellX = eMonX + sx * back,
+        eCellY = eMonY + sy * back,
+        pMonX = pMonX,
+        pMonY = pMonY,
+        eMonX = eMonX,
+        eMonY = eMonY,
         padHalfV = Layout.LATERAL,
     }
 end

@@ -45,8 +45,9 @@ Rules:
 2. `px/py` = `padToPx(u,v)` + presentation offsets only.
 3. Never derive occupancy from pixels.
 4. Trainers sit on fixed edge pad cells; they are not combat movers.
-5. The opening formation is 5×3: trainers on the `u` edges, battlers one cell
-   inward. Its surveyed free-tile envelope is normally 9×7.
+5. The opening formation is tight (4×3): adjacent mon homes, trainers one
+   cell behind each. Its surveyed free-tile envelope is normally 8×5 so
+   mons can expand during the fight.
 
 ### Pad axes
 
@@ -185,7 +186,7 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
 
 ## Grid rules
 
-- Survey envelope is normally 9×7 around the 5×3 opening formation.
+- Survey envelope is normally 8×5 around the tight 4×3 opening formation.
 - Occupancy: one battler per walkable pad cell; surveyed and prop cells block.
 - Idle wander is stepwise and bounded within two cells of home; positions
   persist between turns instead of snapping back.

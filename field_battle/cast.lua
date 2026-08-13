@@ -1,8 +1,8 @@
 -- Field battle — stage trainers + mons onto pad cells.
 --
 -- Pad (u, v) is truth; pixels come from Coords.padToPx. Homes come from
--- Layout's 5×3 formation (player trainer / player mon / center / enemy mon /
--- foe). Cast.tick lerps px/py toward the current pad each frame.
+-- Layout's tight opening (adjacent mons, trainers one tile back). Cast.tick
+-- lerps px/py toward the current pad each frame.
 
 local Coords = require("coords")
 

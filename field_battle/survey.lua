@@ -2,7 +2,8 @@
 --
 -- Queried once at staging from the live map (collision / water / warps /
 -- blocking entities). Results become grid.blocked. The map itself is never
--- edited. EXTRA_U / HALF_V grow the fight envelope beyond the 5×3 formation.
+-- edited. EXTRA_U / HALF_V grow the fight envelope beyond the tight opening
+-- so mons can expand out from adjacent start tiles during the battle.
 --
 -- Formation cells from Layout.plan are snapped onto surveyed walkable tiles;
 -- illegal homes are never force-marked walkable (that parked mons under roofs).
@@ -11,8 +12,10 @@ local Coords = require("coords")
 
 local Survey = {}
 
+-- Roam room beyond each trainer edge (opening is already compact).
 Survey.EXTRA_U = 2
-Survey.HALF_V = 3
+-- Lateral half-width of the surveyed envelope (opening LATERAL is 1).
+Survey.HALF_V = 2
 
 local function callBool(obj, name, ...)
   local fn = obj and obj[name]

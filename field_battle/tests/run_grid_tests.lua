@@ -158,8 +158,9 @@ function tests.read_only_walkable_envelope()
   local envelope = Survey.build(map, plan, {
     entityPools = { { obstacle } },
   })
-  eq(envelope.pad.sizeU, 9, "free-tile envelope width")
-  eq(envelope.pad.sizeV, 7, "free-tile envelope height")
+  -- Tight opening (trainers ± back of adjacent mons) + EXTRA_U/HALF_V roam room.
+  eq(envelope.pad.sizeU, 8, "free-tile envelope width")
+  eq(envelope.pad.sizeV, 5, "free-tile envelope height")
   truthy(envelope.readOnly, "survey is explicitly read-only")
   truthy(calls.walk > 0 and calls.water > 0, "survey queries map traversal")
 
@@ -171,8 +172,8 @@ function tests.read_only_walkable_envelope()
 
   local arena = Arena.generate(nil, plan, 123, envelope)
   local grid = Grid.build(arena, plan)
-  eq(grid.sizeU, 9, "grid adopts surveyed width")
-  eq(grid.sizeV, 7, "grid adopts surveyed height")
+  eq(grid.sizeU, 8, "grid adopts surveyed width")
+  eq(grid.sizeV, 5, "grid adopts surveyed height")
   local wu, wv = Coords.worldToPad(envelope.pad, 13, 12)
   truthy(not Grid.isFree(grid, wu, wv), "movement rejects surveyed water")
 end
@@ -262,8 +263,9 @@ function tests.compact_arena_keeps_cast_lanes_clear()
   local fx, fy = Layout.wildAnchor(player)
   local plan = Layout.plan(player.cellX, player.cellY, fx, fy)
   eq(plan.pCellX, player.cellX, "wild pad starts at player")
+  eq(math.abs(plan.pMonX - plan.eMonX), 1, "wild mons start adjacent")
   local arena = Arena.generate(nil, plan, 12345)
-  eq(arena.pad.sizeU, 5, "arena width")
+  eq(arena.pad.sizeU, 4, "tight arena width")
   eq(arena.pad.sizeV, 3, "arena height")
 
   local homes = {
@@ -298,8 +300,8 @@ function tests.trainer_layout_resolves_engaged_npc()
   }
   eq(Layout.findFoeTrainer(overworld, battle), trainer, "resolve engaged trainer")
   local plan = Layout.plan(player.cellX, player.cellY, trainer.cellX, trainer.cellY)
-  eq(math.abs(plan.pCellY - plan.eCellY), 4, "trainer edges span compact pad")
-  eq(math.abs(plan.pMonY - plan.eMonY), 2, "mons stand inside trainers")
+  eq(math.abs(plan.pCellY - plan.eCellY), 3, "trainer edges span tight pad")
+  eq(math.abs(plan.pMonY - plan.eMonY), 1, "mons start on adjacent tiles")
 end
 
 local function sampleGrid()
@@ -309,10 +311,11 @@ end
 
 function tests.occupancy_and_movement()
   local grid = sampleGrid()
-  eq(grid.sizeU, 5, "compact pad width")
+  eq(grid.sizeU, 4, "tight pad width")
   eq(grid.sizeV, 3, "compact pad height")
   local pHome = grid.home.player
   local eHome = grid.home.enemy
+  eq(math.abs(pHome.u - eHome.u), 1, "opening homes are adjacent")
   local p = { id = "player", padU = pHome.u, padV = pHome.v }
   local e = { id = "enemy", padU = eHome.u, padV = eHome.v }
   truthy(Grid.setPad(grid, p, p.padU, p.padV), "place player")
@@ -321,7 +324,12 @@ function tests.occupancy_and_movement()
     "reject occupied cell")
 
   local homeU, homeV = p.padU, p.padV
-  truthy(Grid.attackStep(grid, p, e), "attack step")
+  -- Already adjacent: lunge cannot occupy the foe tile.
+  truthy(not Grid.attackStep(grid, p, e), "adjacent attack does not step onto foe")
+  eq(p.padU, homeU, "stays on home when already adjacent")
+  -- Give one free cell between mons (tight pad still has room at the foe edge).
+  truthy(Grid.setPad(grid, e, eHome.u + 1, eHome.v), "slide foe back for step test")
+  truthy(Grid.attackStep(grid, p, e), "attack step with room")
   eq(p.padU, homeU + 1, "attack advances on u axis")
   truthy(Grid.returnHome(grid, p), "return after attack")
   eq(p.padU, homeU, "returned u")
@@ -440,6 +448,8 @@ function tests.cues_and_dedupe()
   }
   Grid.setPad(grid, player, player.padU, player.padV)
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  -- Opening homes are adjacent; open one cell so the physical lunge can step.
+  truthy(Grid.setPad(grid, enemy, eHome.u + 1, eHome.v), "room for attack step")
   local session = {
     live = true,
     grid = grid,

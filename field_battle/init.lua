@@ -23,7 +23,7 @@
 --   anims       classic move FX affine → live pad centers
 --   arena       themed overlay props on pad cells (session-only)
 --   themes      map-id → kit (cover/grass/pond colors)
---   layout      5×3 formation along the fight axis
+--   layout      tight adjacent-mon formation along the fight axis
 --   coords      pad ↔ world ↔ pixel conversions
 --   compat      suppress foreign staged battles while FIELD is on
 --   debug       optional pad occupancy overlay

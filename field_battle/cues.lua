@@ -134,23 +134,10 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       end
     else
       -- Physical: mon charges (step / jump over cover); impact FX at the foe only.
+      -- Jump only when cover blocks the path — already-adjacent mons just attack in place.
       local obstructed = type(Grid.pathObstructed) == "function"
           and Grid.pathObstructed(g, ent, foe)
-      local canStep = false
-      do
-        local u, v = ent.padU, ent.padV
-        local fu = foe and foe.padU
-        if u ~= nil and fu ~= nil then
-          local du = 0
-          if fu > u then
-            du = 1
-          elseif fu < u then
-            du = -1
-          end
-          canStep = du ~= 0 and Grid.isFree(g, u + du, v, ent.id)
-        end
-      end
-      local jump = obstructed or not canStep
+      local jump = obstructed == true
       ent._attackJump = jump and true or nil
       ent._attackStepped = Grid.attackStep(g, ent, foe) == true
       if Projectiles and type(Projectiles.contact) == "function" then
