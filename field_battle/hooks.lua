@@ -7,6 +7,7 @@
 --       - Start on FIGHT / PKMN / ITEM / RUN until the player picks FIGHT
 --       - After FIGHT, keep opening the move diamond each turn until PAUSE
 --       - Right Shift = PAUSE back to the command menu (clears move latch)
+--       - While ENTRENCHED, stay on command so FIGHT opens HOLD/BREAK
 --       - U/R/L/D instantly cast that slot (inject A) while on the diamond
 --   • Redraw compact UI last so Move Inspector / typed-move panels cannot cover it
 --   • Forward battle.* cues into Lifecycle / Cues / Projectiles
@@ -65,6 +66,18 @@ function Hooks.install(FBV, mod)
 
             Game._arFbvRShiftLatch = true
         end
+    end
+
+    local function focusEntrenched(battle)
+        -- Entrench used to eat PreferMoves attacks via executeAction → holdPosition.
+        -- We still avoid auto-opening the diamond so FIGHT can show ENTRENCH!.
+        local pkgs = mod and mod._arPackages
+        local RD = pkgs and pkgs.battle and pkgs.battle.ReactiveDefense
+        if not (RD and type(RD.sideState) == "function" and battle) then
+            return false
+        end
+        local ok, side = pcall(RD.sideState, battle, true)
+        return ok and side and side.entrenched == true and (side.entrenchTurns or 0) > 0
     end
 
     -- ---- BattleState presentation wraps (pics / HUD / world bg) ----
@@ -182,8 +195,8 @@ function Hooks.install(FBV, mod)
         end
 
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate20 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate20 then
+        -- _arFbvUpdate22 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate22 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -225,16 +238,14 @@ function Hooks.install(FBV, mod)
                     local swallowPause = false
                     local swallowB = false
                     local phaseBefore = self.phase
-                    local openedMoves = false
                     local pressedA = false
                     if input and type(input.wasPressed) == "function" then
                         pressedA = input:wasPressed("a") == true
                     end
+                    local entrenched = focusEntrenched(self)
 
                     -- `_arFieldPreferMoves`: sticky after FIGHT until PAUSE.
-                    -- Without it, stay on the command menu (do not run as moveSelect).
                     if self.phase == "messages" then
-                        -- New command window after messages; latch persists across turns.
                         self._arFieldCommandHold = nil
                     end
 
@@ -246,39 +257,37 @@ function Hooks.install(FBV, mod)
                         self._arFieldCommandHold = true
                         swallowPause = true
                     elseif self.phase == "menu" and pauseEdge and self._arFieldPreferMoves then
-                        -- PAUSE while somehow still latched on menu: clear latch.
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
                         swallowPause = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
+                        and not entrenched
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
                         and #(self.player.curMoves) > 0 then
-                        -- Already chose FIGHT earlier this battle: reopen the diamond.
+                        -- Reopen the diamond after FIGHT (skip while ENTRENCHED so
+                        -- FIGHT can open the HOLD/BREAK menu in main.lua).
                         self.phase = "moveSelect"
                         local n = #self.player.curMoves
                         self.moveIndex = math.min(self.moveIndex or 1, n)
                         self.moveSwapIndex = nil
                         self._arFieldCommandHold = nil
-                        openedMoves = true
                     elseif self.phase == "menu" and not self._arFieldPreferMoves then
-                        -- Ensure nested older wraps cannot auto-jump into moves.
+                        -- Soft hold so nested older wraps don't auto-jump to moves.
                         self._arFieldCommandHold = true
                     end
 
-                    -- While latched on the diamond, B must not flicker the command menu;
-                    -- R-Shift PAUSE is the intentional return.
                     if self.phase == "moveSelect" and self._arFieldPreferMoves then
                         swallowB = true
                     end
 
                     -- U/R/L/D → that move slot, then inject A so BattleState resolves it.
-                    local instantIdx = nil
                     if self.phase == "moveSelect" or self.phase == "mimicSelect" then
                         if input and type(input.wasPressed) == "function" then
                             local moves = self.phase == "mimicSelect"
                                 and (self.mimicMoves or {})
                                 or (self.player and self.player.curMoves or {})
+                            local instantIdx = nil
                             if input:wasPressed("up") and moves[1] then
                                 instantIdx = 1
                             elseif input:wasPressed("right") and moves[2] then
@@ -307,19 +316,6 @@ function Hooks.install(FBV, mod)
                         pcall(FBV.tick, self, dt)
                     end
 
-                    -- Neutralize older FIELD auto-jump (Update18) when we want the menu:
-                    -- it keys off curMoves length + !_arFieldCommandHold. Hold is set
-                    -- above; blank moves only if an Update18 wrap is still nested and
-                    -- the player is not confirming FIGHT this frame.
-                    local movesHidden = nil
-                    if BattleState._arFbvUpdate18 and not self._arFieldPreferMoves
-                        and not pressedA and self.phase == "menu"
-                        and self.player and type(self.player.curMoves) == "table" then
-                        movesHidden = self.player.curMoves
-                        self.player.curMoves = {}
-                    end
-
-                    -- Keep nested Update18 from also toggling PAUSE this frame.
                     local heldBefore = self._arFieldShiftHeld
                     if swallowPause then
                         self._arFieldShiftHeld = true
@@ -356,25 +352,19 @@ function Hooks.install(FBV, mod)
                         result = { origUpdate(self, dt, ...) }
                     end
 
-                    if movesHidden then
-                        self.player.curMoves = movesHidden
-                    end
                     self._arFieldShiftHeld = heldBefore
 
-                    -- FIGHT (or any menu → moveSelect via A) latches move mode.
+                    -- FIGHT (menu → moveSelect via A) latches move mode.
                     if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
                     end
-
-                    -- Repair nested wraps that undo our pre-update move open, but do
-                    -- not override COVER!/ENTRENCH! (or other) returns to menu.
-                    if openedMoves and self.phase == "menu" and not pauseEdge then
-                        self.phase = "moveSelect"
-                    elseif not self._arFieldPreferMoves
-                        and self.phase == "moveSelect" and phaseBefore == "menu"
-                        and not pressedA then
-                        self.phase = "menu"
+                    -- Also latch when COVER!/ENTRENCH! STRIKE/EMERGE/BREAK called
+                    -- goMoveSelect (phase becomes moveSelect without our A).
+                    if self.phase == "moveSelect" and not entrenched
+                        and (phaseBefore == "menu" or pressedA) then
+                        self._arFieldPreferMoves = true
+                        self._arFieldCommandHold = nil
                     end
 
                     return result[1], result[2], result[3]
@@ -382,6 +372,8 @@ function Hooks.install(FBV, mod)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate22 = true
+            BattleState._arFbvUpdate21 = true
             BattleState._arFbvUpdate20 = true
             BattleState._arFbvUpdate = true
         end

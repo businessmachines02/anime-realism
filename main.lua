@@ -5620,6 +5620,18 @@ return function(mod)
             if not battle or not opt("momentum_counter") then
                 return
             end
+            -- FIELD: OW sprites + projectiles own the react beat — skip Stadium FX.
+            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
+                if FieldBattleViewer and type(FieldBattleViewer.react) == "function" then
+                    local kind = tostring(action or "")
+                    if kind == "dodge" or kind == "cover" or kind == "brace"
+                        or kind == "entrench" or kind == "entrench_hold" then
+                        pcall(FieldBattleViewer.react, battle, "player",
+                            (kind == "entrench_hold" and "brace") or kind)
+                    end
+                end
+                return
+            end
             action = tostring(action or "")
             result = result or {}
             local state = momentumState(battle)
@@ -6481,6 +6493,7 @@ return function(mod)
             state.awaitingPick = nil
             state.pendingDamage = nil
             state.pendingFoeReaction = nil
+            state.suppressReactDefer = nil
         end
 
         -- Foe dodge/brace stashed while COUNTER/HOLD is pending (so that menu
@@ -6707,6 +6720,19 @@ return function(mod)
             local pending = state.pendingDamage
             state.pendingDamage = nil
             state.enemyActedThisTurn = true
+            -- Don't let origRunDamaging queue another REACT! for this same hit
+            -- (ALWAYS pick mode used to re-offer after we cleared awaitingPick).
+            state.suppressReactDefer = true
+
+            -- Drop any leftover REACT! ui rows so the menu can't pop twice.
+            if type(battle.queue) == "table" then
+                for i = #battle.queue, 1, -1 do
+                    local row = battle.queue[i]
+                    if type(row) == "table" and row.ui and row.arReactPick then
+                        table.remove(battle.queue, i)
+                    end
+                end
+            end
 
             if action == "entrench_break" and ReactiveDefense then
                 local ok = ReactiveDefense.earlyExitEntrench(battle, true)
@@ -6748,47 +6774,54 @@ return function(mod)
 
             if pending and pending.ctx then
                 battle.nextInsert = resumeInsertIndex(battle)
-                if result.forceMiss then
-                    if type(battle.cancelMoveAnim) == "function" then
-                        pcall(battle.cancelMoveAnim, battle)
+                local okDmg, errDmg = pcall(function()
+                    if result.forceMiss then
+                        if type(battle.cancelMoveAnim) == "function" then
+                            pcall(battle.cancelMoveAnim, battle)
+                        end
+                        if type(battle.waitNext) == "function" then
+                            pcall(battle.waitNext, battle, 20)
+                        end
+                        -- Clear hitMod so a later hit isn't zeroed.
+                        if ReactiveDefense then
+                            ReactiveDefense.state(battle).hitMod = nil
+                        end
+                    else
+                        -- REACT menu / cover FX can outlive BC's original arm — re-arm now so
+                        -- the foe's swing still gets the attack camera.
+                        signalAttackPresentation(
+                            battle, pending.ctx.user, pending.ctx.target, pending.ctx.move)
+                        origRunDamaging(battle, pending.ctx, pending.record)
                     end
-                    if type(battle.waitNext) == "function" then
-                        pcall(battle.waitNext, battle, 20)
-                    end
-                    -- Clear hitMod so a later hit isn't zeroed.
-                    if ReactiveDefense then
-                        ReactiveDefense.state(battle).hitMod = nil
-                    end
-                else
-                    -- REACT menu / cover FX can outlive BC's original arm — re-arm now so
-                    -- the foe's swing still gets the attack camera.
-                    signalAttackPresentation(
-                        battle, pending.ctx.user, pending.ctx.target, pending.ctx.move)
-                    origRunDamaging(battle, pending.ctx, pending.record)
-                end
-                -- Lightweight reactive counters (Focus Dodge/Brace).
-                if result.counter and pending.ctx.user and battle.player then
-                    local frac = result.counter.powerFrac or 0.35
-                    if result.counter.absorbScale and result.counter.reduction then
-                        frac = 0.25 + (result.counter.reduction or 0) * 0.5
-                    end
-                    local dealt = math.max(1, math.floor(
-                        ((pending.ctx.move and pending.ctx.move.power) or 40) * frac * 0.4))
-                    battle.nextInsert = resumeInsertIndex(battle)
-                    if type(battle.sayNext) == "function" then
-                        battle:sayNext("A counter\nstrike!")
-                    end
-                    if type(battle.applyDamage) == "function" then
-                        local foe = battle.enemy
-                        if foe and foe.mon and (foe.mon.hp or 0) > 0 then
-                            battle:applyDamage(foe, dealt)
-                            if foe.mon.hp <= 0 and type(battle.onFaint) == "function" then
-                                battle:onFaint(foe)
+                    -- Lightweight reactive counters (Focus Dodge/Brace).
+                    if result.counter and pending.ctx.user and battle.player then
+                        local frac = result.counter.powerFrac or 0.35
+                        if result.counter.absorbScale and result.counter.reduction then
+                            frac = 0.25 + (result.counter.reduction or 0) * 0.5
+                        end
+                        local dealt = math.max(1, math.floor(
+                            ((pending.ctx.move and pending.ctx.move.power) or 40) * frac * 0.4))
+                        battle.nextInsert = resumeInsertIndex(battle)
+                        if type(battle.sayNext) == "function" then
+                            battle:sayNext("A counter\nstrike!")
+                        end
+                        if type(battle.applyDamage) == "function" then
+                            local foe = battle.enemy
+                            if foe and foe.mon and (foe.mon.hp or 0) > 0 then
+                                battle:applyDamage(foe, dealt)
+                                if foe.mon.hp <= 0 and type(battle.onFaint) == "function" then
+                                    battle:onFaint(foe)
+                                end
                             end
                         end
                     end
+                end)
+                if not okDmg then
+                    state.suppressReactDefer = nil
+                    error(errDmg, 0)
                 end
             end
+            state.suppressReactDefer = nil
             publishChipState(battle)
         end
 
@@ -7181,6 +7214,7 @@ return function(mod)
                 })
             end
             insertBeforeAnim(battle, {
+                arReactPick = true,
                 ui = function()
                     return openReactMenu()
                 end,
@@ -7432,7 +7466,9 @@ return function(mod)
                 return false
             end
             local state = momentumState(battle)
-            if state.awaitingPick or state.pendingDamage then
+            -- Already resolved this hit (finishCalloutPick → origRunDamaging), or
+            -- a pick is already open / pending.
+            if state.suppressReactDefer or state.awaitingPick or state.pendingDamage then
                 return false
             end
             return true
@@ -8725,6 +8761,9 @@ return function(mod)
                 local n = moves and #moves or 1
                 battle.moveIndex = math.min(battle.moveIndex or 1, n)
                 battle.moveSwapIndex = nil
+                -- FIELD latch: after STRIKE/EMERGE/BREAK, keep the diamond open.
+                battle._arFieldPreferMoves = true
+                battle._arFieldCommandHold = nil
             end
 
             local function clearPlayerEntrench(battle)
@@ -8983,23 +9022,39 @@ return function(mod)
             if type(origExecuteAction) == "function" then
                 function BattleState.executeAction(self, user, target, action)
                     -- Locked in a trench with no opening: can't swing — convert to STAY.
+                    -- Exception: a real move pick is an intentional BREAK + attack
+                    -- (FIELD PreferMoves used to skip ENTRENCH! and get eaten here).
                     if user and user.isPlayer and action and action.special ~= "holdPosition" then
                         local state = momentumByBattle[self]
+                        local isRealMove = action.id ~= nil or action.struggle == true
                         if state and state.temp and state.temp.deepCover then
                             action = { special = "holdPosition" }
                             dev.log(self, "DEEP cover", "force STAY (can't leave)")
                         elseif ReactiveDefense then
                             local side = ReactiveDefense.sideState(self, true)
                             if side and side.entrenched and (side.entrenchTurns or 0) > 0 then
-                                action = { special = "holdPosition" }
-                                dev.log(self, "FOCUS entrench lock", "force STAY")
+                                if isRealMove then
+                                    clearAmbientStance(self)
+                                    ReactiveDefense.earlyExitEntrench(self, true)
+                                    publishChipState(self)
+                                    dev.log(self, "FOCUS entrench break", "attack leaves trench")
+                                else
+                                    action = { special = "holdPosition" }
+                                    dev.log(self, "FOCUS entrench lock", "force STAY")
+                                end
                             end
                         elseif state and state.temp and state.temp.entrenched
                             and not playerHasCounter(self) then
                             local turns = state.temp.entrenchTurns or 0
                             if turns < (S.ENTRENCH_MAX_TURNS or 3) then
-                                action = { special = "holdPosition" }
-                                dev.log(self, "ENTRENCH lock", "force STAY (no opening)")
+                                if isRealMove then
+                                    clearAmbientStance(self)
+                                    clearPlayerEntrench(self)
+                                    dev.log(self, "ENTRENCH break", "attack leaves trench")
+                                else
+                                    action = { special = "holdPosition" }
+                                    dev.log(self, "ENTRENCH lock", "force STAY (no opening)")
+                                end
                             end
                         end
                     end
