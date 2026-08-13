@@ -1,7 +1,7 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "4.5.7",
+  "version": "4.5.9",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -23,6 +23,6 @@
   "permissions": [
     "engine_internals"
   ],
-  "description": "Compact FIELD battles with sprite-attached HP bars, isolated menus, grid movement, and world VFX.",
+  "description": "Compact FIELD battles with attached HP bars, speech popups, directional move selection, and world VFX.",
   "github": "businessmachines02/anime-realism"
 }

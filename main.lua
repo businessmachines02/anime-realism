@@ -7980,12 +7980,43 @@ return function(mod)
     return lines
   end
 
+  hud.fieldPopupText = function(text)
+    local s = tostring(text or ""):gsub("\v", " "):gsub("%s+", " ")
+      :match("^%s*(.-)%s*$") or ""
+    local upper = s:upper()
+    local stat = upper:match("^.-'S%s+(.+)%s+GREATLY FELL!?$")
+        or upper:match("^.-'S%s+(.+)%s+FELL!?$")
+    if stat then return stat .. " DOWN!" end
+    stat = upper:match("^.-'S%s+(.+)%s+ROSE SHARPLY!?$")
+        or upper:match("^.-'S%s+(.+)%s+GREATLY ROSE!?$")
+        or upper:match("^.-'S%s+(.+)%s+ROSE!?$")
+    if stat then return stat .. " UP!" end
+    local move = upper:match("^.- USED%s+(.+)!$")
+    if move then return move .. "!" end
+    if upper:find("SUPER EFFECTIVE", 1, true) then return "SUPER EFFECTIVE!" end
+    if upper:find("NOT VERY EFFECTIVE", 1, true) then return "RESISTED!" end
+    if upper:find("CRITICAL HIT", 1, true) then return "CRITICAL!" end
+    if upper:find("BUT IT MISSED", 1, true)
+        or upper:find("ATTACK MISSED", 1, true) then
+      return "MISSED!"
+    end
+    if upper:find("NO EFFECT", 1, true) then return "NO EFFECT!" end
+    if upper:find("REGAINED HEALTH", 1, true) then return "HEALED!" end
+    return s
+  end
+
   hud.bubbleVisibleText = function(battle)
     local cur = battle and battle.current
+    local text
     if cur and cur.text and cur.text ~= "" then
-      return cur.text
+      text = cur.text
+    else
+      text = (battle and battle._arLastBubbleText) or ""
     end
-    return (battle and battle._arLastBubbleText) or ""
+    if hud.fieldCompactActive(battle) then
+      return hud.fieldPopupText(text)
+    end
+    return text
   end
 
   hud.drawSpeechBubble = function(battle, side)
@@ -8023,7 +8054,24 @@ return function(mod)
     local bh = padY * 2 + #lines * lineH
     local floorY = 142
     local x, y
-    if narrator then
+    local anchorX, anchorY
+    if hud.fieldCompactActive(battle) and not narrator then
+      local wanted = (side == "foe") and "enemy" or "player"
+      local ow = battle.game and battle.game.overworld
+      for i = 1, #(ow and ow.entities or {}) do
+        local ent = ow.entities[i]
+        if ent and ent._arFieldBattler and ent._arFieldSide == wanted
+            and ent._fieldScreenX and ent._fieldScreenY then
+          anchorX, anchorY = ent._fieldScreenX, ent._fieldScreenY
+          break
+        end
+      end
+    end
+    if anchorX then
+      x = math.floor(anchorX - bw / 2)
+      y = math.floor(anchorY - bh - 9)
+      x = math.max(1, math.min(159 - bw, x))
+    elseif narrator then
       x = math.floor((160 - bw) / 2)
       y = floorY - bh
     elseif side == "foe" then
@@ -8055,7 +8103,17 @@ return function(mod)
     g.setColor(0, 0, 0, 1)
     g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
     g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
-    if not narrator then
+    if anchorX then
+      local tailX = math.max(x + 5, math.min(x + bw - 5, anchorX))
+      g.setColor(1, 1, 1, 1)
+      g.polygon("fill", tailX - 4, y + bh - 1,
+        tailX + 4, y + bh - 1, anchorX, math.min(anchorY - 2, y + bh + 6))
+      g.setColor(0, 0, 0, 1)
+      g.line(tailX - 4, y + bh - 1,
+        anchorX, math.min(anchorY - 2, y + bh + 6))
+      g.line(anchorX, math.min(anchorY - 2, y + bh + 6),
+        tailX + 4, y + bh - 1)
+    elseif not narrator then
       if side == "foe" then
         g.setColor(1, 1, 1, 1)
         g.polygon("fill", x + bw - 12, y + 1, x + bw - 4, y - 5, x + bw - 20, y + 1)
@@ -8423,8 +8481,14 @@ return function(mod)
   mod.hooks:wrap("battle.overlay", function(next, battle)
     next(battle)
     if hud.fieldCompactActive(battle) then
+      local side = hud.bubbleSideActive(battle)
+      battle._arFieldBubbleDialogue = side and true or nil
       if FieldBattleViewer and type(FieldBattleViewer.drawUI) == "function" then
         FieldBattleViewer.drawUI(battle)
+      end
+      battle._arFieldBubbleDialogue = nil
+      if side then
+        hud.drawSpeechBubble(battle, side)
       end
       return
     end
@@ -9382,7 +9446,21 @@ return function(mod)
         break
       end
       if type(val) == "function" and not hud.patched[val] then
-        if name == "printText" or name == "partyText" or name == "finalText" then
+        if name == "renderHudHook" then
+          -- Gen 3's battle UI is reached through a table of renderer methods,
+          -- so its individual drawers are not all visible as callback upvalues.
+          -- Bypass the top-level foreground pass for FIELD instead.
+          local inner = val
+          local wrapped = function(ownerMod, next, game, ...)
+            if hud.fieldBattleInGame(game) then
+              return next(game, ...)
+            end
+            return inner(ownerMod, next, game, ...)
+          end
+          hud.patched[val] = true
+          hud.patched[wrapped] = true
+          debug.setupvalue(fn, i, wrapped)
+        elseif name == "printText" or name == "partyText" or name == "finalText" then
           local inner = val
           local wrapped = function(text, ...)
             local s = tostring(text or "")

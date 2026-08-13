@@ -272,6 +272,15 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     else
       drawBody()
     end
+    local g = love and love.graphics
+    if g and type(g.transformPoint) == "function" then
+      local ok, sx, sy = pcall(g.transformPoint,
+        (self.px or 0) - (camX or 0) + 8,
+        (self.py or 0) - (camY or 0) - (self._fieldBarLift or 8))
+      if ok and type(sx) == "number" and type(sy) == "number" then
+        self._fieldScreenX, self._fieldScreenY = sx, sy
+      end
+    end
     drawHealthBar(self, camX, camY)
   end
 

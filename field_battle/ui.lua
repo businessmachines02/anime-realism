@@ -80,7 +80,7 @@ function UI.layoutState(battle)
     showHUD = false,
     showCommand = phase == "menu",
     showMoves = phase == "moveSelect" or phase == "mimicSelect",
-    showDialogue = phase == "messages",
+    showDialogue = phase == "messages" and not battle._arFieldBubbleDialogue,
     menuIndex = battle and battle.menuIndex or 1,
     moveIndex = phase == "mimicSelect"
       and (battle and battle.mimicIndex or 1)
@@ -178,7 +178,7 @@ local function moveName(battle, move)
 end
 
 local function drawMoves(g, Font, battle)
-  local x, y, w, h = 66, 105, 92, 37
+  local x, y, w, h = 34, 96, 124, 46
   box(g, x, y, w, h)
   local rows = moveRows(battle)
   local index = battle.phase == "mimicSelect"
@@ -186,14 +186,25 @@ local function drawMoves(g, Font, battle)
   for i = 1, math.min(4, #rows) do
     local col = (i - 1) % 2
     local row = math.floor((i - 1) / 2)
-    local tx = x + 9 + col * 43
-    local ty = y + 4 + row * 12
+    local cx = x + 3 + col * 60
+    local cy = y + 3 + row * 16
+    local selected = i == index
+    if selected then
+      g.setColor(0.18, 0.29, 0.48, 1)
+    else
+      g.setColor(0.90, 0.87, 0.76, 1)
+    end
+    g.rectangle("fill", cx, cy, 58, 15)
+    g.setColor(0.10, 0.08, 0.06, 1)
+    g.rectangle("line", cx + 0.5, cy + 0.5, 57, 14)
+    g.setColor(selected and 1 or 0.10, selected and 1 or 0.08,
+      selected and 1 or 0.06, 1)
     drawScaled(g, Font,
-      fitText(Font, moveName(battle, rows[i]), 50), tx, ty, 0.68)
+      fitText(Font, moveName(battle, rows[i]), 82), cx + 7, cy + 3, 0.62)
     if i == index then
-      drawCodeScaled(g, Font, 0xED, tx - 6, ty, 0.68)
+      drawCodeScaled(g, Font, 0xED, cx + 1, cy + 3, 0.62)
     elseif battle.moveSwapIndex == i then
-      drawCodeScaled(g, Font, 0xEC, tx - 6, ty, 0.68)
+      drawCodeScaled(g, Font, 0xEC, cx + 1, cy + 3, 0.62)
     end
   end
   if battle.phase == "moveSelect" then
@@ -204,10 +215,12 @@ local function drawMoves(g, Font, battle)
       local pp = tonumber(move.pp) or 0
       local maxPP = def and ((def.pp or 0)
         + (move.ppUps or 0) * math.floor((def.pp or 0) / 5)) or pp
-      drawScaled(g, Font, fitText(Font, typeName, 50),
-        x + 4, y + h - 8, 0.58)
-      drawScaled(g, Font, ("P%d/%d"):format(pp, maxPP),
-        x + 52, y + h - 8, 0.58)
+      g.setColor(0.10, 0.08, 0.06, 1)
+      g.line(x + 3, y + h - 11.5, x + w - 3, y + h - 11.5)
+      drawScaled(g, Font, fitText(Font, typeName, 72),
+        x + 5, y + h - 9, 0.58)
+      drawScaled(g, Font, ("PP %d/%d"):format(pp, maxPP),
+        x + 78, y + h - 9, 0.58)
     end
   end
 end

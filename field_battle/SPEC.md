@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.7)
+# FIELD combat SPEC (v4.5.9)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 

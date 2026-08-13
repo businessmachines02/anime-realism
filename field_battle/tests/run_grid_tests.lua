@@ -189,7 +189,10 @@ function tests.compact_field_ui_tracks_engine_cursors()
   eq(state.moveIndex, 4, "move cursor remains BattleState-owned")
   battle.phase = "messages"
   state = UI.layoutState(battle)
-  truthy(state.showDialogue, "message phase uses compact dialogue")
+  truthy(state.showDialogue, "message phase keeps a no-bubble fallback")
+  battle._arFieldBubbleDialogue = true
+  state = UI.layoutState(battle)
+  truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
 end
 
 function tests.compact_arena_keeps_cast_lanes_clear()

@@ -2,7 +2,7 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: hide levels and HP everywhere so you play by feel instead of numbers. In the anime you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting.
 
-**Current build:** `4.5.7` (`anime_realism-4.5.7.zip`)
+**Current build:** `4.5.9` (`anime_realism-4.5.9.zip`)
 
 ## Why hide levels too?
 
@@ -110,6 +110,12 @@ remain on their normal presentation path.
 - FIELD skips companion battle-UI foreground passes so the compact menu is the
   only command layer. HP bars render in each Pokémon's world draw pass, keeping
   them attached through camera movement and bobbing.
+- During FIELD message beats, the large bottom panel yields to small speech
+  popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
+  `MISSED!`) and speaker bubbles track the active Pokémon.
+- FIELD move selection is a high-contrast 2×2 grid. Arrow keys move in the
+  matching direction, the selected move is filled in blue, and its type and PP
+  appear in a dedicated footer.
 - Trainers and Pokémon begin on a compact 5×3 formation, then move across a
   read-only surveyed fight envelope (normally about 9×7 nearby tiles).
 - Water, warps, blocked map cells, and unrelated overworld entities are excluded
