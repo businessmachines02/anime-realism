@@ -60,6 +60,43 @@ local function restoreZoom(session)
   session.zoomSaved = nil
 end
 
+local function snapshotVoxel(session)
+  local ok, Pipelines = pcall(require, "src.render.Pipelines")
+  if not (ok and Pipelines and type(Pipelines.level) == "function") then
+    return
+  end
+  local okL, level = pcall(Pipelines.level, "voxel")
+  if okL and type(level) == "number" then
+    session.voxelSaved = level
+  end
+end
+
+local function restoreVoxel(session)
+  if session.voxelSaved == nil then
+    return
+  end
+  local saved = session.voxelSaved
+  session.voxelSaved = nil
+  local ok, Pipelines = pcall(require, "src.render.Pipelines")
+  if not (ok and Pipelines and type(Pipelines.setLevel) == "function") then
+    return
+  end
+  local current = nil
+  if type(Pipelines.level) == "function" then
+    local okL, level = pcall(Pipelines.level, "voxel")
+    if okL and type(level) == "number" then
+      current = level
+    end
+  end
+  -- Re-assert the pre-battle voxel level. If the pipeline already reports the
+  -- same level but the overlay got stuck flat after FIELD camera/entity
+  -- cleanup, bounce through OFF so potato_voxel re-tweens onto the live map.
+  if current == saved and saved > 0 then
+    pcall(Pipelines.setLevel, "voxel", 0)
+  end
+  pcall(Pipelines.setLevel, "voxel", saved)
+end
+
 function Lifecycle.get(battle)
   return battle and byBattle[battle] or nil
 end
@@ -382,6 +419,7 @@ function Lifecycle.begin(battle, mod, deps)
   end
   ow.entities = cast
 
+  snapshotVoxel(session)
   applyZoom(session, battle)
   session.state = Lifecycle.STATE.Live
   byBattle[battle] = session
@@ -910,6 +948,7 @@ function Lifecycle.finish(battle, deps)
   session.mapSnap = nil
 
   restoreZoom(session)
+  restoreVoxel(session)
   if battle then
     battle._arAnimeField = nil
   end

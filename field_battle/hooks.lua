@@ -148,6 +148,16 @@ function Hooks.install(FBV, mod)
         if isFieldBattle(self) then
           self.showPlayerBack = false
           self.showEnemyTrainer = false
+          -- Jump straight to the directional move grid on the player's turn.
+          -- B still returns to FIGHT / PKMN / ITEM / RUN.
+          if self.phase == "menu" and not self.safari and not self.demo
+              and self.player and self.player.curMoves
+              and #(self.player.curMoves) > 0 then
+            self.phase = "moveSelect"
+            local n = #self.player.curMoves
+            self.moveIndex = math.min(self.moveIndex or 1, n)
+            self.moveSwapIndex = nil
+          end
           -- Prefer present-clock tick (deduped) so menus can't starve idle.
           if type(FBV.tickPresent) == "function" then
             pcall(FBV.tickPresent, self.game, dt)

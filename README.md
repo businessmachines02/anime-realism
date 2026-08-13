@@ -2,7 +2,7 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: hide levels and HP everywhere so you play by feel instead of numbers. In the anime you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting.
 
-**Current build:** `4.5.9` (`anime_realism-4.5.9.zip`)
+**Current build:** `4.5.12` (`anime_realism-4.5.12.zip`)
 
 ## Why hide levels too?
 
@@ -112,10 +112,12 @@ remain on their normal presentation path.
   them attached through camera movement and bobbing.
 - During FIELD message beats, the large bottom panel yields to small speech
   popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
-  `MISSED!`) and speaker bubbles track the active Pokémon.
+  `MISSED!`) and speaker bubbles track the active Pokémon. Lines auto-advance
+  about every 1.5 seconds so fights flow into the directional move grid. Press
+  **B** to pause a toast; **A** or **B** again resumes.
 - FIELD move selection is a high-contrast 2×2 grid. Arrow keys move in the
   matching direction, the selected move is filled in blue, and its type and PP
-  appear in a dedicated footer.
+  appear in a dedicated footer. Your turn opens the move grid directly.
 - Trainers and Pokémon begin on a compact 5×3 formation, then move across a
   read-only surveyed fight envelope (normally about 9×7 nearby tiles).
 - Water, warps, blocked map cells, and unrelated overworld entities are excluded
@@ -132,7 +134,8 @@ remain on their normal presentation path.
 - Hybrid voxel mode is preserved: the voxelized map remains active while the
   Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
   suppresses classic/Stadium battle chrome and duplicate staged arenas; Stadium
-  visuals remain available when BATTLE STAGE is not FIELD.
+  visuals remain available when BATTLE STAGE is not FIELD. On battle exit the
+  pre-battle voxel pipeline level is restored so the free-roam overlay resets.
 - Generated cover remains session-only and is kept sparse and small so the live
   map—not an artificial arena—stays visually dominant.
 - Ending by victory, capture, run, or blackout restores the original map

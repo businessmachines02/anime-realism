@@ -517,9 +517,18 @@ function tests.lifecycle_cleanup_restores_world()
     playerPose = pose,
     savedEntities = { player, npc },
     grid = grid,
+    voxelSaved = 2,
     _deps = { Layout = Layout, Grid = Grid },
   })
+  local setCalls = {}
+  package.loaded["src.render.Pipelines"] = {
+    level = function() return 2 end,
+    setLevel = function(name, level)
+      setCalls[#setCalls + 1] = { name, level }
+    end,
+  }
   Lifecycle.finish(battle, { Layout = Layout, Grid = Grid })
+  package.loaded["src.render.Pipelines"] = nil
 
   eq(player.cellX, 9, "restore player cell x")
   eq(player.cellY, 9, "restore player cell y")
@@ -532,6 +541,9 @@ function tests.lifecycle_cleanup_restores_world()
   eq(overworld.entities[3], nil, "remove field entity")
   eq(battle._arAnimeField, nil, "clear battle marker")
   eq(Lifecycle.get(battle), nil, "remove session")
+  eq(setCalls[1] and setCalls[1][1], "voxel", "voxel restore targets pipeline")
+  eq(setCalls[1] and setCalls[1][2], 0, "voxel restore bounces through off")
+  eq(setCalls[2] and setCalls[2][2], 2, "voxel restore reapplies pre-battle level")
 end
 
 local count = 0

@@ -3590,6 +3590,22 @@ return function(mod)
   S.BUBBLE_AUTO_DELAY = 75 -- kept for non-bubble fallbacks / legacy callers
   -- Effective frames/glyph while a bubble is up (engine slow is 5).
   S.BUBBLE_CHAR_DELAY = 7
+  -- FIELD: ~1.5s hold after each condensed toast finishes typing.
+  S.FIELD_TOAST_DELAY = 90
+
+  local function fieldFlowsText(battle)
+    return type(battle) == "table"
+      and (battle._arAnimeField or battle._arFieldCombat
+        or battle._arFieldStandalone)
+  end
+
+  local function applyFieldToastAuto(item)
+    if type(item) ~= "table" then
+      return
+    end
+    item.auto = true
+    item.autoDelay = S.FIELD_TOAST_DELAY
+  end
 
   local function enqueuePromptAfter(battle, text)
     if type(battle) ~= "table" or type(battle.queue) ~= "table" then
@@ -3652,12 +3668,16 @@ return function(mod)
 
   -- Tag a queue item as a bubble. forceWait (default true) clears auto so
   -- the player can finish reading before A/B — needed once the classic box
-  -- is hidden.
-  local function markBubbleWait(item, bubble, forceWait)
+  -- is hidden. FIELD battles keep short auto toasts instead.
+  local function markBubbleWait(item, bubble, forceWait, battle)
     if type(item) ~= "table" or not bubble or not opt("speech_bubbles") then
       return false
     end
     item.bubble = bubble
+    if fieldFlowsText(battle) then
+      applyFieldToastAuto(item)
+      return true
+    end
     if forceWait ~= false then
       item.auto = nil
       item.autoDelay = nil
@@ -3717,7 +3737,10 @@ return function(mod)
     if bubble == nil and opt("speech_bubbles") then
       bubble = inferBubbleSide(battle, text) or "narrator"
     end
-    if not markBubbleWait(item, bubble) then
+    if fieldFlowsText(battle) then
+      applyFieldToastAuto(item)
+      markBubbleWait(item, bubble, false, battle)
+    elseif not markBubbleWait(item, bubble, true, battle) then
       item.auto = true
       item.autoDelay = delay or S.CALLOUT_AUTO_DELAY
     end
@@ -4106,7 +4129,7 @@ return function(mod)
       return
     end
     local item = { text = pending.line, arBanter = true }
-    if not markBubbleWait(item, "foe") then
+    if not markBubbleWait(item, "foe", true, battle) then
       item.auto = true
       item.autoDelay = S.CALLOUT_AUTO_DELAY
     end
@@ -4155,7 +4178,7 @@ return function(mod)
     ms.lastIdleBanterTurn = turn
     ms.lastIdleBanterLine = line
     local item = { text = line, arBanter = true }
-    if not markBubbleWait(item, "foe") then
+    if not markBubbleWait(item, "foe", true, battle) then
       item.auto = true
       item.autoDelay = S.CALLOUT_AUTO_DELAY
     end
@@ -4169,7 +4192,10 @@ return function(mod)
     end
     local item = battle.queue and battle.queue[battle.nextInsert]
     if item and item.text then
-      markBubbleWait(item, bubble, forceWait)
+      if fieldFlowsText(battle) then
+        forceWait = false
+      end
+      markBubbleWait(item, bubble, forceWait, battle)
     end
   end
 
@@ -4189,7 +4215,7 @@ return function(mod)
     battle.nextInsert = (battle.nextInsert or 0) + 1
     do
       local item = { text = line }
-      if not markBubbleWait(item, "foe") then
+      if not markBubbleWait(item, "foe", true, battle) then
         item.auto = true
         item.autoDelay = S.CALLOUT_AUTO_DELAY
       end
@@ -6414,9 +6440,9 @@ return function(mod)
         autoDelay = S.CALLOUT_AUTO_DELAY,
       }
       if not isDodgeFailNarrator(foeLine) then
-        markBubbleWait(item, "foe")
+        markBubbleWait(item, "foe", true, battle)
       else
-        markBubbleWait(item, "narrator")
+        markBubbleWait(item, "narrator", true, battle)
       end
       local cue = fieldCueForFoeCover(foeBuffs, foeLine)
       tagFieldCue(item, cue.side, cue.kind)
@@ -6624,7 +6650,7 @@ return function(mod)
     for i = 1, #(result.lines or {}) do
       local line = result.lines[i]
       local item = { text = line, auto = true, autoDelay = S.CALLOUT_AUTO_DELAY }
-      markBubbleWait(item, "player")
+      markBubbleWait(item, "player", true, battle)
       table.insert(battle.queue, 1, item)
     end
 
@@ -7240,7 +7266,7 @@ return function(mod)
           auto = true,
           autoDelay = S.CALLOUT_AUTO_DELAY,
         }
-        markBubbleWait(item, "player")
+        markBubbleWait(item, "player", true, battle)
         tagFieldCue(item, "player", "attack", "physical")
         table.insert(battle.queue, 1, item)
       end
@@ -8029,14 +8055,15 @@ return function(mod)
     end
     local g = love.graphics
     local narrator = (side == "narrator")
-    local maxInner = narrator and 128 or 112
-    local padX, padY = 4, 3
-    local lineH = 8
+    local fieldToast = hud.fieldCompactActive(battle)
+    local maxInner = fieldToast and 96 or (narrator and 128 or 112)
+    local padX, padY = fieldToast and 3 or 4, fieldToast and 2 or 3
+    local lineH = fieldToast and 7 or 8
     local lines = hud.wrapBubbleText(text, maxInner)
     if #lines == 0 then
       lines[1] = ""
     end
-    local maxLines = narrator and 4 or 5
+    local maxLines = fieldToast and 2 or (narrator and 4 or 5)
     if #lines > maxLines then
       local trimmed = {}
       for i = 1, maxLines - 1 do
@@ -8149,8 +8176,14 @@ return function(mod)
         break
       end
     end
-    if (battle.msgWaiting or battle.msgPrompt) and (battle.frame or 0) % 60 < 30 then
+    if (battle.msgWaiting or battle.msgPrompt) and (battle.frame or 0) % 60 < 30
+        and (not hud.fieldCompactActive(battle) or battle._arFieldToastPaused) then
       Font.drawCode(0xED, x + bw - 10, y + bh - 9)
+    end
+    if hud.fieldCompactActive(battle) and battle._arFieldToastPaused
+        and Font and type(Font.draw) == "function" then
+      g.setColor(0, 0, 0, 1)
+      Font.draw("II", x + 2, y + 1)
     end
     g.setColor(1, 1, 1, 1)
     g.pop()
@@ -8518,6 +8551,29 @@ return function(mod)
         flushPendingSendBanter(self)
         local curItem = self and self.current
         local shownLine = self and self.shown and self.shown[#self.shown]
+        -- FIELD toasts auto-cycle (~1.5s). B pauses; A or B resumes.
+        if fieldFlowsText(self) then
+          self._arBubbleAcc = 0
+          if self.phase ~= "messages" then
+            self._arFieldToastPaused = nil
+          else
+            local input = self.game and self.game.input
+            if input and type(input.wasPressed) == "function" then
+              if input:wasPressed("b") then
+                self._arFieldToastPaused = not self._arFieldToastPaused
+              elseif self._arFieldToastPaused and input:wasPressed("a") then
+                self._arFieldToastPaused = false
+              end
+            end
+            if self._arFieldToastPaused and curItem then
+              curItem.auto = nil
+              curItem.autoDelay = nil
+            elseif curItem and curItem.text and curItem.auto ~= false then
+              applyFieldToastAuto(curItem)
+            end
+          end
+          return origUpdateQueue(self)
+        end
         local bubbleTyping = opt("speech_bubbles") and curItem and curItem.bubble
             and self.phase == "messages"
             and shownLine and self.codes
@@ -9104,11 +9160,20 @@ return function(mod)
           tagQueueBubble(self, side, not keepAuto)
         end
       end
+      -- FIELD: keep every line as a short auto toast so fights flow into the
+      -- directional move grid without A/B between announcements.
+      if fieldFlowsText(self) then
+        local item = self.queue and self.queue[self.nextInsert]
+        if item and item.text then
+          applyFieldToastAuto(item)
+        end
+      end
       -- Opposing trainer shouts on send-outs (personality-flavored).
       maybeEnqueueSendBanter(self, text)
       -- Let callouts finish (A/B) before dodge/brace or counter menus.
       if (methodName == "sayNextAuto" or methodName == "sayAuto")
-          and (hud.willShowCalloutPick(self, text) or hud.willShowCounterPick(self, text)) then
+          and (hud.willShowCalloutPick(self, text) or hud.willShowCounterPick(self, text))
+          and not fieldFlowsText(self) then
         local item = self.queue and self.queue[self.nextInsert]
         if item and item.text then
           item.auto = nil
