@@ -1,7 +1,7 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "4.5.12",
+  "version": "4.5.18",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -23,6 +23,6 @@
   "permissions": [
     "engine_internals"
   ],
-  "description": "Compact FIELD battles with ~1.5s auto toasts, B-to-pause, directional moves, and voxel restore.",
+  "description": "FIELD battles with diamond move cast, Right-Shift pause, and readable toasts.",
   "github": "businessmachines02/anime-realism"
 }

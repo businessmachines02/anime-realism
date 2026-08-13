@@ -428,6 +428,12 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     unreactable = RD.isUnreactable(move),
   }
 
+  -- if our pokemon is frozen or asleep then we can't react
+  if (side.frozen or side.asleep) then
+    result.lines[#result.lines + 1] = "Pokemon is frozen or asleep!"
+    return result
+  end
+
   -- Entrench lockout: forced commit-style soak with mitigation.
   if side.entrenched and (side.entrenchTurns or 0) > 0 and action ~= "entrench" then
     action = "entrench_hold"

@@ -367,13 +367,14 @@ function Lifecycle.begin(battle, mod, deps)
   player.inputLocked = true
   player.wanders = false
   player.moving = false
-  local function parkTrainer(ent, homeKey, face)
+  local function parkTrainer(ent, homeKey, face, occId)
     if not ent then
       return
     end
     ent.frozen = true
     ent.wanders = false
     ent.moving = false
+    ent._arFieldTrainerId = occId
     local h = grid.home and grid.home[homeKey]
     if h then
       local wx, wy = Coords.padToWorld(grid, h.u, h.v)
@@ -381,17 +382,18 @@ function Lifecycle.begin(battle, mod, deps)
       ent.cellX, ent.cellY = wx, wy
       ent.px, ent.py = px, py
       ent.padU, ent.padV = h.u, h.v
+      Grid.occupy(grid, occId, h.u, h.v)
     end
     if face then
       ent.facing = face
     end
   end
-  parkTrainer(player, "playerTrainer", plan.playerFace)
+  parkTrainer(player, "playerTrainer", plan.playerFace, "ar_field_player_trainer")
   ow.engaging = true
   ow._arFieldEngaging = true
 
   if foe then
-    parkTrainer(foe, "enemyTrainer", plan.foeFace)
+    parkTrainer(foe, "enemyTrainer", plan.foeFace, "ar_field_enemy_trainer")
   end
 
   Cast.stageEnemy(session, battle, mod, Sprites, Grid)
@@ -619,7 +621,162 @@ local function tickIdleWander(session, Grid, ent, side, dt)
   else
     ent._wanderCD = 2.0 + rr() * 1.5
   end
+
+
 end
+
+
+
+-- Trainer walk-step speed in world px/sec (comparable to the battler mons'
+-- default steerBase speed of ~40-56).
+local TRAINER_STEP_SPEED = 48
+
+--- Reserve a pad cell and kick off a soft walk toward it. Player/NPC don't
+--- consume targetPx/targetPy themselves, so we drive px/py ourselves via
+--- stepTrainerClear below rather than routing through Player:update()/
+--- NPC:update() (built for input-driven, collision-checked taps).
+local function beginTrainerStep(session, Grid, trainer, nu, nv, du, dv)
+  local occId = trainer._arFieldTrainerId
+  if not occId then
+    return false
+  end
+  Grid.occupy(session.grid, occId, nu, nv)
+  trainer.padU, trainer.padV = nu, nv
+  local tx, ty = Coords.padToPx(session.grid, nu, nv)
+  trainer._stepTX, trainer._stepTY = tx, ty
+  local wx, wy = Coords.padDeltaToWorld(session.grid, du, dv)
+  if math.abs(wx) >= math.abs(wy) then
+    trainer.facing = wx >= 0 and "right" or "left"
+  else
+    trainer.facing = wy >= 0 and "down" or "up"
+  end
+  trainer.moving = true
+  return true
+end
+
+--- Per-frame lerp toward a pending trainer step. Call every tick for any
+--- trainer that might have a step in flight (ow.player, session.foe).
+local function stepTrainerClear(session, trainer, dt)
+  if not (trainer and trainer._stepTX and trainer._stepTY) then
+    return
+  end
+  local px, py = trainer.px or 0, trainer.py or 0
+  local dx = trainer._stepTX - px
+  local dy = trainer._stepTY - py
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist < 1.5 then
+    trainer.px, trainer.py = trainer._stepTX, trainer._stepTY
+    if session.grid and trainer.padU ~= nil then
+      trainer.cellX, trainer.cellY =
+        Coords.padToWorld(session.grid, trainer.padU, trainer.padV)
+    end
+    trainer._stepTX, trainer._stepTY = nil, nil
+    trainer.moving = false
+    return
+  end
+  local step = math.min(dist, TRAINER_STEP_SPEED * (dt or 1 / 60))
+  trainer.px = px + dx / dist * step
+  trainer.py = py + dy / dist * step
+end
+
+-- When a battler shares / brushes a trainer cell, walk the trainer aside.
+local function keepTrainerClear(session, Grid, trainer, mon)
+  if not (session and session.grid and Grid and trainer and mon) then
+    return
+  end
+  if mon._removed or mon.hidden or trainer._removed then
+    return
+  end
+  if trainer._stepTX then
+    return
+  end
+  local tu, tv = trainer.padU, trainer.padV
+  local mu, mv = mon.padU, mon.padV
+  if tu == nil or mu == nil then
+    return
+  end
+  local dist = math.abs(tu - mu) + math.abs(tv - mv)
+  if dist > 1 then
+    return
+  end
+  if not trainer._arFieldTrainerId then
+    return
+  end
+  local awayU, awayV = tu - mu, tv - mv
+  local dirs = {
+    { awayU, awayV },
+    { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+    { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 },
+  }
+  for i = 1, #dirs do
+    local du, dv = dirs[i][1], dirs[i][2]
+    if not (du == 0 and dv == 0) then
+      if math.abs(du) > 1 then du = du > 0 and 1 or -1 end
+      if math.abs(dv) > 1 then dv = dv > 0 and 1 or -1 end
+      local nu, nv = tu + du, tv + dv
+      if Grid.isFree(session.grid, nu, nv, trainer._arFieldTrainerId) then
+        return beginTrainerStep(session, Grid, trainer, nu, nv, du, dv)
+      end
+    end
+  end
+  return false
+end
+
+
+
+
+
+-- When a battler shares / brushes a trainer cell, step the trainer aside.
+-- local function keepTrainerClear(session, Grid, trainer, mon)
+--   if not (session and session.grid and Grid and trainer and mon) then
+--     return
+--   end
+--   if mon._removed or mon.hidden or trainer._removed then
+--     return
+--   end
+--   local tu, tv = trainer.padU, trainer.padV
+--   local mu, mv = mon.padU, mon.padV
+--   if tu == nil or mu == nil then
+--     return
+--   end
+--   local dist = math.abs(tu - mu) + math.abs(tv - mv)
+--   if dist > 1 then
+--     return
+--   end
+--   local occId = trainer._arFieldTrainerId
+--   if not occId then
+--     return
+--   end
+--   local awayU, awayV = tu - mu, tv - mv
+--   local dirs = {
+--     { awayU, awayV },
+--     { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+--     { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 },
+--   }
+--   for i = 1, #dirs do
+--     local du, dv = dirs[i][1], dirs[i][2]
+--     if not (du == 0 and dv == 0) then
+--       if math.abs(du) > 1 then du = du > 0 and 1 or -1 end
+--       if math.abs(dv) > 1 then dv = dv > 0 and 1 or -1 end
+--       local nu, nv = tu + du, tv + dv
+--       if Grid.isFree(session.grid, nu, nv, occId) then
+--         Grid.occupy(session.grid, occId, nu, nv)
+--         trainer.padU, trainer.padV = nu, nv
+--         local wx, wy = Coords.padToWorld(session.grid, nu, nv)
+--         local px, py = Coords.padToPx(session.grid, nu, nv)
+--         trainer.cellX, trainer.cellY = wx, wy
+--         trainer.px, trainer.py = px, py
+--         if math.abs(du) >= math.abs(dv) then
+--           trainer.facing = du >= 0 and "right" or "left"
+--         else
+--           trainer.facing = dv >= 0 and "down" or "up"
+--         end
+--         return true
+--       end
+--     end
+--   end
+--   return false
+-- end
 
 function Lifecycle.onTurnEnded(battle)
   local session = Lifecycle.get(battle)
@@ -817,6 +974,16 @@ function Lifecycle.tick(battle, dt, deps)
 
   tickIdleWander(session, deps.Grid, p, "player", dt)
   tickIdleWander(session, deps.Grid, e, "enemy", dt)
+
+  local ow = battle.game and battle.game.overworld
+  if ow then
+    keepTrainerClear(session, deps.Grid, ow.player, p)
+    keepTrainerClear(session, deps.Grid, ow.player, e)
+    keepTrainerClear(session, deps.Grid, session.foe, e)
+    keepTrainerClear(session, deps.Grid, session.foe, p)
+    stepTrainerClear(session, ow.player, dt)
+    stepTrainerClear(session, session.foe, dt)
+  end
 
   local moving = (p and p.targetPx and (
         math.abs((p.basePx or 0) - p.targetPx) > 1

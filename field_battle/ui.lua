@@ -148,18 +148,21 @@ local function commandLabels(battle)
 end
 
 local function drawCommand(g, Font, battle)
-  local x, y, w, h = 94, 110, 64, 32
+  local x, y, w, h = 78, 100, 80, 42
   box(g, x, y, w, h)
   local labels = commandLabels(battle)
   local index = math.max(1, math.min(4, battle.menuIndex or 1))
   for i = 1, 4 do
     local col = (i - 1) % 2
     local row = math.floor((i - 1) / 2)
-    local tx = x + 10 + col * 29
-    local ty = y + 5 + row * 13
-    drawScaled(g, Font, labels[i], tx, ty, 0.72)
+    local tx = x + 14 + col * 36
+    local ty = y + 8 + row * 16
+    if Font and type(Font.draw) == "function" then
+      g.setColor(0.08, 0.06, 0.05, 1)
+      Font.draw(labels[i], tx, ty)
+    end
     if i == index then
-      drawCodeScaled(g, Font, 0xED, tx - 7, ty, 0.72)
+      drawCodeScaled(g, Font, 0xED, tx - 10, ty, 1)
     end
   end
 end
@@ -178,49 +181,50 @@ local function moveName(battle, move)
 end
 
 local function drawMoves(g, Font, battle)
-  local x, y, w, h = 34, 96, 124, 46
-  box(g, x, y, w, h)
+  -- Diamond compass: direction matches slot. Opaque panel covers TYPE/PP ghosts.
+  --   U = 1, R = 2, L = 3, D = 4
   local rows = moveRows(battle)
   local index = battle.phase == "mimicSelect"
     and (battle.mimicIndex or 1) or (battle.moveIndex or 1)
-  for i = 1, math.min(4, #rows) do
-    local col = (i - 1) % 2
-    local row = math.floor((i - 1) / 2)
-    local cx = x + 3 + col * 60
-    local cy = y + 3 + row * 16
-    local selected = i == index
-    if selected then
-      g.setColor(0.18, 0.29, 0.48, 1)
-    else
-      g.setColor(0.90, 0.87, 0.76, 1)
-    end
-    g.rectangle("fill", cx, cy, 58, 15)
-    g.setColor(0.10, 0.08, 0.06, 1)
-    g.rectangle("line", cx + 0.5, cy + 0.5, 57, 14)
-    g.setColor(selected and 1 or 0.10, selected and 1 or 0.08,
-      selected and 1 or 0.06, 1)
-    drawScaled(g, Font,
-      fitText(Font, moveName(battle, rows[i]), 82), cx + 7, cy + 3, 0.62)
-    if i == index then
-      drawCodeScaled(g, Font, 0xED, cx + 1, cy + 3, 0.62)
-    elseif battle.moveSwapIndex == i then
-      drawCodeScaled(g, Font, 0xEC, cx + 1, cy + 3, 0.62)
-    end
+  local slots = {
+    { i = 1, label = "U", x = 44, y = 92 },
+    { i = 2, label = "R", x = 84, y = 106 },
+    { i = 3, label = "L", x = 4, y = 106 },
+    { i = 4, label = "D", x = 44, y = 120 },
+  }
+  g.setColor(0.96, 0.92, 0.82, 1)
+  g.rectangle("fill", 0, 64, 160, 80)
+  g.setColor(0.10, 0.07, 0.06, 1)
+  g.rectangle("line", 0.5, 64.5, 159, 79)
+  g.rectangle("line", 1.5, 65.5, 157, 77)
+  if Font and type(Font.draw) == "function" then
+    g.setColor(0.35, 0.30, 0.25, 1)
+    Font.draw("R-SHIFT PAUSE", 4, 68)
   end
-  if battle.phase == "moveSelect" then
-    local move = rows[index]
-    if move and Font and type(Font.draw) == "function" then
-      local def = battle.data and battle.data.moves and battle.data.moves[move.id]
-      local typeName = def and def.type and tostring(def.type):gsub("_TYPE$", "") or ""
-      local pp = tonumber(move.pp) or 0
-      local maxPP = def and ((def.pp or 0)
-        + (move.ppUps or 0) * math.floor((def.pp or 0) / 5)) or pp
+  for s = 1, #slots do
+    local slot = slots[s]
+    local move = rows[slot.i]
+    if move then
+      local selected = slot.i == index
+      local cx, cy, cw, ch = slot.x, slot.y, 72, 12
+      if selected then
+        g.setColor(0.16, 0.30, 0.55, 1)
+      else
+        g.setColor(0.99, 0.96, 0.88, 1)
+      end
+      g.rectangle("fill", cx, cy, cw, ch)
       g.setColor(0.10, 0.08, 0.06, 1)
-      g.line(x + 3, y + h - 11.5, x + w - 3, y + h - 11.5)
-      drawScaled(g, Font, fitText(Font, typeName, 72),
-        x + 5, y + h - 9, 0.58)
-      drawScaled(g, Font, ("PP %d/%d"):format(pp, maxPP),
-        x + 78, y + h - 9, 0.58)
+      g.rectangle("line", cx + 0.5, cy + 0.5, cw - 1, ch - 1)
+      local name = fitText(Font, moveName(battle, move), 52)
+      if Font and type(Font.draw) == "function" then
+        if selected then
+          g.setColor(1, 1, 1, 1)
+        else
+          g.setColor(0.08, 0.06, 0.05, 1)
+        end
+        Font.draw(slot.label, cx + 2, cy + 2)
+        Font.draw(name, cx + 12, cy + 2)
+      end
     end
   end
 end

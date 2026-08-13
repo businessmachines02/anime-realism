@@ -8007,9 +8007,11 @@ return function(mod)
   end
 
   hud.fieldPopupText = function(text)
-    local s = tostring(text or ""):gsub("\v", " "):gsub("%s+", " ")
+    local s = tostring(text or ""):gsub("\v", "\n")
       :match("^%s*(.-)%s*$") or ""
-    local upper = s:upper()
+    -- Keep short status callouts, but leave ordinary dialogue readable.
+    local flat = s:gsub("\n", " "):gsub("%s+", " ")
+    local upper = flat:upper()
     local stat = upper:match("^.-'S%s+(.+)%s+GREATLY FELL!?$")
         or upper:match("^.-'S%s+(.+)%s+FELL!?$")
     if stat then return stat .. " DOWN!" end
@@ -8020,8 +8022,8 @@ return function(mod)
     local move = upper:match("^.- USED%s+(.+)!$")
     if move then return move .. "!" end
     if upper:find("SUPER EFFECTIVE", 1, true) then return "SUPER EFFECTIVE!" end
-    if upper:find("NOT VERY EFFECTIVE", 1, true) then return "RESISTED!" end
-    if upper:find("CRITICAL HIT", 1, true) then return "CRITICAL!" end
+    if upper:find("NOT VERY EFFECTIVE", 1, true) then return "NOT VERY EFFECTIVE!" end
+    if upper:find("CRITICAL HIT", 1, true) then return "CRITICAL HIT!" end
     if upper:find("BUT IT MISSED", 1, true)
         or upper:find("ATTACK MISSED", 1, true) then
       return "MISSED!"
@@ -8056,14 +8058,15 @@ return function(mod)
     local g = love.graphics
     local narrator = (side == "narrator")
     local fieldToast = hud.fieldCompactActive(battle)
-    local maxInner = fieldToast and 96 or (narrator and 128 or 112)
-    local padX, padY = fieldToast and 3 or 4, fieldToast and 2 or 3
-    local lineH = fieldToast and 7 or 8
+    -- FIELD keeps a wide, readable bottom bubble (not a tiny tip).
+    local maxInner = fieldToast and 144 or (narrator and 128 or 112)
+    local padX, padY = fieldToast and 6 or 4, fieldToast and 4 or 3
+    local lineH = 8
     local lines = hud.wrapBubbleText(text, maxInner)
     if #lines == 0 then
       lines[1] = ""
     end
-    local maxLines = fieldToast and 2 or (narrator and 4 or 5)
+    local maxLines = fieldToast and 4 or (narrator and 4 or 5)
     if #lines > maxLines then
       local trimmed = {}
       for i = 1, maxLines - 1 do
@@ -8076,13 +8079,18 @@ return function(mod)
     for i = 1, #lines do
       contentW = math.max(contentW, Font.width(lines[i]))
     end
-    contentW = math.max(32, math.min(maxInner, contentW))
+    contentW = math.max(fieldToast and 120 or 32, math.min(maxInner, contentW))
     local bw = contentW + padX * 2
     local bh = padY * 2 + #lines * lineH
     local floorY = 142
     local x, y
     local anchorX, anchorY
-    if hud.fieldCompactActive(battle) and not narrator then
+    -- FIELD: pin to the bottom so multi-line toasts stay readable.
+    if fieldToast then
+      x = math.floor((160 - bw) / 2)
+      y = floorY - bh
+      if y < 1 then y = 1 end
+    elseif hud.fieldCompactActive(battle) and not narrator then
       local wanted = (side == "foe") and "enemy" or "player"
       local ow = battle.game and battle.game.overworld
       for i = 1, #(ow and ow.entities or {}) do
@@ -8094,7 +8102,9 @@ return function(mod)
         end
       end
     end
-    if anchorX then
+    if fieldToast then
+      -- already placed
+    elseif anchorX then
       x = math.floor(anchorX - bw / 2)
       y = math.floor(anchorY - bh - 9)
       x = math.max(1, math.min(159 - bw, x))
@@ -9644,7 +9654,10 @@ return function(mod)
             -- Gen 3 UI has multiple late foreground passes. Skipping its whole
             -- hook during FIELD is more reliable than patching individual
             -- captured drawers, and leaves BattleState/input ownership intact.
-            if entry.owner == "gen3_battle_ui" and not entry._arFieldUiSkip then
+            local skipFieldUi = entry.owner == "gen3_battle_ui"
+              or entry.owner == "move_inspector"
+              or entry.owner == "typed_move_colors"
+            if skipFieldUi and not entry._arFieldUiSkip then
               local inner = entry.callback
               if hookName == "render.hud" then
                 entry.callback = function(next, game, ...)

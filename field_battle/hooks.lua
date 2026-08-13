@@ -37,6 +37,22 @@ function Hooks.install(FBV, mod)
     end
   end
 
+  -- Latch Right Shift only (PAUSE into FIGHT/PKMN/ITEM/RUN).
+  do
+    local okG, Game = pcall(require, "src.core.Game")
+    if okG and type(Game) == "table" and type(Game.keypressed) == "function"
+        and not Game._arFbvRShiftLatch then
+      local origKey = Game.keypressed
+      function Game:keypressed(key, ...)
+        if key == "rshift" then
+          mod._arFieldShiftEdge = true
+        end
+        return origKey(self, key, ...)
+      end
+      Game._arFbvRShiftLatch = true
+    end
+  end
+
   local ok, BattleState = pcall(require, "src.battle.BattleState")
   if ok and type(BattleState) == "table" then
     if type(BattleState.bgMode) == "function" and not BattleState._arFbvBgMode then
@@ -142,15 +158,69 @@ function Hooks.install(FBV, mod)
       BattleState._arFbvWide = true
     end
 
-    if type(BattleState.update) == "function" and not BattleState._arFbvUpdate then
+    -- _arFbvUpdate18 rebinds even if an older FIELD update wrap was installed.
+    if type(BattleState.update) == "function" and not BattleState._arFbvUpdate18 then
       local origUpdate = BattleState.update
       function BattleState:update(dt, ...)
         if isFieldBattle(self) then
           self.showPlayerBack = false
           self.showEnemyTrainer = false
-          -- Jump straight to the directional move grid on the player's turn.
-          -- B still returns to FIGHT / PKMN / ITEM / RUN.
-          if self.phase == "menu" and not self.safari and not self.demo
+
+          local input = self.game and self.game.input
+
+          -- PAUSE = Right Shift only, and only at end-of-turn command time
+          -- (move list), matching normal Pokémon menu timing.
+          local shiftEdge = mod._arFieldShiftEdge == true
+          mod._arFieldShiftEdge = false
+          do
+            local down = false
+            if love and love.keyboard then
+              local function keyDown(name)
+                local okK, v = pcall(function()
+                  return love.keyboard.isDown(name)
+                end)
+                return okK and v and true or false
+              end
+              local function scanDown(name)
+                if type(love.keyboard.isScancodeDown) ~= "function" then
+                  return false
+                end
+                local okK, v = pcall(function()
+                  return love.keyboard.isScancodeDown(name)
+                end)
+                return okK and v and true or false
+              end
+              down = scanDown("rshift") or keyDown("rshift")
+            end
+            if not shiftEdge then
+              shiftEdge = down and not self._arFieldShiftHeld
+            end
+            self._arFieldShiftHeld = (down or shiftEdge) and true or false
+          end
+
+          local pauseEdge = shiftEdge
+          local swallowPause = false
+          local swallowB = false
+          local phaseBefore = self.phase
+          local atCommand = self.phase == "moveSelect" or self.phase == "menu"
+
+          if self.phase == "messages" then
+            self._arFieldCommandHold = nil
+          elseif self.phase == "moveSelect" and pauseEdge then
+            self.phase = "menu"
+            self.menuIndex = self.menuIndex or 1
+            self.moveSwapIndex = nil
+            self._arFieldCommandHold = true
+            swallowPause = true
+          elseif self.phase == "menu" and self._arFieldCommandHold and pauseEdge then
+            self.phase = "moveSelect"
+            local n = self.player and self.player.curMoves and #self.player.curMoves or 1
+            self.moveIndex = math.min(self.moveIndex or 1, math.max(1, n))
+            self.moveSwapIndex = nil
+            self._arFieldCommandHold = nil
+            swallowPause = true
+          elseif self.phase == "menu" and not self._arFieldCommandHold
+              and not self.safari and not self.demo
               and self.player and self.player.curMoves
               and #(self.player.curMoves) > 0 then
             self.phase = "moveSelect"
@@ -158,7 +228,39 @@ function Hooks.install(FBV, mod)
             self.moveIndex = math.min(self.moveIndex or 1, n)
             self.moveSwapIndex = nil
           end
-          -- Prefer present-clock tick (deduped) so menus can't starve idle.
+
+          -- Keep B from flickering the command menu; R-Shift is PAUSE.
+          if self.phase == "moveSelect" then
+            swallowB = true
+          end
+
+          local instantIdx = nil
+          if not self._arFieldCommandHold
+              and (self.phase == "moveSelect" or self.phase == "mimicSelect")
+              and input and type(input.wasPressed) == "function" then
+            local moves = self.phase == "mimicSelect"
+              and (self.mimicMoves or {})
+              or (self.player and self.player.curMoves or {})
+            if input:wasPressed("up") and moves[1] then
+              instantIdx = 1
+            elseif input:wasPressed("right") and moves[2] then
+              instantIdx = 2
+            elseif input:wasPressed("left") and moves[3] then
+              instantIdx = 3
+            elseif input:wasPressed("down") and moves[4] then
+              instantIdx = 4
+            end
+            if instantIdx then
+              if self.phase == "mimicSelect" then
+                self.mimicIndex = instantIdx
+              else
+                self.moveIndex = instantIdx
+              end
+              self._arFieldInstantMove = true
+              self._arFieldCommandHold = nil
+            end
+          end
+
           if type(FBV.tickPresent) == "function" then
             pcall(FBV.tickPresent, self.game, dt)
           elseif type(FBV.tickActive) == "function" then
@@ -166,11 +268,67 @@ function Hooks.install(FBV, mod)
           else
             pcall(FBV.tick, self, dt)
           end
+
+          local result
+          if (self._arFieldInstantMove or swallowPause or swallowB) and input then
+            local origWasPressed = input.wasPressed
+            local injectA = self._arFieldInstantMove and true or false
+            input.wasPressed = function(inp, key)
+              if injectA and key == "a" then
+                return true
+              end
+              if injectA and (key == "up" or key == "down"
+                  or key == "left" or key == "right") then
+                return false
+              end
+              if swallowB and key == "b" then
+                return false
+              end
+              if swallowPause and key == "select" then
+                return false
+              end
+              return origWasPressed(inp, key)
+            end
+            local okU, a, b, c = pcall(origUpdate, self, dt, ...)
+            input.wasPressed = origWasPressed
+            self._arFieldInstantMove = nil
+            if not okU then
+              error(a, 0)
+            end
+            result = { a, b, c }
+          else
+            result = { origUpdate(self, dt, ...) }
+          end
+
+          -- Undo any non-pause menu open (e.g. missed B swallow).
+          if phaseBefore == "moveSelect" and self.phase == "menu"
+              and not self._arFieldCommandHold then
+            self.phase = "moveSelect"
+          end
+          if phaseBefore == "menu" and self.phase == "moveSelect"
+              and atCommand then
+            self._arFieldCommandHold = nil
+          end
+          return result[1], result[2], result[3]
         end
         return origUpdate(self, dt, ...)
       end
+      BattleState._arFbvUpdate18 = true
       BattleState._arFbvUpdate = true
     end
+  end
+
+  -- Draw FIELD chrome last so Move Inspector / typed-move panels cannot cover it.
+  if mod.hooks and type(mod.hooks.wrap) == "function"
+      and not mod._arFbvOverlayTop then
+    mod._arFbvOverlayTop = true
+    mod.hooks:wrap("battle.overlay", function(next, battle)
+      next(battle)
+      if battle and isFieldBattle(battle)
+          and FBV and type(FBV.drawUI) == "function" then
+        FBV.drawUI(battle)
+      end
+    end, 12000)
   end
 
   if mod.hooks and type(mod.hooks.wrap) == "function"

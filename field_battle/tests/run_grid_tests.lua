@@ -184,6 +184,19 @@ function tests.compact_field_ui_tracks_engine_cursors()
     "battler entities own HP bars while command panel is visible")
   eq(state.menuIndex, 3, "command cursor remains BattleState-owned")
   battle.phase, battle.moveIndex = "moveSelect", 4
+  battle.player = {
+    curMoves = {
+      { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+    },
+  }
+  battle.data = {
+    moves = {
+      TACKLE = { name = "TACKLE" },
+      GROWL = { name = "GROWL" },
+      TAIL_WHIP = { name = "TAIL WHIP" },
+      SCRATCH = { name = "SCRATCH" },
+    },
+  }
   state = UI.layoutState(battle)
   truthy(state.showMoves and not state.showCommand, "move panel replaces command panel")
   eq(state.moveIndex, 4, "move cursor remains BattleState-owned")
