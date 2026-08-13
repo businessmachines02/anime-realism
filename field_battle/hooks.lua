@@ -1,5 +1,17 @@
 -- Field battle — BattleState presentation hooks + events + standalone intercept.
--- FIELD: classic battle mon pics stay off; cast lives as OW sprites on the map.
+--
+-- Responsibilities:
+--   • Hide classic battle pics / HUDs / anim layer while FIELD is live
+--   • Drive present-clock ticks so idle bob keeps moving under menus
+--   • FIELD input UX on top of vanilla BattleState phases:
+--       - Auto-open the move diamond on the player's turn
+--       - U/R/L/D instantly cast that slot (inject A)
+--       - Right Shift = PAUSE into FIGHT/PKMN/ITEM/RUN (end of turn only)
+--   • Redraw compact UI last so Move Inspector / typed-move panels cannot cover it
+--   • Forward battle.* cues into Lifecycle / Cues / Projectiles
+--
+-- Install is idempotent via _arFbv* guards; bump the update guard when the
+-- BattleState:update wrap must replace an older FIELD wrap after hot reload.
 
 local Hooks = {}
 
@@ -53,6 +65,7 @@ function Hooks.install(FBV, mod)
     end
   end
 
+  -- ---- BattleState presentation wraps (pics / HUD / world bg) ----
   local ok, BattleState = pcall(require, "src.battle.BattleState")
   if ok and type(BattleState) == "table" then
     if type(BattleState.bgMode) == "function" and not BattleState._arFbvBgMode then
@@ -158,6 +171,7 @@ function Hooks.install(FBV, mod)
       BattleState._arFbvWide = true
     end
 
+    -- ---- FIELD turn UX (pause + directional cast) ----
     -- _arFbvUpdate18 rebinds even if an older FIELD update wrap was installed.
     if type(BattleState.update) == "function" and not BattleState._arFbvUpdate18 then
       local origUpdate = BattleState.update
@@ -204,15 +218,20 @@ function Hooks.install(FBV, mod)
           local phaseBefore = self.phase
           local atCommand = self.phase == "moveSelect" or self.phase == "menu"
 
+          -- Prefer the move diamond on the player's turn. `_arFieldCommandHold`
+          -- keeps an intentional PAUSE on FIGHT/PKMN/ITEM/RUN; without it we
+          -- auto-jump menu → moveSelect every frame.
           if self.phase == "messages" then
             self._arFieldCommandHold = nil
           elseif self.phase == "moveSelect" and pauseEdge then
+            -- End-of-turn PAUSE: neutral command menu.
             self.phase = "menu"
             self.menuIndex = self.menuIndex or 1
             self.moveSwapIndex = nil
             self._arFieldCommandHold = true
             swallowPause = true
           elseif self.phase == "menu" and self._arFieldCommandHold and pauseEdge then
+            -- Right Shift again resumes the move diamond.
             self.phase = "moveSelect"
             local n = self.player and self.player.curMoves and #self.player.curMoves or 1
             self.moveIndex = math.min(self.moveIndex or 1, math.max(1, n))
@@ -230,10 +249,12 @@ function Hooks.install(FBV, mod)
           end
 
           -- Keep B from flickering the command menu; R-Shift is PAUSE.
+          -- (B still pauses dialogue toasts via main.lua during messages.)
           if self.phase == "moveSelect" then
             swallowB = true
           end
 
+          -- U/R/L/D → that move slot, then inject A so BattleState resolves it.
           local instantIdx = nil
           if not self._arFieldCommandHold
               and (self.phase == "moveSelect" or self.phase == "mimicSelect")
@@ -318,6 +339,7 @@ function Hooks.install(FBV, mod)
     end
   end
 
+  -- ---- Overlay / visibility hooks ----
   -- Draw FIELD chrome last so Move Inspector / typed-move panels cannot cover it.
   if mod.hooks and type(mod.hooks.wrap) == "function"
       and not mod._arFbvOverlayTop then
@@ -354,6 +376,7 @@ function Hooks.install(FBV, mod)
     end)
   end
 
+  -- ---- Present clock (keep bob alive under menus) ----
   local function presentTick(game, dt)
     if not FBV.enabled(mod) then
       return
@@ -446,6 +469,7 @@ function Hooks.install(FBV, mod)
     end)
   end
 
+  -- ---- Battle events → Lifecycle / Cues / Projectiles ----
   if mod.events and type(mod.events.on) == "function" and not mod._arFbvEvents then
     mod._arFbvEvents = true
 

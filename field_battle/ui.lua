@@ -1,5 +1,15 @@
--- Reference-style FIELD UI.
--- Draw-only: BattleState still owns phases, cursors, input, and turn logic.
+-- Field battle — compact reference-style chrome (draw-only).
+--
+-- BattleState still owns phases, cursors, input, and turn resolution.
+-- This module only paints:
+--   menu         → FIGHT / PKMN / ITEM / RUN (or Safari set)
+--   moveSelect   → diamond U/R/L/D move compass (opaque wipe covers TYPE/PP)
+--   messages     → fallback dialogue box when speech toasts are not active
+--
+-- World-anchored HP bars are drawn from the battler entity path (sprites),
+-- not from UI.draw — drawWorldHP is kept as a helper if needed.
+--
+-- Input that opens PAUSE / instant-casts lives in hooks.lua, not here.
 
 local UI = {}
 
@@ -148,6 +158,7 @@ local function commandLabels(battle)
 end
 
 local function drawCommand(g, Font, battle)
+  -- Compact FIGHT/PKMN/ITEM/RUN (or Safari) panel — opened by Right Shift PAUSE.
   local x, y, w, h = 78, 100, 80, 42
   box(g, x, y, w, h)
   local labels = commandLabels(battle)
@@ -257,6 +268,7 @@ local function drawDialogue(g, Font, battle)
 end
 
 function UI.draw(battle)
+  -- Paint at most one bottom chrome layer per frame (command XOR moves XOR dialogue).
   if not (UI.active(battle) and love and love.graphics) then
     return
   end

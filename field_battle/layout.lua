@@ -1,10 +1,12 @@
 -- Field battle — layout helpers (axis, poses, foe find).
-
-local Layout = {}
-
+--
 -- Compact 5×3 pad along the fight axis:
 --   trainer/player @ -2, player mon @ -1, center, enemy mon @ +1, foe @ +2
 -- The short footprint keeps the cast readable in tight overworld locations.
+-- Survey may expand walkable cells beyond this formation for free movement.
+
+local Layout = {}
+
 Layout.HALF = 2
 Layout.MON = 1
 Layout.LATERAL = 1

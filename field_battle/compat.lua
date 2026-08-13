@@ -1,8 +1,9 @@
 -- Field battle — gate foreign staged battles when FIELD is on.
 --
--- We only prevent OverworldBattle from *staging* a fight (begin/ensure/update
--- session). We do NOT force the user's 3D-BTL / VOXEL options off — free-roam
--- potato_voxel must keep drawing the extruded map under FIELD.
+-- We only prevent OverworldBattle / Dramatic Shape from *staging* a fight
+-- (begin/ensure/update session). We do NOT force the user's 3D-BTL / VOXEL
+-- options off — free-roam potato_voxel must keep drawing the extruded map
+-- under FIELD. On battle exit, Lifecycle restores the pre-battle voxel level.
 
 local Compat = {}
 

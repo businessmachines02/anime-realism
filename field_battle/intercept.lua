@@ -7,6 +7,9 @@
 --     stack:top() == battle and draws move names / command menu
 --   • overworld stays underneath (frozen — not top of stack)
 --   • finish pops the battle host only; no white battleReturn fade
+--
+-- Flags stamped on the battle: _arAnimeField, _arFieldCombat, _arFieldStandalone.
+-- hooks.lua and ui.lua key off those to suppress classic chrome.
 
 local Intercept = {}
 

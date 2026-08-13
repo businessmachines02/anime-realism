@@ -1,4 +1,8 @@
 -- Field battle — classic move FX affine map onto live pad centers.
+--
+-- Gen1 battle anims are authored in classic screen space (player/enemy pic
+-- anchors). We map those offsets onto the live overworld pad centers so FX
+-- land on the FIELD sprites without a staged arena.
 
 local Coords = require("coords")
 

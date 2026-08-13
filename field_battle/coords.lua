@@ -1,5 +1,8 @@
 -- Field battle — pad ↔ world ↔ pixel conversions.
--- Pad cell (u, v) is truth in Live; pixels are presentation only.
+--
+-- Pad cell (u, v) is truth in Live; world cells (cellX/cellY) and pixels
+-- (px/py) are derived for drawing and entity sync. axes(sx,sy) builds the
+-- fight-forward (u) and lateral (v) basis from the player→foe vector.
 
 local Coords = {}
 Coords.CELL = 16

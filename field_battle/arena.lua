@@ -1,7 +1,8 @@
 -- Field battle — themed pad on the live overworld (session-only).
 --
 -- Fight stays on the real map. Cover / grass / ponds are generated from the
--- location kit as overlay props on pad cells. Never scans or writes live tiles.
+-- location kit as overlay props on pad cells (`_arFieldCover`). Never scans
+-- or writes live tiles. Cleared on Lifecycle.finish.
 
 local Themes = require("themes")
 local Coords = require("coords")

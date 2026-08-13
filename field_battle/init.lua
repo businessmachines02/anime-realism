@@ -4,9 +4,31 @@
 -- Cast occupies pad cells; pixels lerp toward padToPx. Present clock keeps
 -- idle/attack/cast anims advancing while menus sit on top of BattleState.
 --
+-- Sibling packages:
 --   immersion/     → HP/EXP hide + rewards
 --   battle/        → traditional battle systems
 --   field_battle/  → this package
+--
+-- Module map (loaded below):
+--   intercept   push BattleState as a transparent stack host (no wipe)
+--   lifecycle   Idle→Armed→Staging→Live→Finishing session owner
+--   hooks       BattleState draw/input wraps + battle.* events
+--   ui          compact command / diamond moves / dialogue chrome
+--   survey      read-only walkable envelope around the encounter
+--   grid        pad occupancy + step helpers (pad is truth)
+--   cast        stage trainers + mons onto pad homes
+--   cues        arFieldCue → step-in / cast-in-place choreography
+--   sprites     OW follower sheets as battlers (+ bob / motion)
+--   projectiles world-space FX entities (camera/voxel aligned)
+--   anims       classic move FX affine → live pad centers
+--   arena       themed overlay props on pad cells (session-only)
+--   themes      map-id → kit (cover/grass/pond colors)
+--   layout      5×3 formation along the fight axis
+--   coords      pad ↔ world ↔ pixel conversions
+--   compat      suppress foreign staged battles while FIELD is on
+--   debug       optional pad occupancy overlay
+--
+-- Public surface is the FBV table returned from this loader.
 
 return function(env)
   local loadFile = env and env.load

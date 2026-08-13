@@ -1,6 +1,8 @@
 -- Field battle — arFieldCue → grid steps + cast anims.
--- Physical attacks step in toward the foe; specials cast in place.
--- Hits may knock the target back one cell (both categories).
+--
+-- Physical attacks step in toward the foe; specials / status cast in place.
+-- Hits may knock the target back one cell. Cue dedupe prevents double-steps
+-- when multiple battle events fire for the same move beat.
 
 local Cues = {}
 

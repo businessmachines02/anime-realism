@@ -1,10 +1,27 @@
--- Field battle — Idle → Armed → Staging → Live → Finishing.
+-- Field battle — session owner (Idle → Armed → Staging → Live → Finishing).
+--
+-- One weak-keyed session per BattleState. Lifecycle owns:
+--   begin/finish   survey envelope, stage cast, camera, voxel snapshot/restore
+--   tick/tickPresent  bob, steps, projectiles, trainer dodge-aside
+--   syncMons / stagePlayerMon / capture / despawn
+--   onTurnStarted / onTurnEnded / react (cue fan-out)
+--
+-- States:
+--   Idle       no active FIELD session
+--   Armed      battle flagged; waiting to stage onto the map
+--   Staging    cast entities / grid / arena props being placed
+--   Live       combat presentation running on the overworld
+--   Finishing  teardown; restore camera / voxel / entity snapshots
+--
+-- Present clock (tickPresent) advances anims even while BattleState menus
+-- own input, so idle bob does not freeze under the move diamond.
 
 local Coords = require("coords")
 
 local Lifecycle = {}
 Lifecycle.CAMERA_UI_BIAS_Y = 18
 
+-- Weak keys: sessions die with their BattleState without explicit cleanup races.
 local byBattle = setmetatable({}, { __mode = "k" })
 
 Lifecycle.STATE = {
@@ -267,6 +284,8 @@ local function combatReadyForPlayerReveal(battle)
 end
 
 function Lifecycle.begin(battle, mod, deps)
+  -- Stage a FIELD session onto the live overworld: survey walkable cells,
+  -- build grid/cast/arena props, snapshot voxel so free-roam restores cleanly.
   if not battle then
     return false
   end
@@ -431,7 +450,8 @@ function Lifecycle.begin(battle, mod, deps)
   battle.isOpaque = false
   battle.BG_WORLD_DIM = 0
   battle.showPlayerBack = false
-  battle.showEnemyTrainer = false
+  -- TODO: Remove this once we have a proper enemy trainer
+  battle.showEnemyTrainer = true
   if battle.introSlide and battle.introSlide > 0 then
     battle.introSlide = 0
   end
@@ -939,6 +959,9 @@ function Lifecycle.tickActive(game, dt, deps)
 end
 
 function Lifecycle.tick(battle, dt, deps)
+  -- Per-battle Live tick: idle wander, trainer clear, switches, cast lerp,
+  -- projectile step, and anim-transform cache. Prefer tickPresent from
+  -- drivers that need menu-safe bob advancement.
   local session = Lifecycle.get(battle)
   if not (session and session.live) then
     return
@@ -1056,6 +1079,7 @@ function Lifecycle.tick(battle, dt, deps)
 end
 
 function Lifecycle.finish(battle, deps)
+  -- Tear down Live cast, restore entity/camera/voxel snapshots, clear session.
   local session = battle and byBattle[battle]
   if not session then
     return

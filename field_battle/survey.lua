@@ -1,5 +1,8 @@
 -- Field battle — read-only walkability survey for bounded free-tile combat.
--- The live map is queried once at staging; it is never modified.
+--
+-- Queried once at staging from the live map (collision / water / warps /
+-- blocking entities). Results become grid.blocked. The map itself is never
+-- edited. EXTRA_U / HALF_V grow the fight envelope beyond the 5×3 formation.
 
 local Coords = require("coords")
 

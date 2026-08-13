@@ -1,6 +1,8 @@
 -- Field battle — world-space projectiles for hybrid flat/voxel maps.
--- These are ordinary overworld draw entities, so the active world camera and
--- voxel renderer remain authoritative. No separate staged arena is required.
+--
+-- Ordinary overworld draw entities, so the active world camera and voxel
+-- renderer remain authoritative. No separate staged arena is required.
+-- Spawned from battle.move_used / ball_thrown cues via hooks.lua.
 
 local Coords = require("coords")
 

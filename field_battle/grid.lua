@@ -1,5 +1,9 @@
 -- Field battle — pad cell occupancy + step helpers.
--- Authoritative position is pad (u, v); pixels follow via padToPx + lerp.
+--
+-- Authoritative position is pad (u, v). Pixels are presentation only and
+-- follow via Coords.padToPx + Cast lerp. Occupancy (`grid.occ`) and
+-- walkability (`grid.blocked` from Survey) gate steps; trainers may
+-- dodge-aside when a mon steps onto/beside their cell.
 
 local Coords = require("coords")
 

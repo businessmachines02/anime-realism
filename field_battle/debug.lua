@@ -1,4 +1,9 @@
 -- Field battle — dev-only pad grid overlay (occupancy, blocked, homes).
+-- Enable via anime_realism `dev_overlay`. Colors:
+--   red tint     blocked (survey)
+--   yellow tint  occupied
+--   green tint   home pads
+--   faint fill   walkable empty
 
 local Coords = require("coords")
 

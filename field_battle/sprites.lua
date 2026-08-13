@@ -1,6 +1,9 @@
 -- Field battle — OW follower sprites as battlers + motion.
--- Prefer PokePCFollowers exports.assetPath + Assets.image (same as the
--- walking follower). FIELD always uses animated 2D overworld art.
+--
+-- Prefer PokePCFollowers / FOLLOWERS_EX exports.assetPath + Assets.image
+-- (same loader as walking followers). FIELD always uses animated 2D
+-- overworld art — never voxel mon meshes. Entity draw also owns the tiny
+-- world-anchored HP bar above each battler.
 
 local Sprites = {}
 
