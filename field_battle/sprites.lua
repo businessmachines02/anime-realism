@@ -284,7 +284,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._fieldScreenX, self._fieldScreenY = sx, sy
       end
     end
-    drawHealthBar(self, camX, camY)
+    -- HP bars paint from UI.drawWorldHP (battle overlay) so voxel cast still
+    -- shows them when entity draw() is skipped.
   end
 
   function ent:setPad(u, v, face, snap)

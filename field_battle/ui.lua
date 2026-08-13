@@ -6,8 +6,8 @@
 --   moveSelect   → diamond U/R/L/D move compass (opaque wipe covers TYPE/PP)
 --   messages     → fallback dialogue box when speech toasts are not active
 --
--- World-anchored HP bars are drawn from the battler entity path (sprites),
--- not from UI.draw — drawWorldHP is kept as a helper if needed.
+-- World-anchored HP bars are painted from UI.draw (battle overlay) so they
+-- still show when the voxel pass skips entity draw().
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -288,6 +288,9 @@ function UI.draw(battle)
     local Font = font()
     local state = UI.layoutState(battle)
     g.push("all")
+    -- World HP bars on the overlay so voxel/3D cast still shows them (entity
+    -- draw() may not run on the battle HUD pass).
+    drawWorldHP(g, battle)
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then

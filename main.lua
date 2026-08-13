@@ -6647,6 +6647,12 @@ return function(mod)
             if playerStatusLocked(battle) then
                 return false
             end
+            local state = momentumState(battle)
+            -- One REACT! per turn. finishCalloutPick → origRunDamaging used to
+            -- re-offer under ALWAYS (especially after TAKE COVER soaks the hit).
+            if state.pickOfferedThisTurn or state.suppressReactDefer then
+                return false
+            end
             -- Focus trench: auto-hold in runDamaging (no REACT menu).
             if ReactiveDefense then
                 local side = ReactiveDefense.sideState(battle, true)
@@ -6822,6 +6828,9 @@ return function(mod)
                 end
             end
             state.suppressReactDefer = nil
+            -- Keep pickOfferedThisTurn set so ALWAYS can't re-open REACT! this turn
+            -- after TAKE COVER / BRACE resolve through origRunDamaging.
+            state.pickOfferedThisTurn = true
             publishChipState(battle)
         end
 
