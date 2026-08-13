@@ -7891,6 +7891,19 @@ return function(mod)
     return type(FieldBattleViewer.shouldUse) == "function"
       and FieldBattleViewer.shouldUse(mod, battle)
   end
+  hud.fieldBattleInGame = function(game)
+    local states = game and game.stack and game.stack.states
+    if type(states) ~= "table" then
+      return nil
+    end
+    for i = #states, 1, -1 do
+      local state = states[i]
+      if hud.fieldCompactActive(state) then
+        return state
+      end
+    end
+    return nil
+  end
   -- SPEECH BUBBLE mode: all battle dialogue rides in bubbles; classic box hidden.
   hud.bubbleSideActive = function(battle)
     if not opt("speech_bubbles") or type(battle) ~= "table" then
@@ -9484,6 +9497,28 @@ return function(mod)
               or entry.owner == nil
               or type(entry.owner) == "string" then
               hud.patchCompatUiFn(entry.callback, seen)
+            end
+            -- Gen 3 UI has multiple late foreground passes. Skipping its whole
+            -- hook during FIELD is more reliable than patching individual
+            -- captured drawers, and leaves BattleState/input ownership intact.
+            if entry.owner == "gen3_battle_ui" and not entry._arFieldUiSkip then
+              local inner = entry.callback
+              if hookName == "render.hud" then
+                entry.callback = function(next, game, ...)
+                  if hud.fieldBattleInGame(game) then
+                    return next(game, ...)
+                  end
+                  return inner(next, game, ...)
+                end
+              else
+                entry.callback = function(next, battle, ...)
+                  if hud.fieldCompactActive(battle) then
+                    return next(battle, ...)
+                  end
+                  return inner(next, battle, ...)
+                end
+              end
+              entry._arFieldUiSkip = true
             end
           end
         end

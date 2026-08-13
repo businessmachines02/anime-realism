@@ -142,6 +142,41 @@ do
   end
 end
 
+local function healthRatio(battler)
+  local mon = battler and battler.mon
+  local maxHP = mon and mon.stats and tonumber(mon.stats.hp) or 1
+  local hp = tonumber(battler and battler.shownHP) or tonumber(mon and mon.hp) or 0
+  return math.max(0, math.min(1, hp / math.max(1, maxHP)))
+end
+
+local function drawHealthBar(ent, camX, camY)
+  if not (ent._battleBattler and love and love.graphics) then return end
+  local g = love.graphics
+  local ratio = healthRatio(ent._battleBattler)
+  local x = math.floor((ent.px or 0) - (camX or 0) + 8.5)
+  local y = math.floor((ent.py or 0) - (camY or 0)
+    - (ent._fieldBarLift or 8) + 0.5)
+  local w = 18
+  g.setColor(0.08, 0.07, 0.06, 1)
+  g.rectangle("fill", x - w / 2, y, w, 4)
+  g.setColor(0.94, 0.91, 0.77, 1)
+  g.rectangle("fill", x - w / 2 + 1, y + 1, w - 2, 2)
+  local fill = math.floor((w - 2) * ratio + 0.5)
+  if fill > 0 then
+    if ratio <= 0.2 then
+      g.setColor(0.82, 0.16, 0.12, 1)
+    elseif ratio <= 0.5 then
+      g.setColor(0.92, 0.62, 0.10, 1)
+    else
+      g.setColor(0.20, 0.68, 0.27, 1)
+    end
+    g.rectangle("fill", x - w / 2 + 1, y + 1, fill, 2)
+  end
+  g.setColor(0.08, 0.07, 0.06, 1)
+  g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+  g.setColor(1, 1, 1, 1)
+end
+
 local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, grid)
   local padU, padV
   local basePx, basePy
@@ -237,6 +272,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     else
       drawBody()
     end
+    drawHealthBar(self, camX, camY)
   end
 
   function ent:setPad(u, v, face, snap)
@@ -525,6 +561,14 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   return ent
 end
 
+local function finalizeEntity(ent, battler, barLift)
+  if ent then
+    ent._battleBattler = battler
+    ent._fieldBarLift = barLift or 8
+  end
+  return ent
+end
+
 local function picDrawer(img, scale)
   scale = scale or 1
   local angles = {
@@ -555,8 +599,8 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
     if type(img) == "userdata" or type(img) == "table" then
       local iw = (img.getWidth and img:getWidth()) or 56
       local scale = (iw > 40) and 0.55 or 1
-      return buildEntity(side, cellX, cellY, facing, species,
-        picDrawer(img, scale), "stadium", grid)
+      return finalizeEntity(buildEntity(side, cellX, cellY, facing, species,
+        picDrawer(img, scale), "stadium", grid), battler, 12)
     end
   end
 
@@ -578,7 +622,8 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
         if okSp and sprite then
           local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
           ent.sprite = sprite
-          return ent
+          local lift = (img:getWidth() >= 32 and img:getHeight() >= 192) and 24 or 8
+          return finalizeEntity(ent, battler, lift)
         end
       end
       -- Manual sheet blit if SpriteRenderer fails.
@@ -615,7 +660,9 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
           love.graphics.draw(img, quads[frame], x, y)
         end
       end
-      return buildEntity(side, cellX, cellY, facing, species, drawer, "ow", grid)
+      return finalizeEntity(
+        buildEntity(side, cellX, cellY, facing, species, drawer, "ow", grid),
+        battler, (fh >= 32) and 24 or 8)
     end
     print("[anime_realism] field_battle: Assets.image failed for " .. tostring(path))
   else
@@ -632,7 +679,7 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
           and tostring(npc._pokepcFollowerSpecies):upper() == tostring(species):upper() then
         local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
         ent.sprite = npc.sprite
-        return ent
+        return finalizeEntity(ent, battler, 24)
       end
     end
   end
@@ -651,7 +698,9 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
     love.graphics.rectangle("fill", x + 1, y + 1, 14, 14)
     love.graphics.setColor(1, 1, 1, 1)
   end
-  return buildEntity(side, cellX, cellY, facing, species, drawer, "placeholder", grid)
+  return finalizeEntity(
+    buildEntity(side, cellX, cellY, facing, species, drawer, "placeholder", grid),
+    battler, 8)
 end
 
 return Sprites

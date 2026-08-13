@@ -77,7 +77,7 @@ function UI.layoutState(battle)
   local phase = battle and battle.phase or ""
   return {
     phase = phase,
-    showHUD = battle ~= nil,
+    showHUD = false,
     showCommand = phase == "menu",
     showMoves = phase == "moveSelect" or phase == "mimicSelect",
     showDialogue = phase == "messages",
@@ -247,7 +247,6 @@ function UI.draw(battle)
   local Font = font()
   local state = UI.layoutState(battle)
   g.push("all")
-  drawWorldHP(g, battle)
   if state.showCommand then
     drawCommand(g, Font, battle)
   elseif state.showMoves then

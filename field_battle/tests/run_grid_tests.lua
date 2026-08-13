@@ -180,7 +180,8 @@ end
 function tests.compact_field_ui_tracks_engine_cursors()
   local battle = { phase = "menu", menuIndex = 3 }
   local state = UI.layoutState(battle)
-  truthy(state.showHUD and state.showCommand, "field command HUD visible")
+  truthy(not state.showHUD and state.showCommand,
+    "battler entities own HP bars while command panel is visible")
   eq(state.menuIndex, 3, "command cursor remains BattleState-owned")
   battle.phase, battle.moveIndex = "moveSelect", 4
   state = UI.layoutState(battle)
@@ -413,6 +414,8 @@ function tests.sprite_cast_and_animation()
   local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
 
   truthy(player and enemy, "stage both battlers")
+  eq(player._battleBattler, battle.player, "player bar binds live battler")
+  eq(enemy._battleBattler, battle.enemy, "enemy bar binds live battler")
   eq(player.padU, grid.home.player.u, "player starts at home u")
   eq(enemy.padU, grid.home.enemy.u, "enemy starts at home u")
   eq(grid.occ[Coords.key(player.padU, player.padV)], player.id,
