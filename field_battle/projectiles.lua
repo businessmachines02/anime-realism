@@ -1,9 +1,8 @@
 -- Field battle — world-space projectiles for hybrid flat/voxel maps.
 --
--- Drawn from Lifecycle.drawWorldOverlay, not ow.entities. Dramatic Shape's
--- voxel pass calls e:pose() then sprite.def; a nil sprite wedges the 3D
--- canvas for the rest of the session. Spawned from battle.move_used /
--- ball_thrown cues via hooks.lua.
+-- Simulated in world pixels; painted on the battle UI overlay with
+-- world→UI mapping (same as HP bars) so FX survive 3D/world overrides.
+-- Kept off ow.entities: Dramatic Shape's voxel pass wedges on nil sprites.
 
 local Coords = require("coords")
 
@@ -88,16 +87,18 @@ local function drawMove(g, p, x, y)
   g.circle("fill", x, y, 2)
 end
 
-local function drawEffect(g, p, x, y)
+local function drawEffect(g, p, x, y, ox, oy)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local t = math.min(1, (p.age or 0) / math.max(0.01, p.duration or 1))
+  ox = ox or x
+  oy = oy or y
   if p.style == "beam" then
     g.setColor(c[1], c[2], c[3], 0.34)
     g.setLineWidth(5)
-    g.line((p.sx or 0) - (p.camX or 0), (p.sy or 0) - (p.camY or 0), x, y)
+    g.line(ox, oy, x, y)
     g.setColor(1, 1, 1, 0.9)
     g.setLineWidth(2)
-    g.line((p.sx or 0) - (p.camX or 0), (p.sy or 0) - (p.camY or 0), x, y)
+    g.line(ox, oy, x, y)
   elseif p.style == "area" then
     local radius = 3 + math.sin(t * math.pi) * (p.radius or 18)
     g.setColor(c[1], c[2], c[3], 0.30 * (1 - t))
@@ -120,10 +121,10 @@ local function drawEffect(g, p, x, y)
     end
   elseif p.style == "heal" then
     for i = 1, 3 do
-      local ox = (i - 2) * 5
+      local hx = (i - 2) * 5
       g.setColor(c[1], c[2], c[3], 1 - t)
-      g.rectangle("fill", x + ox - 1, y + 7 - t * 18, 3, 7)
-      g.rectangle("fill", x + ox - 3, y + 9 - t * 18, 7, 3)
+      g.rectangle("fill", x + hx - 1, y + 7 - t * 18, 3, 7)
+      g.rectangle("fill", x + hx - 3, y + 9 - t * 18, 7, 3)
     end
   end
 end
@@ -172,18 +173,26 @@ local function spawn(session, spec)
   function p:pose()
     return nil, self.px, self.py, "down", 0, false
   end
-  function p:draw(camX, camY)
+  -- camX/camY: world camera. mapFn(wx, wy) → UI pixels when painting overlay.
+  function p:draw(camX, camY, mapFn)
     if self._removed or not (love and love.graphics) then
       return
     end
     local g = love.graphics
-    self.camX, self.camY = camX or 0, camY or 0
-    local x = (self.px or 0) - (camX or 0)
-    local y = (self.py or 0) - (camY or 0)
+    camX, camY = camX or 0, camY or 0
+    self.camX, self.camY = camX, camY
+    local x = (self.px or 0) - camX
+    local y = (self.py or 0) - camY
+    local ox = (self.sx or 0) - camX
+    local oy = (self.sy or 0) - camY
+    if type(mapFn) == "function" then
+      x, y = mapFn(x, y)
+      ox, oy = mapFn(ox, oy)
+    end
     if self.kind == "ball" then
       drawBall(g, x, y)
     elseif self.kind == "effect" then
-      drawEffect(g, self, x, y)
+      drawEffect(g, self, x, y, ox, oy)
     else
       drawMove(g, self, x, y)
     end
@@ -196,7 +205,7 @@ local function spawn(session, spec)
   return p
 end
 
-function Projectiles.draw(session, camX, camY)
+function Projectiles.draw(session, camX, camY, mapFn)
   local list = session and session.projectiles
   if type(list) ~= "table" then
     return
@@ -204,9 +213,30 @@ function Projectiles.draw(session, camX, camY)
   for i = 1, #list do
     local p = list[i]
     if p and not p._removed and type(p.draw) == "function" then
-      p:draw(camX, camY)
+      p:draw(camX, camY, mapFn)
     end
   end
+end
+
+--- Paint on the 160×144 battle overlay (world→UI mapped).
+function Projectiles.drawUi(session, battle)
+  if not (session and session.live) then
+    return
+  end
+  local ow = battle and battle.game and battle.game.overworld
+  local cam = ow and ow.camera
+  if not cam then
+    return
+  end
+  local camX, camY = cam.x or 0, cam.y or 0
+  local ren = battle.game and battle.game.renderer
+  local mapFn = nil
+  if type(Coords.worldViewToUi) == "function" then
+    mapFn = function(wx, wy)
+      return Coords.worldViewToUi(wx, wy, ren)
+    end
+  end
+  Projectiles.draw(session, camX, camY, mapFn)
 end
 
 function Projectiles.move(session, side, opts)

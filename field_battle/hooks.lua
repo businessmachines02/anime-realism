@@ -445,12 +445,12 @@ function Hooks.install(FBV, mod)
     end
 
     -- Advance bob BEFORE the world is drawn this frame (letterbox is too late).
-    -- Unwedge a voxel pass that threw mid-beginScene. Move FX paint from
-    -- FBV.drawUI onto the battle overlay, not here (3D world canvas).
+    -- Unwedge a voxel pass that threw mid-beginScene. Paint field FX/HP after
+    -- the world body so they share the world canvas camera (not the 160×144 UI).
     local function wrapDrawWorld(OverworldState)
         if not (type(OverworldState) == "table"
                 and type(OverworldState.drawWorld) == "function"
-                and not OverworldState._arFbvPresentDraw20) then
+                and not OverworldState._arFbvPresentDraw21) then
             return
         end
         local origDrawWorld = OverworldState.drawWorld
@@ -467,11 +467,18 @@ function Hooks.install(FBV, mod)
                     error(a, 0)
                 end
                 a = nil
+            elseif FBV.enabled(mod)
+                and FBV.Lifecycle and type(FBV.Lifecycle.liveBattle) == "function"
+                and type(FBV.Lifecycle.drawWorldOverlay) == "function" then
+                local battle = select(1, FBV.Lifecycle.liveBattle(self.game or gameSingleton()))
+                if battle and isFieldBattle(battle) then
+                    pcall(FBV.Lifecycle.drawWorldOverlay, battle)
+                end
             end
             return a, b, c, d
         end
 
-        OverworldState._arFbvPresentDraw20 = true
+        OverworldState._arFbvPresentDraw21 = true
     end
     do
         local okOW, OverworldController = pcall(require, "src.world.OverworldController")

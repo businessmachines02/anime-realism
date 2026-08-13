@@ -3290,13 +3290,18 @@ return function(mod)
             return pickFormatted(list, speaker)
         end
 
+        -- True send-outs only. Anime move callouts like "Go! PIKACHU!\nTHUNDER!"
+        -- must NOT arm send-in banter (they share the "Go! " prefix).
         local function isPlayerSendOutText(text)
             local s = tostring(text or "")
-            if s:match("^Go! ") or s:match("^Do it! ") or s:match("^Get'm! ") then
+            if s:match("^Go! [^\n]+!$")
+                or s:match("^Do it! [^\n]+!$")
+                or s:match("^Get'm! [^\n]+!$") then
                 return true
             end
             local low = s:lower()
             return low:find("enemy's weak", 1, true) ~= nil
+                and low:find("get'm!", 1, true) ~= nil
         end
 
         local function isEnemySendOutText(text)
@@ -3828,25 +3833,34 @@ return function(mod)
             if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
                 return
             end
+            if type(battle) ~= "table" then
+                return
+            end
             local aboutPlayer = isPlayerSendOutText(originalText)
             local aboutEnemy = isEnemySendOutText(originalText)
             if not aboutPlayer and not aboutEnemy then
                 return
             end
-            local state = momentumState(battle)
-            -- One send-in reaction per wave: SHIFT (foe send + your Go!) used to
-            -- queue two banters back-to-back.
-            if state.pendingSendBanter then
+            -- Pending / cooldown live on the battle object so they survive
+            -- clearBattleMomentum (battle.started) and stay shared across any
+            -- accidental double-wraps of say / updateQueue from hot reload.
+            -- Prefer the player's Go! when both foe-send and Go! land in one wave.
+            local replacing = battle._arPendingSendBanter
+                and aboutPlayer
+                and battle._arPendingSendBanter.side == "enemy"
+            if battle._arPendingSendBanter and not replacing then
                 return
             end
-            if (state.sendBanterCooldown or 0) > 0 then
-                return
-            end
-            if queueHasBanter(battle) then
-                return
-            end
-            if not rollTrainerBanter() then
-                return
+            if not replacing then
+                if (battle._arSendBanterCooldown or 0) > 0 then
+                    return
+                end
+                if queueHasBanter(battle) then
+                    return
+                end
+                if not rollTrainerBanter() then
+                    return
+                end
             end
             local persona = trainerPersona(battle)
             local pack = S.BANTER[persona] or S.BANTER.generic
@@ -3864,17 +3878,17 @@ return function(mod)
             line = clampBanterText(line)
             -- Don't splice the line between "Go!" and the POOF — wait until the
             -- mon is actually on the field (sendingOut / POOF finished).
-            state.pendingSendBanter = {
+            battle._arPendingSendBanter = {
                 line = line,
                 side = aboutPlayer and "player" or "enemy",
             }
-            state.sendBanterArmFrames = 8
+            battle._arSendBanterArmFrames = 8
             if aboutPlayer and battle.sendingOut then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
+                battle._arSendBanterSawOut = true
+                battle._arSendBanterArmFrames = nil
             elseif aboutEnemy and battle.enemySendingOut then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
+                battle._arSendBanterSawOut = true
+                battle._arSendBanterArmFrames = nil
             end
         end
         -- Banter cameo: slide the enemy trainer pic in from the right while their
@@ -4174,44 +4188,42 @@ return function(mod)
         end
 
         local function flushPendingSendBanter(battle)
-            if not battle then
+            if type(battle) ~= "table" then
                 return
             end
-            local state = momentumByBattle[battle]
-            if not state then
+            if (battle._arSendBanterCooldown or 0) > 0 then
+                battle._arSendBanterCooldown = battle._arSendBanterCooldown - 1
+            end
+            local pending = battle._arPendingSendBanter
+            if not pending then
                 return
             end
-            if (state.sendBanterCooldown or 0) > 0 then
-                state.sendBanterCooldown = state.sendBanterCooldown - 1
-            end
-            if not state.pendingSendBanter then
-                return
-            end
-            local pending = state.pendingSendBanter
             local sending = (pending.side == "player" and battle.sendingOut)
                 or (pending.side == "enemy" and battle.enemySendingOut)
             if sending then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
+                battle._arSendBanterSawOut = true
+                battle._arSendBanterArmFrames = nil
                 return
             end
             if queueHasPoof(battle) then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
+                battle._arSendBanterSawOut = true
+                battle._arSendBanterArmFrames = nil
                 return
             end
-            if state.sendBanterArmFrames and state.sendBanterArmFrames > 0 then
-                state.sendBanterArmFrames = state.sendBanterArmFrames - 1
+            if battle._arSendBanterArmFrames and battle._arSendBanterArmFrames > 0 then
+                battle._arSendBanterArmFrames = battle._arSendBanterArmFrames - 1
                 return
             end
             -- Ready: send-out finished and POOF is gone.
-            state.pendingSendBanter = nil
-            state.sawSendOut = nil
-            state.sendBanterArmFrames = nil
+            battle._arPendingSendBanter = nil
+            battle._arSendBanterSawOut = nil
+            battle._arSendBanterArmFrames = nil
             if type(battle.queue) ~= "table" then
                 return
             end
             if queueHasBanter(battle) then
+                -- Still consume the pending so a stuck wave can't retry forever.
+                battle._arSendBanterCooldown = 120
                 return
             end
             local item = { text = pending.line, arBanter = true }
@@ -4220,8 +4232,8 @@ return function(mod)
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, 1, item)
-            -- Cover the foe-send + player-Go! SHIFT wave so only one reaction lands.
-            state.sendBanterCooldown = 120
+            -- Cover the foe-send + player-Go! SHIFT / intro wave.
+            battle._arSendBanterCooldown = 120
             BanterCameo.start(battle, pending.line)
         end
 
@@ -4237,7 +4249,7 @@ return function(mod)
             if ms.awaitingPick or ms.pendingDamage or ms.againInProgress then
                 return
             end
-            if ms.pendingSendBanter or (ms.sendBanterCooldown or 0) > 0 then
+            if battle._arPendingSendBanter or (battle._arSendBanterCooldown or 0) > 0 then
                 return
             end
             if queueHasBanter(battle) then
@@ -4280,6 +4292,13 @@ return function(mod)
             table.insert(battle.queue, item)
             BanterCameo.start(battle, line)
         end
+
+        -- Durable API so hot-reload can refresh logic without stacking wraps.
+        -- Assigned onto BattleState after it is required (below).
+        local sendBanterApi = {
+            flush = flushPendingSendBanter,
+            enqueue = maybeEnqueueSendBanter,
+        }
         local function tagQueueBubble(battle, bubble, forceWait)
             if not opt("speech_bubbles") or not battle or not bubble then
                 return
@@ -8101,6 +8120,8 @@ return function(mod)
         local WideBattle = require("src.battle.WideBattle")
         local PartyMenu = require("src.ui.PartyMenu")
         local SummaryMenu = require("src.ui.SummaryMenu")
+        -- Publish send-banter flush/enqueue after BattleState exists (hot-reload safe).
+        BattleState._arSendBanterApi = sendBanterApi
 
         -- Install/HUD helpers on one table (LuaJIT 200-local budget).
         local hud = {
@@ -8779,79 +8800,86 @@ return function(mod)
         end)
 
         -- Slow speech-bubble typing a bit past the engine's "Slow" text speed.
+        -- Guard: hot reload must not stack flushPendingSendBanter wrappers.
         do
-            local origUpdateQueue = BattleState.updateQueue
-            if type(origUpdateQueue) == "function" then
-                function BattleState.updateQueue(self)
-                    flushPendingSendBanter(self)
-                    local curItem = self and self.current
-                    local shownLine = self and self.shown and self.shown[#self.shown]
-                    -- FIELD toasts auto-cycle (~1.5s). B pauses; A or B resumes.
-                    if fieldFlowsText(self) then
-                        self._arBubbleAcc = 0
-                        if self.phase ~= "messages" then
-                            self._arFieldToastPaused = nil
-                        else
-                            local input = self.game and self.game.input
-                            if input and type(input.wasPressed) == "function" then
-                                if input:wasPressed("b") then
-                                    self._arFieldToastPaused = not self._arFieldToastPaused
-                                elseif self._arFieldToastPaused and input:wasPressed("a") then
-                                    self._arFieldToastPaused = false
+            if not BattleState._arAnimeUQ then
+                BattleState._arAnimeUQ = true
+                local origUpdateQueue = BattleState.updateQueue
+                if type(origUpdateQueue) == "function" then
+                    function BattleState.updateQueue(self)
+                        local api = BattleState._arSendBanterApi
+                        if api and type(api.flush) == "function" then
+                            api.flush(self)
+                        end
+                        local curItem = self and self.current
+                        local shownLine = self and self.shown and self.shown[#self.shown]
+                        -- FIELD toasts auto-cycle (~1.5s). B pauses; A or B resumes.
+                        if fieldFlowsText(self) then
+                            self._arBubbleAcc = 0
+                            if self.phase ~= "messages" then
+                                self._arFieldToastPaused = nil
+                            else
+                                local input = self.game and self.game.input
+                                if input and type(input.wasPressed) == "function" then
+                                    if input:wasPressed("b") then
+                                        self._arFieldToastPaused = not self._arFieldToastPaused
+                                    elseif self._arFieldToastPaused and input:wasPressed("a") then
+                                        self._arFieldToastPaused = false
+                                    end
+                                end
+                                if self._arFieldToastPaused and curItem then
+                                    curItem.auto = nil
+                                    curItem.autoDelay = nil
+                                elseif curItem and curItem.text and curItem.auto ~= false then
+                                    applyFieldToastAuto(curItem)
                                 end
                             end
-                            if self._arFieldToastPaused and curItem then
-                                curItem.auto = nil
-                                curItem.autoDelay = nil
-                            elseif curItem and curItem.text and curItem.auto ~= false then
-                                applyFieldToastAuto(curItem)
-                            end
+                            return origUpdateQueue(self)
                         end
-                        return origUpdateQueue(self)
-                    end
-                    local bubbleTyping = opt("speech_bubbles") and curItem and curItem.bubble
-                        and self.phase == "messages"
-                        and shownLine and self.codes
-                        and #shownLine < #self.codes
-                    if not bubbleTyping then
+                        local bubbleTyping = opt("speech_bubbles") and curItem and curItem.bubble
+                            and self.phase == "messages"
+                            and shownLine and self.codes
+                            and #shownLine < #self.codes
+                        if not bubbleTyping then
+                            self._arBubbleAcc = 0
+                            return origUpdateQueue(self)
+                        end
+
+                        local opts = self.game and self.game.save and self.game.save.options
+                        local prevSpeed = opts and opts.textSpeed
+                        if opts then
+                            opts.textSpeed = 5
+                        end
+
+                        self._arBubbleAcc = (self._arBubbleAcc or 0) + 1
+                        local beforeLen = #shownLine
+                        local beforeIndex = self.charIndex or 0
+                        if self._arBubbleAcc < S.BUBBLE_CHAR_DELAY then
+                            -- Hold: run queue logic but don't emit a glyph this frame.
+                            self.charTimer = 0
+                            local result = origUpdateQueue(self)
+                            if opts then
+                                opts.textSpeed = prevSpeed
+                            end
+                            return result
+                        end
+
+                        -- Emit at most one glyph every S.BUBBLE_CHAR_DELAY frames.
                         self._arBubbleAcc = 0
-                        return origUpdateQueue(self)
-                    end
-
-                    local opts = self.game and self.game.save and self.game.save.options
-                    local prevSpeed = opts and opts.textSpeed
-                    if opts then
-                        opts.textSpeed = 5
-                    end
-
-                    self._arBubbleAcc = (self._arBubbleAcc or 0) + 1
-                    local beforeLen = #shownLine
-                    local beforeIndex = self.charIndex or 0
-                    if self._arBubbleAcc < S.BUBBLE_CHAR_DELAY then
-                        -- Hold: run queue logic but don't emit a glyph this frame.
-                        self.charTimer = 0
+                        self.charTimer = 4
                         local result = origUpdateQueue(self)
+                        while #shownLine > beforeLen + 1 do
+                            table.remove(shownLine)
+                            self.charIndex = math.max(0, (self.charIndex or 0) - 1)
+                        end
+                        if #shownLine == beforeLen and (self.charIndex or 0) > beforeIndex then
+                            self.charIndex = beforeIndex
+                        end
                         if opts then
                             opts.textSpeed = prevSpeed
                         end
                         return result
                     end
-
-                    -- Emit at most one glyph every S.BUBBLE_CHAR_DELAY frames.
-                    self._arBubbleAcc = 0
-                    self.charTimer = 4
-                    local result = origUpdateQueue(self)
-                    while #shownLine > beforeLen + 1 do
-                        table.remove(shownLine)
-                        self.charIndex = math.max(0, (self.charIndex or 0) - 1)
-                    end
-                    if #shownLine == beforeLen and (self.charIndex or 0) > beforeIndex then
-                        self.charIndex = beforeIndex
-                    end
-                    if opts then
-                        opts.textSpeed = prevSpeed
-                    end
-                    return result
                 end
             end
         end
@@ -9345,6 +9373,11 @@ return function(mod)
         end
 
         hud.wrapBattleSay = function(methodName)
+            -- Durable per-method guard (hud.patched is recreated on hot reload).
+            BattleState._arAnimeSayPatched = BattleState._arAnimeSayPatched or {}
+            if BattleState._arAnimeSayPatched[methodName] then
+                return
+            end
             local original = BattleState[methodName]
             if type(original) ~= "function" or hud.patched[original] then
                 return
@@ -9423,7 +9456,14 @@ return function(mod)
                     end
                 end
                 -- Opposing trainer shouts on send-outs (personality-flavored).
-                maybeEnqueueSendBanter(self, text)
+                do
+                    local api = BattleState._arSendBanterApi
+                    if api and type(api.enqueue) == "function" then
+                        api.enqueue(self, text)
+                    else
+                        maybeEnqueueSendBanter(self, text)
+                    end
+                end
                 -- Let callouts finish (A/B) before dodge/brace or counter menus.
                 if (methodName == "sayNextAuto" or methodName == "sayAuto")
                     and (hud.willShowCalloutPick(self, text) or hud.willShowCounterPick(self, text))
@@ -9508,6 +9548,7 @@ return function(mod)
             end
             hud.patched[original] = true
             hud.patched[wrapped] = true
+            BattleState._arAnimeSayPatched[methodName] = true
             BattleState[methodName] = wrapped
         end
 

@@ -175,11 +175,13 @@ return function(env)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
     end
-    if Lifecycle and type(Lifecycle.drawWorldOverlay) == "function" then
-      pcall(Lifecycle.drawWorldOverlay, battle)
-    end
     if UI and type(UI.draw) == "function" then
-      return UI.draw(battle)
+      UI.draw(battle)
+    end
+    -- Attack FX on the same overlay as HP (world→UI mapped).
+    local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
+    if session and Projectiles and type(Projectiles.drawUi) == "function" then
+      pcall(Projectiles.drawUi, session, battle)
     end
   end
 

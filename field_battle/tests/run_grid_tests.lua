@@ -865,36 +865,48 @@ function tests.field_overlay_draws_projectiles()
   local drawn = 0
   local projectile = {
     _removed = false,
-    draw = function()
+    draw = function(_, _camX, _camY, mapFn)
       drawn = drawn + 1
+      if mapFn then
+        local x, y = mapFn(10, 20)
+        truthy(type(x) == "number" and type(y) == "number", "ui map returns numbers")
+      end
     end,
   }
   local battle = {
     game = {
       overworld = { camera = { x = 0, y = 0 } },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 320, 288 end,
+        fitScale = function() return 4 end,
+      },
     },
   }
   local session = {
     state = Lifecycle.STATE.Live,
     live = true,
     projectiles = { projectile },
-    _deps = {
-      Projectiles = {
-        draw = function(s, camX, camY)
-          eq(camX, 0, "overlay uses camera x")
-          eq(camY, 0, "overlay uses camera y")
-          for i = 1, #s.projectiles do
-            s.projectiles[i]:draw(camX, camY)
-          end
-        end,
-      },
-    },
+    _battle = battle,
   }
-  Lifecycle._testBind(battle, session)
-  Lifecycle.drawWorldOverlay(battle)
-  Lifecycle.drawWorldOverlay(battle)
-  eq(drawn, 2, "overlay paints projectiles every drawUI call")
-  Lifecycle._testUnbind(battle)
+  Projectiles.drawUi(session, battle)
+  Projectiles.drawUi(session, battle)
+  eq(drawn, 2, "ui overlay paints projectiles each drawUi call")
+end
+
+function tests.world_view_maps_to_ui_canvas()
+  local ren = {
+    uiSize = function() return 160, 144 end,
+    worldViewSize = function() return 320, 288 end,
+    fitScale = function() return 4 end,
+  }
+  -- Same pixel scale: world center → UI center.
+  local ux, uy = Coords.worldViewToUi(160, 144, ren)
+  eq(ux, 80, "wide world center maps to UI center x")
+  eq(uy, 72, "wide world center maps to UI center y")
+  -- A point 40px right of world center lands 40px right of UI center.
+  ux = select(1, Coords.worldViewToUi(200, 144, ren))
+  eq(ux, 120, "world offset preserves screen delta when scales match")
 end
 
 local count = 0

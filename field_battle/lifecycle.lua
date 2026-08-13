@@ -291,9 +291,9 @@ function Lifecycle.restoreOverworldFollowers(session, ow)
     session.parkedFollowers = nil
 end
 
---- 2D floor / cover / projectiles on the battle overlay (160×144, camera
---- space). Kept off ow.entities so voxel pose() never sees a nil sprite.
---- Call from FBV.drawUI only — painting after drawWorld hits the 3D canvas.
+--- Floor / cover on the world canvas. Projectiles + HP paint from UI.draw on
+--- the battle overlay (world→UI mapped) so they survive 3D/world overrides.
+--- Also records UI-space anchors on each battler for speech bubbles.
 function Lifecycle.drawWorldOverlay(battle)
     local session = Lifecycle.get(battle)
     if not (session and session.live) then
@@ -317,10 +317,27 @@ function Lifecycle.drawWorldOverlay(battle)
             end
         end
     end
+    -- Stash UI-canvas anchors for speech bubbles (battle overlay is 160×144).
     local deps = session._deps
-    if deps and deps.Projectiles and type(deps.Projectiles.draw) == "function" then
-        deps.Projectiles.draw(session, camX, camY)
+    local ren = battle.game and battle.game.renderer
+    local Coords = deps and deps.Coords
+    local function stampAnchor(ent)
+        if not ent or ent.hidden or ent._removed then
+            return
+        end
+        local lift = ent._fieldBarLift or 10
+        local wx = (ent.px or 0) - camX + 8
+        local wy = (ent.py or 0) - camY - lift
+        ent._fieldWorldX, ent._fieldWorldY = wx, wy
+        if Coords and type(Coords.worldViewToUi) == "function" then
+            local ux, uy = Coords.worldViewToUi(wx, wy, ren)
+            ent._fieldScreenX, ent._fieldScreenY = ux, uy
+        else
+            ent._fieldScreenX, ent._fieldScreenY = wx, wy
+        end
     end
+    stampAnchor(session.playerMon)
+    stampAnchor(session.enemyMon)
 end
 
 function Lifecycle.get(battle)

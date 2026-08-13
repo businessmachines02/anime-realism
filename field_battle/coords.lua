@@ -178,4 +178,50 @@ function Coords.padDeltaToWorld(g, du, dv)
   return du * ux + dv * vx, du * uy + dv * vy
 end
 
+--- Map a point on the world canvas (cam-relative pixels) onto the UI canvas.
+--- World survey zoom uses a larger/smaller view than the classic 160×144 UI;
+--- both are centered in the window, so this matches Renderer letterboxing.
+function Coords.worldViewToUi(sx, sy, ren)
+  sx = tonumber(sx) or 0
+  sy = tonumber(sy) or 0
+  if type(ren) ~= "table" then
+    return sx, sy
+  end
+  local uiw, uih = 160, 144
+  local vw, vh = uiw, uih
+  if type(ren.uiSize) == "function" then
+    local a, b = ren:uiSize()
+    if type(a) == "number" then
+      uiw, uih = a, b or uih
+    end
+  end
+  if type(ren.worldViewSize) == "function" then
+    local a, b = ren:worldViewSize()
+    if type(a) == "number" and a > 0 then
+      vw, vh = a, b or vh
+    end
+  end
+  if vw < 1 or vh < 1 then
+    return sx, sy
+  end
+  local Sp = 1
+  if type(ren.fitScale) == "function" then
+    Sp = tonumber(ren:fitScale()) or 1
+  end
+  if Sp < 1 then
+    Sp = 1
+  end
+  local sp = Sp
+  local okZ, Zoom = pcall(require, "src.render.Zoom")
+  if okZ and Zoom and type(Zoom.scale) == "function" then
+    sp = tonumber(Zoom.scale(Sp)) or Sp
+  end
+  if sp < 1 then
+    sp = 1
+  end
+  local ux = (uiw * 0.5) + (sx - vw * 0.5) * (sp / Sp)
+  local uy = (uih * 0.5) + (sy - vh * 0.5) * (sp / Sp)
+  return ux, uy
+end
+
 return Coords

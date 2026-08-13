@@ -6,8 +6,10 @@
 --   moveSelect   → diamond U/R/L/D move compass (opaque wipe covers TYPE/PP)
 --   messages     → fallback dialogue box when speech toasts are not active
 --
--- World-anchored HP bars are painted from UI.draw (battle overlay) so they
--- still show when the voxel pass skips entity draw().
+-- World-anchored HP bars paint on the battle UI overlay with world→UI mapping
+-- (survey zoom makes worldViewSize ≠ 160×144). Floor / cover / projectiles
+-- still paint from Lifecycle.drawWorldOverlay on the world canvas when that
+-- pass is visible.
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -18,6 +20,14 @@ local UI = {}
 
 UI.WIDTH = 160
 UI.HEIGHT = 144
+
+local Coords
+do
+    local ok, mod = pcall(require, "coords")
+    if ok then
+        Coords = mod
+    end
+end
 
 local function font()
     local ok, Font = pcall(require, "src.render.Font")
@@ -124,49 +134,68 @@ local function barInitial(battler)
     return ch:upper()
 end
 
-local function drawWorldHP(g, battle)
-    local ow = battle and battle.game and battle.game.overworld
-    local cam = ow and ow.camera
-    if not cam then
+-- Draw HP chips above each field battler.
+-- mode:
+--   "ui" (default) — battle overlay; maps world-camera pixels → UI canvas
+--   "world"        — world canvas; raw cam-relative pixels (no remap)
+function UI.drawWorldHP(battle, camX, camY, mode)
+    if not (love and love.graphics) then
         return
     end
+    local g = love.graphics
     local Font = font()
+    camX = camX or 0
+    camY = camY or 0
+    mode = mode or "ui"
+    local ren = battle and battle.game and battle.game.renderer
+    local ow = battle and battle.game and battle.game.overworld
+    if (camX == 0 and camY == 0) and ow and ow.camera then
+        camX = ow.camera.x or 0
+        camY = ow.camera.y or 0
+    end
     for _, item in ipairs({
-        { side = "player", battler = battle.player },
-        { side = "enemy",  battler = battle.enemy },
+        { side = "player", battler = battle and battle.player },
+        { side = "enemy",  battler = battle and battle.enemy },
     }) do
         local ent = fieldEntity(battle, item.side)
         local battler = item.battler
         if ent and battler and not ent.hidden and not ent._removed then
-            -- Match sprite feet/center: pad origin is top-left of the 16×16 cell.
             local lift = ent._fieldBarLift or 10
-            local x = math.floor((ent.px or 0) - (cam.x or 0) + 8 + 0.5)
-            local y = math.floor((ent.py or 0) - (cam.y or 0) - lift + 0.5)
-            -- Skip if fully off the classic viewport (don't clamp — that unhooks the bar).
-            if x >= -4 and x <= 164 and y >= -6 and y <= 150 then
-                local initial = barInitial(battler)
-                local barW = 20
-                local letterW = 6
-                local totalW = letterW + 1 + barW
-                local left = x - math.floor(totalW / 2)
-                if Font and type(Font.draw) == "function" then
-                    g.setColor(0.08, 0.06, 0.05, 1)
-                    g.push()
-                    g.translate(left, y - 1)
-                    g.scale(0.75, 0.75)
-                    Font.draw(initial, 0, 0)
-                    g.pop()
-                else
-                    g.setColor(0.08, 0.06, 0.05, 1)
-                    g.print(initial, left, y - 2)
-                end
-                hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
-                -- Pointer under the mon center (not the letter).
-                g.setColor(0.12, 0.09, 0.08, 1)
-                g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+            local wx = (ent.px or 0) - camX + 8
+            local wy = (ent.py or 0) - camY - lift
+            local x, y = wx, wy
+            if mode == "ui" and Coords and type(Coords.worldViewToUi) == "function" then
+                x, y = Coords.worldViewToUi(wx, wy, ren)
             end
+            x = math.floor(x + 0.5)
+            y = math.floor(y + 0.5)
+            -- Stash UI anchors for speech bubbles / other overlay chrome.
+            if mode == "ui" then
+                ent._fieldWorldX, ent._fieldWorldY = wx, wy
+                ent._fieldScreenX, ent._fieldScreenY = x, y
+            end
+            local initial = barInitial(battler)
+            local barW = 20
+            local letterW = 6
+            local totalW = letterW + 1 + barW
+            local left = x - math.floor(totalW / 2)
+            if Font and type(Font.draw) == "function" then
+                g.setColor(0.08, 0.06, 0.05, 1)
+                g.push()
+                g.translate(left, y - 1)
+                g.scale(0.75, 0.75)
+                Font.draw(initial, 0, 0)
+                g.pop()
+            else
+                g.setColor(0.08, 0.06, 0.05, 1)
+                g.print(initial, left, y - 2)
+            end
+            hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
+            g.setColor(0.12, 0.09, 0.08, 1)
+            g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
         end
     end
+    g.setColor(1, 1, 1, 1)
 end
 
 local function drawScaled(g, Font, text, x, y, scale)
@@ -322,9 +351,9 @@ function UI.draw(battle)
     local Font = font()
     local state = UI.layoutState(battle)
     g.push("all")
-    -- World HP bars on the overlay so voxel/3D cast still shows them (entity
-    -- draw() may not run on the battle HUD pass).
-    drawWorldHP(g, battle)
+    -- HP on the UI overlay with world→UI mapping so bars survive 3D/world
+    -- overrides and stay glued to mons under survey zoom.
+    UI.drawWorldHP(battle, nil, nil, "ui")
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then
