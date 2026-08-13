@@ -1,0 +1,211 @@
+-- Field battle — standalone overworld combat (tile-grid movement tracker)
+--
+-- BATTLE STAGE = FIELD: fights stay on the map via transparent BattleState.
+-- Cast occupies pad cells; pixels lerp toward padToPx. Present clock keeps
+-- idle/attack/cast anims advancing while menus sit on top of BattleState.
+--
+--   immersion/     → HP/EXP hide + rewards
+--   battle/        → traditional battle systems
+--   field_battle/  → this package
+
+return function(env)
+  local loadFile = env and env.load
+  if type(loadFile) ~= "function" then
+    error("field_battle/init.lua requires env.load", 2)
+  end
+
+  local Coords = loadFile("coords.lua")
+  package.loaded["coords"] = Coords
+  local Themes = loadFile("themes.lua")
+  package.loaded["themes"] = Themes
+  local Layout = loadFile("layout.lua")
+  local Sprites = loadFile("sprites.lua")
+  local Arena = loadFile("arena.lua")
+  local Survey = loadFile("survey.lua")
+  local Grid = loadFile("grid.lua")
+  local Cast = loadFile("cast.lua")
+  local Cues = loadFile("cues.lua")
+  local Projectiles = loadFile("projectiles.lua")
+  local Anims = loadFile("anims.lua")
+  local Lifecycle = loadFile("lifecycle.lua")
+  local Compat = loadFile("compat.lua")
+  local Hooks = loadFile("hooks.lua")
+  local Intercept = loadFile("intercept.lua")
+  local Debug = loadFile("debug.lua")
+  local UI = loadFile("ui.lua")
+
+  local deps = {
+    Layout = Layout,
+    Sprites = Sprites,
+    Arena = Arena,
+    Survey = Survey,
+    Coords = Coords,
+    Themes = Themes,
+    Grid = Grid,
+    Cast = Cast,
+    Cues = Cues,
+    Projectiles = Projectiles,
+    Anims = Anims,
+    Lifecycle = Lifecycle,
+    Compat = Compat,
+    Debug = Debug,
+    UI = UI,
+  }
+
+  local FBV = {
+    id = "field_battle",
+    title = "Field battle (standalone OW combat)",
+    Layout = Layout,
+    Sprites = Sprites,
+    Arena = Arena,
+    Survey = Survey,
+    Coords = Coords,
+    Themes = Themes,
+    Grid = Grid,
+    Cast = Cast,
+    Cues = Cues,
+    Projectiles = Projectiles,
+    Anims = Anims,
+    Lifecycle = Lifecycle,
+    Compat = Compat,
+    Debug = Debug,
+    UI = UI,
+    Intercept = Intercept,
+    OPTION_KEYS = { "battle_stage", "field_cast" },
+  }
+
+  function FBV.session(battle)
+    return Lifecycle.get(battle)
+  end
+
+  function FBV.active(battle)
+    return Lifecycle.active(battle)
+  end
+
+  function FBV.focusCamera(battle)
+    return Lifecycle.focusCamera(battle)
+  end
+
+  function FBV.animShift(battle)
+    return Lifecycle.animShift(battle, Anims)
+  end
+
+  function FBV.animTransform(battle)
+    return Lifecycle.animTransform(battle, Anims)
+  end
+
+  function FBV.animTransformCached(battle)
+    return Lifecycle.animTransformCached(battle, Anims)
+  end
+
+  function FBV.cacheAnimTransform(battle)
+    return Lifecycle.cacheAnimTransform(battle, Anims)
+  end
+
+  function FBV.nudgeCamera(battle, side, seconds)
+    return Lifecycle.nudgeCamera(battle, side, seconds)
+  end
+
+  function FBV.monScreen(battle, side)
+    return Lifecycle.monScreen(battle, side, Anims)
+  end
+
+  function FBV.begin(battle, mod)
+    return Lifecycle.begin(battle, mod, deps)
+  end
+
+  function FBV.finish(battle)
+    return Lifecycle.finish(battle, deps)
+  end
+
+  function FBV.syncMons(battle, mod)
+    return Lifecycle.syncMons(battle, mod, deps)
+  end
+
+  function FBV.stagePlayerMon(battle, mod)
+    return Lifecycle.stagePlayerMon(battle, mod, deps)
+  end
+
+  function FBV.tick(battle, dt)
+    return Lifecycle.tick(battle, dt, deps)
+  end
+
+  function FBV.tickPresent(game, dt)
+    return Lifecycle.tickPresent(game, dt, deps)
+  end
+
+  function FBV.tickActive(game, dt)
+    return Lifecycle.tickPresent(game, dt, deps)
+  end
+
+  function FBV.drawDebug(battle)
+    if not Debug then
+      return
+    end
+    return Debug.draw(Lifecycle.get(battle), battle)
+  end
+
+  function FBV.drawUI(battle)
+    if battle and FBV.shouldUse(mod, battle) then
+      battle._arAnimeField = true
+    end
+    if UI and type(UI.draw) == "function" then
+      return UI.draw(battle)
+    end
+  end
+
+  function FBV.compactUIActive(battle)
+    return (UI and type(UI.active) == "function" and UI.active(battle))
+      or FBV.shouldUse(mod, battle)
+  end
+
+  function FBV.react(battle, side, kind, opts)
+    return Lifecycle.react(battle, side, kind, opts)
+  end
+
+  function FBV.shouldSkipEventReact(battle, side, kind)
+    return Lifecycle.shouldSkipEventReact(battle, side, kind)
+  end
+
+  function FBV.onTurnEnded(battle)
+    return Lifecycle.onTurnEnded(battle)
+  end
+
+  function FBV.onTurnStarted(battle)
+    return Lifecycle.onTurnStarted(battle)
+  end
+
+  function FBV.capture(battle, ev)
+    return Lifecycle.capture(battle, ev)
+  end
+
+  function FBV.enabled(mod)
+    if not (mod and mod.options and type(mod.options.get) == "function") then
+      return false
+    end
+    local raw = tostring(mod.options:get("battle_stage") or "AUTO"):upper()
+    return raw == "FIELD"
+  end
+
+  -- FIELD owns ordinary single wild and trainer encounters. Link, demo,
+  -- double, and other special battle hosts retain their normal presentation.
+  function FBV.supportsBattle(battle)
+    if not battle or battle.link or battle.demo
+        or battle.double or battle.isDouble or battle.doubleBattle then
+      return false
+    end
+    local kind = tostring(battle.kind or ""):lower()
+    return kind == "wild" or kind == "trainer"
+  end
+
+  function FBV.shouldUse(mod, battle)
+    return FBV.enabled(mod) and FBV.supportsBattle(battle)
+  end
+
+  function FBV.install(mod)
+    pcall(Intercept.install, FBV, mod)
+    return Hooks.install(FBV, mod)
+  end
+
+  return FBV
+end

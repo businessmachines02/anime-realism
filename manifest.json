@@ -1,7 +1,7 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "3.0.15",
+  "version": "4.5.0",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -14,12 +14,15 @@
     "DRAMALESS_SHAPE",
     "STADIUM_BATTLE_FX",
     "BATTLE_CINEMATICS",
+    "PokePCFollowers_VoxelMerge",
+    "FOLLOWERS_EX",
+    "overworld_encounters",
     "quality_of_life",
     "gen3_battle_ui"
   ],
   "permissions": [
     "engine_internals"
   ],
-  "description": "Anime-style immersion: hide levels and HP, trainer callouts, Focus Reactive Defense (Commit/Dodge/Cover/Brace/Entrench), underdog EXP and faint effort. Works with Gen 3 UI and Stadium companions.",
+  "description": "Reference-style hybrid FIELD battles with compact UI, free-tile movement, and world VFX.",
   "github": "businessmachines02/anime-realism"
 }

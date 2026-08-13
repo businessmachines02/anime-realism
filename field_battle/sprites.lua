@@ -1,0 +1,657 @@
+-- Field battle — OW follower sprites as battlers + motion.
+-- Prefer PokePCFollowers exports.assetPath + Assets.image (same as the
+-- walking follower). FIELD always uses animated 2D overworld art.
+
+local Sprites = {}
+
+local function loadImage(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  -- Same loader the follower pack uses successfully with absolute paths.
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if okA and Assets and type(Assets.image) == "function" then
+    local ok, img = pcall(Assets.image, path)
+    if ok and img then
+      return img
+    end
+  end
+  if love and love.graphics and love.graphics.newImage then
+    local f = io.open(path, "rb")
+    if f and love.filesystem and love.filesystem.newFileData then
+      local bytes = f:read("*a")
+      f:close()
+      if type(bytes) == "string" and #bytes > 0 then
+        local okFd, fd = pcall(love.filesystem.newFileData, bytes, "fbv.png")
+        if okFd and fd then
+          local okImg, img = pcall(love.graphics.newImage, fd)
+          if okImg and img then
+            return img
+          end
+        end
+      end
+    elseif f then
+      f:close()
+    end
+    local ok, img = pcall(love.graphics.newImage, path)
+    if ok and img then
+      return img
+    end
+  end
+  return nil
+end
+
+local function findHandle(mod, id)
+  if not (mod and type(mod.find) == "function") then
+    return nil
+  end
+  local ok, handle = pcall(mod.find, mod, id)
+  if ok and handle then
+    return handle
+  end
+  ok, handle = pcall(mod.find, id)
+  if ok and handle then
+    return handle
+  end
+  return nil
+end
+
+function Sprites.resolveFollowerPath(mod, game, species)
+  if not species then
+    return nil
+  end
+  local key = tostring(species):upper()
+
+  -- 1) Official pack export (preferred).
+  local ids = { "PokePCFollowers_VoxelMerge", "FOLLOWERS_EX" }
+  for i = 1, #ids do
+    local handle = findHandle(mod, ids[i])
+    local ex = handle and handle.exports
+    if ex and type(ex.assetPath) == "function" then
+      local ok, path = pcall(ex.assetPath, key)
+      if ok and type(path) == "string" and path ~= "" then
+        local f = io.open(path, "rb")
+        if f then
+          f:close()
+          return path
+        end
+        -- Path may still be Assets-resolvable even if io.open fails.
+        return path
+      end
+    end
+    local root = handle and (handle.path or handle.root)
+    if type(root) ~= "string" or root == "" then
+      root = nil
+    end
+    if root then
+      local data = game and game.data and game.data.pokemon
+      local def = data and data[key]
+      local dex = def and tonumber(def.dex)
+      if dex and dex > 0 then
+        local path = root .. "/assets/sprites/follower_"
+          .. string.format("%03d", dex) .. ".png"
+        local f = io.open(path, "rb")
+        if f then
+          f:close()
+          return path
+        end
+      end
+    end
+  end
+
+  -- 2) Hard fallback for desktop App Support installs.
+  local data = game and game.data and game.data.pokemon
+  local def = data and data[key]
+  local dex = def and tonumber(def.dex)
+  if dex and dex > 0 then
+    local home = os.getenv and os.getenv("HOME")
+    if type(home) == "string" and home ~= "" then
+      local path = home
+        .. "/Library/Application Support/pokemon-love2d/mods/"
+        .. "PokePCFollowers_VoxelMerge/assets/sprites/follower_"
+        .. string.format("%03d", dex) .. ".png"
+      local f = io.open(path, "rb")
+      if f then
+        f:close()
+        return path
+      end
+    end
+  end
+  return nil
+end
+
+function Sprites.castMode(mod)
+  return "OVERWORLD"
+end
+
+local STAND = { down = 0, up = 1, left = 2, right = 2 }
+local WALK = { down = 3, up = 4, left = 5, right = 5 }
+
+local function faceFromDelta(dx, dy)
+  if math.abs(dx or 0) >= math.abs(dy or 0) then
+    return (dx or 0) >= 0 and "right" or "left"
+  end
+  return (dy or 0) >= 0 and "down" or "up"
+end
+
+local Coords
+do
+  local ok, c = pcall(require, "coords")
+  if ok then
+    Coords = c
+  end
+end
+
+local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, grid)
+  local padU, padV
+  local basePx, basePy
+  if grid and Coords then
+    padU, padV = Coords.worldToPad(grid, cellX, cellY)
+    basePx, basePy = Coords.padToPx(grid, padU, padV)
+    cellX, cellY = Coords.padToWorld(grid, padU, padV)
+  else
+    basePx, basePy = cellX * 16, cellY * 16
+  end
+  local ent = {
+    id = "ar_fbv_" .. tostring(side),
+    cellX = cellX,
+    cellY = cellY,
+    padU = padU,
+    padV = padV,
+    homePadU = padU,
+    homePadV = padV,
+    _grid = grid,
+    px = basePx,
+    py = basePy,
+    facing = facing or "down",
+    species = species,
+    _arFieldBattler = true,
+    _arFieldSide = side,
+    _fbv = true,
+    _fbvKind = kind or "ow",
+    basePx = basePx,
+    basePy = basePy,
+    targetPx = basePx,
+    targetPy = basePy,
+    homePx = basePx,
+    homePy = basePy,
+    homeCellX = cellX,
+    homeCellY = cellY,
+    trainerPx = basePx,
+    trainerPy = basePy,
+    bobT = (side == "enemy") and 2.1 or 0.4,
+    -- Continuous sine bob (through rest pose) — keep lively while standing still.
+    bobAmp = (side == "enemy") and 2.0 or 1.8,
+    bobSpeed = (side == "enemy") and 4.3 or 4.0,
+    swayAmp = 0,
+    anim = "idle",
+    animT = 0,
+    passable = true,
+    frozen = true,
+    wanders = false,
+    drawer = drawer,
+    _walkFrame = 0,
+    _walkT = 0,
+    _idleT = (side == "enemy") and 1.3 or 0.2,
+    wanderCD = (side == "enemy") and 3.2 or 2.6,
+    _wanderCD = (side == "enemy") and 3.2 or 2.6,
+    drawScale = 1,
+  }
+
+  function ent:pose()
+    return self.sprite, self.px, self.py, self.facing, self._walkFrame or 0, false
+  end
+
+  function ent:walkPhase()
+    return self._walkFrame or 0
+  end
+
+  function ent:update()
+  end
+
+  function ent:draw(camX, camY)
+    if self.hidden or self._removed then
+      return
+    end
+    local function drawBody()
+      if self.drawer then
+        self.drawer(self, camX, camY)
+        return
+      end
+      if self.sprite and self.sprite.draw then
+        self.sprite:draw(self.px, self.py, camX, camY, self.facing,
+          self._walkFrame or 0, false)
+      end
+    end
+    local scale = self.drawScale or 1
+    if scale ~= 1 and love and love.graphics then
+      local g = love.graphics
+      local cx = (self.px or 0) - (camX or 0) + 8
+      local cy = (self.py or 0) - (camY or 0) + 8
+      g.push()
+      g.translate(cx, cy)
+      g.scale(scale, scale)
+      g.translate(-cx, -cy)
+      drawBody()
+      g.pop()
+    else
+      drawBody()
+    end
+  end
+
+  function ent:setPad(u, v, face, snap)
+    self.padU, self.padV = u, v
+    if self._grid and Coords then
+      self.cellX, self.cellY = Coords.padToWorld(self._grid, u, v)
+      self.targetPx, self.targetPy = Coords.padToPx(self._grid, u, v)
+    end
+    if snap ~= false then
+      self.basePx, self.basePy = self.targetPx, self.targetPy
+      self.px, self.py = self.basePx, self.basePy
+    end
+    if face then
+      self.facing = face
+    end
+  end
+
+  function ent:setCell(cx, cy, face, snap)
+    self.cellX, self.cellY = cx, cy
+    if self._grid and Coords then
+      local u, v = Coords.worldToPad(self._grid, cx, cy)
+      self:setPad(u, v, face, snap)
+      return
+    end
+    self.targetPx, self.targetPy = cx * 16, cy * 16
+    if snap ~= false then
+      self.basePx, self.basePy = self.targetPx, self.targetPy
+      self.px, self.py = self.basePx, self.basePy
+    end
+    if face then
+      self.facing = face
+    end
+  end
+
+  function ent:setHome(px, py)
+    self.homePx, self.homePy = px, py
+    -- Occupancy / home pad are not derived from pixels.
+    if self.homePadU == nil and type(px) == "number" and type(py) == "number" then
+      self.homeCellX = math.floor(px / 16 + 0.5)
+      self.homeCellY = math.floor(py / 16 + 0.5)
+    end
+  end
+
+  function ent:setTrainerSide(px, py)
+    self.trainerPx, self.trainerPy = px, py
+  end
+
+  function ent:play(kind)
+    self.anim = kind or "idle"
+    self.animT = 0
+    self._recallDone = nil
+    self._captureDone = nil
+    if kind == "sendout" then
+      self._sendoutStarted = true
+      self.hidden = false
+      self.drawScale = 0.15
+    elseif kind == "recall" or kind == "capture" then
+      self.drawScale = 1
+      self.wanderTx, self.wanderTy = nil, nil
+      self.returning = nil
+    elseif kind == "faint" then
+      self.drawScale = 1
+      self._fainting = true
+      self.wanderTx, self.wanderTy = nil, nil
+      self.returning = nil
+    else
+      self.drawScale = 1
+    end
+  end
+
+  --- Soft-move base position toward a world pixel target; faces travel dir.
+  function ent:steerBase(tx, ty, speed, dt)
+    if tx == nil or ty == nil then
+      self._walkFrame = 0
+      return true
+    end
+    local dx = tx - self.basePx
+    local dy = ty - self.basePy
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist < 1.5 then
+      self.basePx, self.basePy = tx, ty
+      self._walkFrame = 0
+      return true
+    end
+    local step = math.min(dist, (speed or 40) * (dt or 0.016))
+    self.basePx = self.basePx + dx / dist * step
+    self.basePy = self.basePy + dy / dist * step
+    -- Pad occupancy is never derived from pixels.
+    self.facing = faceFromDelta(dx, dy)
+    self._walkT = (self._walkT or 0) + (dt or 0.016)
+    self._walkFrame = (math.floor(self._walkT * 8) % 2)
+    return false
+  end
+
+  function ent:tick(dt, towardX, towardY)
+    if self.hidden or self._removed then
+      return
+    end
+    dt = dt or (1 / 60)
+    -- Lerp base toward pad pixel target (occupancy stays on padU/padV).
+    local tpx = self.targetPx
+    local tpy = self.targetPy
+    if tpx ~= nil and tpy ~= nil then
+      local dx = tpx - self.basePx
+      local dy = tpy - self.basePy
+      local dist = math.sqrt(dx * dx + dy * dy)
+      if dist < 0.8 then
+        self.basePx, self.basePy = tpx, tpy
+        -- Leave _walkFrame alone so idle / cast can keep animating in place.
+      else
+        local step = math.min(dist, (self.stepSpeed or 56) * dt)
+        self.basePx = self.basePx + dx / dist * step
+        self.basePy = self.basePy + dy / dist * step
+        self.facing = faceFromDelta(dx, dy)
+        self._walkT = (self._walkT or 0) + dt
+        self._walkFrame = (math.floor(self._walkT * 8) % 2)
+      end
+    end
+    -- Always advance bob — independent of battle queue / waitFrames / UI.
+    self.bobT = (self.bobT or 0) + dt * (self.bobSpeed or 5.0)
+    local bob = math.sin(self.bobT) * (self.bobAmp or 3.2)
+    local ox, oy = 0, bob
+
+    -- Blend toward a cover prop when Reactive Defense has us hidden.
+    local blend = self.coverBlend or 0
+    if blend > 0 and self.coverTx and self.coverTy then
+      local dx = (self.coverTx or self.basePx) - self.basePx
+      local dy = (self.coverTy or self.basePy) - self.basePy
+      ox = ox + dx * blend
+      oy = oy + dy * blend - blend * 2
+    end
+
+    local anim = self.anim or "idle"
+    if anim == "idle" and not self._fainting then
+      -- Overworld-style idle: one stable frame with a gentle vertical bob.
+      self._idleT = (self._idleT or 0) + dt
+      self._walkFrame = 0
+    end
+
+    if anim == "sendout" then
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.32)
+      local overshoot = math.sin(t * math.pi) * 0.12
+      self.drawScale = 0.15 + 0.85 * t + overshoot
+      oy = oy - math.sin(t * math.pi) * 5
+      if self.animT >= 0.32 then
+        self.drawScale = 1
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "recall" then
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.32)
+      self.drawScale = math.max(0.05, 1 - t)
+      oy = oy - t * 10
+      if self.animT >= 0.32 then
+        self._recallDone = true
+        self.hidden = true
+      end
+    elseif anim == "capture" then
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.42)
+      self.drawScale = math.max(0.04, 1 - t)
+      oy = oy - math.sin(t * math.pi) * 12
+      if self.animT >= 0.42 then
+        self._captureDone = true
+        self.hidden = true
+      end
+    elseif anim == "attack" then
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.34)
+      local pulse = math.sin(t * math.pi)
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+        self.facing = faceFromDelta(tx, ty)
+      else
+        tx, ty = 0, -1
+      end
+      -- A physical cue already advances one pad cell. Keep the pose punchy
+      -- without adding a second full-cell lunge on top of that movement.
+      local lunge = self._attackStepped and 5 or 14
+      ox = ox + tx * pulse * lunge
+      oy = oy + ty * pulse * lunge - pulse * 7
+      self._walkFrame = (t < 0.9) and 1 or 0
+      if self.animT >= 0.34 then
+        self.anim = "idle"
+        self.animT = 0
+        self._attackStepped = nil
+      end
+    elseif anim == "cast" then
+      -- Special: stay on cell, still read as an action (rise + glow pulse).
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.42)
+      local pulse = math.sin(t * math.pi)
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+        self.facing = faceFromDelta(tx, ty)
+      else
+        tx, ty = 0, -1
+      end
+      ox = ox + tx * pulse * 5 + math.sin(t * math.pi * 3) * 1.5
+      oy = oy - pulse * 10
+      self._walkFrame = (math.floor(self.animT * 10) % 2)
+      if self.animT >= 0.42 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "dodge" then
+      -- Lateral sidestep away from the foe (not a full cover tuck).
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.38)
+      local pulse = math.sin(t * math.pi)
+      local tx = self.basePx - (towardX or self.basePx)
+      local ty = self.basePy - (towardY or self.basePy)
+      local len = math.sqrt(tx * tx + ty * ty)
+      local px, py = -ty, tx
+      if len > 0.1 then
+        px, py = -ty / len, tx / len
+        self.facing = faceFromDelta(tx, ty)
+      else
+        px, py = 1, 0
+      end
+      ox = ox + px * pulse * 14
+      oy = oy + py * pulse * 14 - pulse * 4
+      self._walkFrame = (t < 0.85) and 1 or 0
+      if self.animT >= 0.38 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "brace" then
+      -- Brief crouch / settle into a guard.
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.40)
+      local pulse = math.sin(t * math.pi)
+      oy = oy + pulse * 5
+      ox = ox + math.sin(t * math.pi * 2) * 1.2
+      if self.animT >= 0.40 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "hit" then
+      self.animT = (self.animT or 0) + dt
+      local flash = (math.floor(self.animT * 22) % 2 == 0) and 1 or -1
+      local knock = math.min(1, self.animT / 0.18)
+      local tx = self.basePx - (towardX or self.basePx)
+      local ty = self.basePy - (towardY or self.basePy)
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+      else
+        tx, ty = 0, 1
+      end
+      ox = ox + flash * 4 + tx * knock * 8
+      oy = oy + 2 + ty * knock * 5
+      if self.animT >= 0.42 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "cover" then
+      self.animT = (self.animT or 0) + dt
+      oy = oy - math.min(6, self.animT * 14)
+      if self.animT >= 0.45 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "faint" then
+      self.animT = (self.animT or 0) + dt
+      -- Dampen bob while sinking out.
+      oy = bob * (1 - math.min(1, self.animT / 0.35))
+        + math.min(16, self.animT * 28)
+      if self.animT >= 0.55 then
+        self._faintDone = true
+      end
+    end
+
+    self.px = self.basePx + ox
+    self.py = self.basePy + oy
+  end
+
+  return ent
+end
+
+local function picDrawer(img, scale)
+  scale = scale or 1
+  local angles = {
+    down = 0,
+    right = -math.pi / 2,
+    left = math.pi / 2,
+    up = math.pi,
+  }
+  return function(ent, camX, camY)
+    if not img or ent.hidden or ent._removed then
+      return
+    end
+    local iw, ih = img:getDimensions()
+    local w, h = iw * scale, ih * scale
+    local x = ent.px - camX + 8
+    local y = ent.py - camY + 8
+    local ang = angles[ent.facing or "down"] or 0
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(img, x, y, ang, scale, scale, iw / 2, ih / 2)
+  end
+end
+
+function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler, grid)
+  local mode = Sprites.castMode(mod)
+
+  if mode == "STADIUM" then
+    local img = battler and battler.sprite or nil
+    if type(img) == "userdata" or type(img) == "table" then
+      local iw = (img.getWidth and img:getWidth()) or 56
+      local scale = (iw > 40) and 0.55 or 1
+      return buildEntity(side, cellX, cellY, facing, species,
+        picDrawer(img, scale), "stadium", grid)
+    end
+  end
+
+  local path = Sprites.resolveFollowerPath(mod, game, species)
+  if path then
+    -- Warm Assets cache (and confirm the sheet loads).
+    local img = loadImage(path)
+    if img then
+      local okSR, SpriteRenderer = pcall(require, "src.render.SpriteRenderer")
+      if okSR and type(SpriteRenderer.new) == "function" then
+        local def = {
+          id = "ar_fbv_" .. tostring(side),
+          image = path,
+          frames = 6,
+          walker = true,
+          trueColor = true,
+        }
+        local okSp, sprite = pcall(SpriteRenderer.new, def, def.id)
+        if okSp and sprite then
+          local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
+          ent.sprite = sprite
+          return ent
+        end
+      end
+      -- Manual sheet blit if SpriteRenderer fails.
+      local iw, ih = img:getDimensions()
+      local fw, fh = 16, 16
+      if iw >= 32 and ih >= 192 then
+        fw, fh = 32, 32
+      end
+      local quads = {}
+      local n = math.max(1, math.floor(ih / fh))
+      for f = 0, n - 1 do
+        quads[f] = love.graphics.newQuad(0, f * fh, fw, fh, iw, ih)
+      end
+      local drawer = function(ent, camX, camY)
+        if ent.hidden or ent._removed then
+          return
+        end
+        local face = ent.facing or "down"
+        local walk = (ent._walkFrame or 0) == 1
+        local frame = walk and (WALK[face] or STAND[face] or 0) or (STAND[face] or 0)
+        if frame >= n then
+          frame = STAND[face] or 0
+        end
+        if frame >= n then
+          frame = 0
+        end
+        local x = ent.px - camX - (fw - 16) / 2
+        local y = ent.py - camY - 4 - (fh - 16)
+        local flip = face == "right"
+        love.graphics.setColor(1, 1, 1, 1)
+        if flip then
+          love.graphics.draw(img, quads[frame], x + fw, y, 0, -1, 1)
+        else
+          love.graphics.draw(img, quads[frame], x, y)
+        end
+      end
+      return buildEntity(side, cellX, cellY, facing, species, drawer, "ow", grid)
+    end
+    print("[anime_realism] field_battle: Assets.image failed for " .. tostring(path))
+  else
+    print("[anime_realism] field_battle: no follower path for " .. tostring(species))
+  end
+
+  -- Last resort: try live party follower's sprite on the map.
+  local ow = game and game.overworld
+  if ow then
+    local okPF, PF = pcall(require, "src.world.PikachuFollower")
+    if okPF and PF and type(PF.current) == "function" then
+      local npc = PF.current(ow)
+      if npc and npc.sprite and npc._pokepcFollowerSpecies
+          and tostring(npc._pokepcFollowerSpecies):upper() == tostring(species):upper() then
+        local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
+        ent.sprite = npc.sprite
+        return ent
+      end
+    end
+  end
+
+  print("[anime_realism] field_battle: OW sprite missing for " .. tostring(species)
+    .. " — enable PokePCFollowers_VoxelMerge")
+  -- Tiny colored square only if every loader failed.
+  local r, g, b = 0.2, 0.55, 0.9
+  if side == "player" then
+    r, g, b = 0.9, 0.35, 0.25
+  end
+  local drawer = function(ent, camX, camY)
+    local x = ent.px - camX
+    local y = ent.py - camY - 4
+    love.graphics.setColor(r, g, b, 1)
+    love.graphics.rectangle("fill", x + 1, y + 1, 14, 14)
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+  return buildEntity(side, cellX, cellY, facing, species, drawer, "placeholder", grid)
+end
+
+return Sprites

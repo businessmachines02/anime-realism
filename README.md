@@ -2,7 +2,7 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: hide levels and HP everywhere so you play by feel instead of numbers. In the anime you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting.
 
-**Current build:** `3.0.13` (`anime_realism-3.0.13.zip`)
+**Current build:** `4.5.0` (`anime_realism-4.5.0.zip`)
 
 ## Why hide levels too?
 
@@ -12,13 +12,16 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 
 ## Features
 
-- **Always on:** Levels and HP numbers/bars are hidden in battle, party, summary, and related UI (including Gen 3 Inspired UI).
+- **Always on:** Levels and HP numbers/classic bars are hidden in battle, party,
+  summary, and related UI. FIELD uses slim proportional bars without numbers.
 - **Party list:** Instead of HP, low-health Pokémon show short heal hints (e.g. `WEAK-HEAL SOON!`). Fainted mons get a fainted hint.
 - **Battle level-ups (optional):** Replaces “grew to level N” with generic growth flavor. Stat gains and move learning still work. Raw EXP-gain dialogue is hidden.
 - **Anime move calls (optional):** Turns “PIKACHU used THUNDERBOLT!” into trainer-style callouts for you and opposing trainers. Long names wrap to fit the 18-column box. Wild battles keep the vanilla line.
 - **Reactive Defense (optional):** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Menu option **REACTIVE DEF**; pick frequency via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain. Optional **SPEECH BUBBLE** replaces the classic battle text box with chat bubbles (you left / foe right / narrator center).
 - **Underdog EXP (optional):** A clearly weaker Pokémon that helps KO a stronger foe gets capped bonus EXP.
 - **Effort faint (optional):** If a Pokémon fights well then faints, it still earns Gen 1 stat exp (plus a tiny EXP crumb) — vanilla would give it nothing.
+- **Field Battles (optional):** Wild and trainer single battles can stay on the live map, with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
+- **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
 - **Optional battle HUD / XP bar hide**, low-HP warnings, mute HP alarm.
 
 ## Mechanics
@@ -94,6 +97,38 @@ If a mon fought well then fainted before EXP award:
 - **ANIME MOVES** — trainer-style announce lines; finish-flavored lines when the foe looks weak (same threshold as LOW HP AT)
 - **LOW HP WARN** / **MUTE HP ALARM** — soft cues instead of spreadsheet HP
 
+### Field Battles
+
+Set **BATTLE STAGE** to `FIELD` to use the overworld presentation for ordinary
+wild and trainer single battles. Link, demo, doubles, and other special battles
+remain on their normal presentation path.
+
+- The map remains visible beneath a compact FIELD interface: tiny proportional
+  HP bars follow the Pokémon in world space, with smaller command/move panels
+  and a narrow dialogue overlay. Party, Bag, naming, and forced-switch screens
+  remain engine-owned.
+- Trainers and Pokémon begin on a compact 5×3 formation, then move across a
+  read-only surveyed fight envelope (normally about 9×7 nearby tiles).
+- Water, warps, blocked map cells, and unrelated overworld entities are excluded
+  from movement. The map itself is never edited.
+- Each Pokémon owns a tracked pad cell; pixel movement is derived from that cell.
+- Idle Pokémon use a gentle vertical overworld-style bob without horizontal sway.
+- Physical moves step toward the target, special/status moves cast in place,
+  and hits recoil or faint without changing battle calculations.
+- Switches use recall/send-out scale animations. Capture throws and special-move
+  projectiles are overworld entities, so they stay aligned with the active
+  world camera.
+- `PokePCFollowers_VoxelMerge` or `FOLLOWERS_EX` supplies the preferred
+  overworld sheets. A visible placeholder is used if no follower art is found.
+- Hybrid voxel mode is preserved: the voxelized map remains active while the
+  Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
+  suppresses classic/Stadium battle chrome and duplicate staged arenas; Stadium
+  visuals remain available when BATTLE STAGE is not FIELD.
+- Generated cover remains session-only and is kept sparse and small so the live
+  map—not an artificial arena—stays visually dominant.
+- Ending by victory, capture, run, or blackout restores the original map
+  entities, player pose, input state, camera, and zoom.
+
 ## Options
 
 | Option | Default | Description |
@@ -105,6 +140,7 @@ If a mon fought well then fainted before EXP award:
 | **MUTE HP ALARM** | On | Silence the low-HP alarm |
 | **GENERIC LVL UP** | On | Generic level-up text (EXP-gain dialogue is always hidden) |
 | **ANIME MOVES** | On | Trainer-style move callouts for you & trainers (not wild) |
+| **BATTLE STAGE** | AUTO | `FIELD` enables wild/trainer overworld presentation; `AUTO`/`STADIUM` keep their existing presentation |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **CALLOUT STYLE** | AUTO | Flavor tone for callouts (`AUTO` / `BOLD` / `TRICKY` / `SHOWY`) |
 | **CALLOUT BUFFS** | On | Apply foe EVADE/DEF (and counter DEF drop) from callouts — quietly, no rose/fell spam |
@@ -119,14 +155,26 @@ If a mon fought well then fainted before EXP award:
 
 ## Install
 
-1. Zip `manifest.json`, `main.lua`, and `reactive_defense.lua` at the **root** of the archive (or use `./build.sh` / a prebuilt `anime_realism-*.zip`).
-2. In Gen1Recomp, import the zip via the mod manager — or copy the folder into:
+1. Run `./build.sh` (or use a prebuilt `anime_realism-*.zip`). The zip keeps package folders.
+2. In Gen1Recomp, import the zip — or copy the mod folder into:
 
    `~/Library/Application Support/pokemon-love2d/mods/anime_realism/`
 
 3. Enable the mod and restart/reload if needed.
 
 Requires `engine_internals` permission (declared in the manifest).
+
+## Layout
+
+Three packages under one mod:
+
+| Package | Role |
+|---------|------|
+| `immersion/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
+| `battle/` | Traditional battle systems (Reactive Defense, callouts, bubbles, banter, chips) |
+| `field_battle/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
+
+`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs.
 
 ## Compatibility
 
@@ -140,7 +188,10 @@ Works with the stock battle UI. Optional companions:
 
 ## Files
 
-- `manifest.json` — mod metadata (version `3.0.13`)
-- `main.lua` — hooks, menus, bubbles, counters
-- `reactive_defense.lua` — Focus meter + reaction resolution
+- `manifest.json` — mod metadata
+- `main.lua` — orchestrator + shared hooks
+- `lib/modload.lua` — package loader
+- `immersion/` — immersion package
+- `battle/` — battle systems (`reactive_defense.lua` lives here)
+- `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
 - `build.sh` — builds `anime_realism-<version>.zip`

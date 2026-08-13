@@ -1,0 +1,441 @@
+-- Field battle — pad cell occupancy + step helpers.
+-- Authoritative position is pad (u, v); pixels follow via padToPx + lerp.
+
+local Coords = require("coords")
+
+local Grid = {}
+
+local function key(u, v)
+  return Coords.key(u, v)
+end
+
+local function worldRectFromPlan(plan)
+  if not plan then
+    return { minX = 0, maxX = 0, minY = 0, maxY = 0 }
+  end
+  local lateral = plan.padHalfV or 1
+  local minX = math.min(plan.pCellX or 0, plan.eCellX or 0)
+  local maxX = math.max(plan.pCellX or 0, plan.eCellX or 0)
+  local minY = math.min(plan.pCellY or 0, plan.eCellY or 0)
+  local maxY = math.max(plan.pCellY or 0, plan.eCellY or 0)
+  if (plan.sx or 0) ~= 0 then
+    minY = (plan.midY or 0) - lateral
+    maxY = (plan.midY or 0) + lateral
+  else
+    minX = (plan.midX or 0) - lateral
+    maxX = (plan.midX or 0) + lateral
+  end
+  return { minX = minX, maxX = maxX, minY = minY, maxY = maxY }
+end
+
+local function padOf(g, ent)
+  if not ent then
+    return 0, 0
+  end
+  if ent.padU ~= nil and ent.padV ~= nil then
+    return ent.padU, ent.padV
+  end
+  -- Never treat world cells as pad indices; convert at the boundary.
+  if g and ent.cellX ~= nil and ent.cellY ~= nil then
+    return Coords.worldToPad(g, ent.cellX, ent.cellY)
+  end
+  return 0, 0
+end
+
+--- Sync cached world cell + pixel target from pad. Does not touch occupancy.
+function Grid.syncPx(g, ent)
+  if not (g and ent and ent.padU ~= nil) then
+    return
+  end
+  local wx, wy = Coords.padToWorld(g, ent.padU, ent.padV)
+  ent.cellX, ent.cellY = wx, wy
+  local px, py = Coords.padToPx(g, ent.padU, ent.padV)
+  ent.targetPx, ent.targetPy = px, py
+end
+
+--- Build a grid from arena generate result + layout plan (pad axes).
+function Grid.build(arenaEdits, plan)
+  local sx = plan and plan.sx or 1
+  local sy = plan and plan.sy or 0
+  local rect = (arenaEdits and arenaEdits.gridRect) or worldRectFromPlan(plan)
+  local layout = (arenaEdits and arenaEdits.pad) or Coords.layoutPad(rect, sx, sy)
+  local g = {
+    blocked = {},
+    occ = {},
+    props = {},
+    home = {},
+    walkable = arenaEdits and arenaEdits.walkable or nil,
+    worldRect = rect,
+    sx = sx,
+    sy = sy,
+  }
+  Coords.applyLayout(g, layout)
+
+  local slots = arenaEdits and arenaEdits.coverSlots
+  if type(slots) == "table" then
+    for i = 1, #slots do
+      local s = slots[i]
+      if s and s.u ~= nil and s.v ~= nil then
+        -- Pad-native session props (one blocked cell each).
+        g.blocked[key(s.u, s.v)] = true
+        local wx, wy = Coords.padToWorld(g, s.u, s.v)
+        g.props[#g.props + 1] = {
+          u = s.u, v = s.v,
+          wx = wx, wy = wy,
+          cx = s.cx or wx, cy = s.cy or wy,
+          kind = s.kind,
+          px = s.px, py = s.py,
+        }
+      elseif s and s.cx and s.cy then
+        -- Legacy world-block props (2×2 cells) for older tests / callers.
+        for dx = 0, 1 do
+          for dy = 0, 1 do
+            local wx, wy = s.cx + dx, s.cy + dy
+            local u, v = Coords.worldToPad(g, wx, wy)
+            g.blocked[key(u, v)] = true
+            g.props[#g.props + 1] = {
+              u = u, v = v,
+              wx = wx, wy = wy,
+              cx = wx, cy = wy,
+              kind = s.kind,
+              px = s.px, py = s.py,
+            }
+          end
+        end
+      end
+    end
+  end
+
+  if plan then
+    local function homeAt(wx, wy)
+      local u, v = Coords.worldToPad(g, wx, wy)
+      return { u = u, v = v }
+    end
+    if plan.pMonX and plan.pMonY then
+      g.home.player = homeAt(plan.pMonX, plan.pMonY)
+    end
+    if plan.eMonX and plan.eMonY then
+      g.home.enemy = homeAt(plan.eMonX, plan.eMonY)
+    end
+    if plan.pCellX and plan.pCellY then
+      g.home.playerTrainer = homeAt(plan.pCellX, plan.pCellY)
+    end
+    if plan.eCellX and plan.eCellY then
+      g.home.enemyTrainer = homeAt(plan.eCellX, plan.eCellY)
+    end
+  end
+  return g
+end
+
+function Grid.padOf(g, ent)
+  return padOf(g, ent)
+end
+
+function Grid.inPad(g, u, v)
+  return Coords.inPad(g, u, v)
+end
+
+--- World-cell AABB (carve identity / debug). Prefer Grid.inPad for occupancy.
+function Grid.inBounds(g, cx, cy)
+  if not g then
+    return false
+  end
+  if g.sizeU and g.uAxis then
+    local u, v = Coords.worldToPad(g, cx, cy)
+    return Coords.inPad(g, u, v)
+  end
+  return cx >= (g.minX or 0) and cx <= (g.maxX or 0)
+      and cy >= (g.minY or 0) and cy <= (g.maxY or 0)
+end
+
+function Grid.isBlocked(g, u, v)
+  return g and g.blocked[key(u, v)] == true
+end
+
+function Grid.inEnvelope(g, u, v)
+  if not Grid.inPad(g, u, v) then
+    return false
+  end
+  if g and type(g.walkable) == "table" then
+    return g.walkable[key(u, v)] == true
+  end
+  return true
+end
+
+function Grid.isFree(g, u, v, ignoreId)
+  if not Grid.inEnvelope(g, u, v) or Grid.isBlocked(g, u, v) then
+    return false
+  end
+  local who = g.occ[key(u, v)]
+  return who == nil or who == ignoreId
+end
+
+function Grid.occupy(g, id, u, v)
+  if not g or not id then
+    return
+  end
+  Grid.release(g, id)
+  if u ~= nil and v ~= nil then
+    g.occ[key(u, v)] = id
+  end
+end
+
+function Grid.release(g, id)
+  if not (g and id) then
+    return
+  end
+  for k, who in pairs(g.occ) do
+    if who == id then
+      g.occ[k] = nil
+    end
+  end
+end
+
+function Grid.clear(g)
+  if g then
+    g.occ = {}
+  end
+end
+
+function Grid.lane(g, u)
+  local n = (g and g.sizeU) or 1
+  u = u or 0
+  if u < n / 3 then
+    return "player"
+  end
+  if u > (2 * n) / 3 then
+    return "enemy"
+  end
+  return "mid"
+end
+
+--- Step one pad cell if free. Mutates pad only; pixels via syncPx.
+function Grid.step(g, ent, du, dv)
+  if not (g and ent) then
+    return false
+  end
+  local u, v = padOf(g, ent)
+  u = u + (du or 0)
+  v = v + (dv or 0)
+  if not Grid.isFree(g, u, v, ent.id) then
+    return false
+  end
+  Grid.occupy(g, ent.id, u, v)
+  ent.padU, ent.padV = u, v
+  Grid.syncPx(g, ent)
+  return true
+end
+
+function Grid.setPad(g, ent, u, v)
+  if not (g and ent and Grid.isFree(g, u, v, ent.id)) then
+    return false
+  end
+  Grid.occupy(g, ent.id, u, v)
+  ent.padU, ent.padV = u, v
+  Grid.syncPx(g, ent)
+  ent.basePx = ent.basePx or ent.targetPx
+  ent.basePy = ent.basePy or ent.targetPy
+  return true
+end
+
+--- World-cell wrapper (converts at the boundary). Prefer setPad.
+function Grid.setCell(g, ent, cx, cy)
+  if not (g and ent) then
+    return false
+  end
+  local u, v = Coords.worldToPad(g, cx, cy)
+  return Grid.setPad(g, ent, u, v)
+end
+
+function Grid.homePad(g, side)
+  local h = g and g.home and g.home[side]
+  if h then
+    return h.u, h.v
+  end
+  return nil, nil
+end
+
+function Grid.homeCell(g, side)
+  local u, v = Grid.homePad(g, side)
+  if u ~= nil then
+    return Coords.padToWorld(g, u, v)
+  end
+  return nil, nil
+end
+
+function Grid.dodge(g, ent, towardEnt)
+  if not (g and ent) then
+    return false
+  end
+  local dv = 1
+  if towardEnt then
+    local _, ev = padOf(g, ent)
+    local _, fv = padOf(g, towardEnt)
+    if (ev - fv) < 0 then
+      dv = -1
+    end
+  end
+  if Grid.step(g, ent, 0, dv) then
+    return true
+  end
+  if Grid.step(g, ent, 0, -dv) then
+    return true
+  end
+  return false
+end
+
+function Grid.attackStep(g, ent, foeEnt)
+  if not (g and ent and foeEnt) then
+    return false
+  end
+  local u = padOf(g, ent)
+  local fu = padOf(g, foeEnt)
+  local du = 0
+  if fu > u then
+    du = 1
+  elseif fu < u then
+    du = -1
+  end
+  ent._returnU, ent._returnV = padOf(g, ent)
+  return Grid.step(g, ent, du, 0)
+end
+
+function Grid.returnHome(g, ent)
+  if not (g and ent) then
+    return false
+  end
+  local u = ent._returnU or ent.homePadU
+  local v = ent._returnV or ent.homePadV
+  ent._returnU, ent._returnV = nil, nil
+  if u ~= nil and v ~= nil then
+    return Grid.setPad(g, ent, u, v)
+  end
+  if ent._returnCx and ent._returnCy then
+    local ok = Grid.setCell(g, ent, ent._returnCx, ent._returnCy)
+    ent._returnCx, ent._returnCy = nil, nil
+    return ok
+  end
+  if ent.homeCellX and ent.homeCellY then
+    return Grid.setCell(g, ent, ent.homeCellX, ent.homeCellY)
+  end
+  return false
+end
+
+function Grid.knockback(g, ent, fromEnt)
+  if not (g and ent) then
+    return false
+  end
+  local du, dv = 0, 0
+  if fromEnt then
+    local u, v = padOf(g, ent)
+    local fu, fv = padOf(g, fromEnt)
+    du, dv = u - fu, v - fv
+  else
+    du, dv = -1, 0
+  end
+  local su = du == 0 and 0 or (du > 0 and 1 or -1)
+  local sv = dv == 0 and 0 or (dv > 0 and 1 or -1)
+  if math.abs(du) >= math.abs(dv) then
+    sv = 0
+  else
+    su = 0
+  end
+  return Grid.step(g, ent, su, sv)
+end
+
+--- Nearest free cell adjacent to a prop, preferring far side on u from foe.
+function Grid.seekCover(g, ent, foeEnt)
+  if not (g and ent) or #g.props == 0 then
+    return Grid.dodge(g, ent, foeEnt)
+  end
+  local best, bestScore = nil, -1e9
+  local fu, fv
+  if foeEnt then
+    fu, fv = padOf(g, foeEnt)
+  end
+  local eu, ev = padOf(g, ent)
+  for i = 1, #g.props do
+    local p = g.props[i]
+    local pu, pv = p.u, p.v
+    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+      local u, v = pu + d[1], pv + d[2]
+      if Grid.isFree(g, u, v, ent.id) then
+        local score = -math.abs(u - eu) - math.abs(v - ev)
+        if fu then
+          -- Prefer far on u from the foe, and prop between us and foe.
+          score = score + math.abs(u - fu) * 0.35
+          local toFoeU, toFoeV = fu - u, (fv or 0) - v
+          local toPropU, toPropV = pu - u, pv - v
+          local fl = math.sqrt(toFoeU * toFoeU + toFoeV * toFoeV)
+          local pl = math.sqrt(toPropU * toPropU + toPropV * toPropV)
+          if fl > 0.1 and pl > 0.1 then
+            score = score + ((toFoeU / fl) * (toPropU / pl) + (toFoeV / fl) * (toPropV / pl)) * 4
+          end
+        end
+        if score > bestScore then
+          bestScore, best = score, { u = u, v = v }
+        end
+      end
+    end
+  end
+  if best then
+    return Grid.setPad(g, ent, best.u, best.v)
+  end
+  return Grid.dodge(g, ent, foeEnt)
+end
+
+function Grid.idleWander(g, ent, side)
+  if not (g and ent) then
+    return false
+  end
+  local hu, hv = Grid.homePad(g, side)
+  if hu == nil then
+    if ent.homePadU ~= nil then
+      hu, hv = ent.homePadU, ent.homePadV
+    else
+      hu, hv = padOf(g, ent)
+    end
+  end
+  local u, v = padOf(g, ent)
+  local here = math.abs(u - hu) + math.abs(v - hv)
+  local rr = (love and love.math and love.math.random) or math.random
+
+  local function tryStepTowardHome()
+    local dirs = {}
+    local du, dv = hu - u, hv - v
+    if du ~= 0 then dirs[#dirs + 1] = { du > 0 and 1 or -1, 0 } end
+    if dv ~= 0 then dirs[#dirs + 1] = { 0, dv > 0 and 1 or -1 } end
+    for i = 1, #dirs do
+      if Grid.step(g, ent, dirs[i][1], dirs[i][2]) then
+        return true
+      end
+    end
+    return false
+  end
+
+  -- Bounded free roaming: settle one cell at a time instead of teleporting.
+  if here >= 2 then
+    return tryStepTowardHome()
+  end
+  if here == 1 and rr() <= 0.62 then
+    return tryStepTowardHome()
+  end
+
+  -- Wander one step, but never beyond two cells from home.
+  local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+  for i = #dirs, 2, -1 do
+    local j = rr(1, i)
+    dirs[i], dirs[j] = dirs[j], dirs[i]
+  end
+  for i = 1, #dirs do
+    local nu = u + dirs[i][1]
+    local nv = v + dirs[i][2]
+    if math.abs(nu - hu) + math.abs(nv - hv) <= 2
+        and Grid.step(g, ent, dirs[i][1], dirs[i][2]) then
+      return true
+    end
+  end
+  return false
+end
+
+return Grid
