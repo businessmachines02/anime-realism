@@ -177,6 +177,55 @@ function tests.read_only_walkable_envelope()
   truthy(not Grid.isFree(grid, wu, wv), "movement rejects surveyed water")
 end
 
+function tests.survey_relocates_mons_off_buildings()
+  -- Mid-strip formation lands mon homes on solid roof tiles; survey must
+  -- snap them onto open path cells and never force-mark roofs walkable.
+  local plan = Layout.plan(8, 10, 16, 10)
+  local solid = {
+    [12] = true, [13] = true, -- planned mon/mid cells
+  }
+  local map = {
+    inBounds = function() return true end,
+    isWaterCell = function() return false end,
+    isGrassCell = function() return false end,
+    isWalkableCell = function(_, x, y)
+      if y ~= 10 then
+        return false
+      end
+      return not solid[x]
+    end,
+    warpAtCell = function() return nil end,
+  }
+  local player = { cellX = 8, cellY = 10 }
+
+  -- Force planned mon/trainer cells onto solid x=12/13.
+  plan.pMonX, plan.pMonY = 12, 10
+  plan.eMonX, plan.eMonY = 13, 10
+  plan.pCellX, plan.pCellY = 12, 10
+  plan.eCellX, plan.eCellY = 13, 10
+
+  local envelope = Survey.build(map, plan, { player = player })
+  local pU, pV = Coords.worldToPad(envelope.pad, plan.pMonX, plan.pMonY)
+  local eU, eV = Coords.worldToPad(envelope.pad, plan.eMonX, plan.eMonY)
+  truthy(envelope.walkable[Coords.key(pU, pV)], "player mon on surveyed walkable")
+  truthy(envelope.walkable[Coords.key(eU, eV)], "enemy mon on surveyed walkable")
+  truthy(Survey.cellAllowed(map, plan.pMonX, plan.pMonY),
+    "player mon world cell is collision-legal")
+  truthy(Survey.cellAllowed(map, plan.eMonX, plan.eMonY),
+    "enemy mon world cell is collision-legal")
+  truthy(not solid[plan.pMonX], "player mon left the roof")
+  truthy(not solid[plan.eMonX], "enemy mon left the roof")
+
+  -- Roofs must stay out of the walkable mask (no force-allow fallback).
+  for x = 12, 13 do
+    local u, v = Coords.worldToPad(envelope.pad, x, 10)
+    if Coords.inPad(envelope.pad, u, v) then
+      truthy(not envelope.walkable[Coords.key(u, v)],
+        "solid roof stays illegal in walkable mask")
+    end
+  end
+end
+
 function tests.compact_field_ui_tracks_engine_cursors()
   local battle = { phase = "menu", menuIndex = 3 }
   local state = UI.layoutState(battle)
@@ -290,6 +339,91 @@ function tests.blocked_cells()
   }, plan)
   truthy(Grid.isBlocked(grid, 2, 0), "cover blocks its pad cell")
   truthy(not Grid.isFree(grid, 2, 0), "blocked cell is unavailable")
+end
+
+function tests.physical_jumps_cover()
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+    coverSlots = { { u = 4, v = 0, kind = "rock" } },
+  }, plan)
+  local player = {
+    id = "player", padU = 1, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 7, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  truthy(Grid.pathObstructed(grid, player, enemy), "cover sits on the fight axis")
+
+  local overworld = { entities = { player, enemy } }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 5,
+    _deps = { Projectiles = Projectiles },
+    _battle = { game = { overworld = overworld } },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "physical over cover")
+  eq(player.lastAnim, "jump", "attacker jumps when path is blocked")
+  local fx = session.projectiles and session.projectiles[1]
+  truthy(fx and fx.style == "contact", "physical keeps contact-only FX")
+  eq(fx.sx, fx.ex, "no traveling physical projectile")
+end
+
+function tests.special_trajectories_track_mons()
+  local grid = sampleGrid()
+  local player = {
+    id = "player",
+    padU = grid.home.player.u,
+    padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy",
+    padU = grid.home.enemy.u,
+    padV = grid.home.enemy.v,
+    px = 96, py = 40,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+    _deps = { Projectiles = Projectiles },
+  }
+  local orb = Projectiles.move(session, "player", {
+    category = "special", moveType = "FIRE",
+  })
+  eq(orb.sx, 24, "special starts at player sprite center x")
+  eq(orb.sy, 36, "special starts at player sprite center y")
+  eq(orb.ex, 104, "special ends at enemy sprite center x")
+  eq(orb.ey, 44, "special ends at enemy sprite center y")
+  truthy(orb.sx < orb.ex, "player special travels toward enemy")
+
+  local reverse = Projectiles.move(session, "enemy", {
+    category = "special", moveType = "WATER",
+  })
+  truthy(reverse.sx > reverse.ex, "enemy special travels toward player")
+
+  local beam = Projectiles.move(session, "player", {
+    category = "special", moveType = "ELECTRIC",
+  })
+  eq(beam.style, "beam", "beam specials keep line trajectory")
+  eq(beam.sx, orb.sx, "beam shares attacker origin")
+  eq(beam.ex, orb.ex, "beam shares defender target")
+
+  local hop = Projectiles.move(session, "player", {
+    category = "special", jump = true, moveType = "FIRE",
+  })
+  truthy(hop.arc > orb.arc, "specials arc higher over blockers")
 end
 
 function tests.cues_and_dedupe()

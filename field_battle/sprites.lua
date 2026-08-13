@@ -477,6 +477,34 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
         self._attackStepped = nil
+        self._attackJump = nil
+      end
+    elseif anim == "jump" then
+      -- Leap the fight axis when cover / a blocker sits between mons.
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.46
+      local t = math.min(1, self.animT / dur)
+      local pulse = math.sin(t * math.pi)
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+        self.facing = faceFromDelta(tx, ty)
+      else
+        tx, ty = 0, -1
+      end
+      local reach = self._attackStepped and 10 or 20
+      ox = ox + tx * pulse * reach
+      oy = oy + ty * pulse * (reach * 0.35) - math.sin(t * math.pi) * 22
+      self.drawScale = 1 + pulse * 0.08
+      self._walkFrame = (t < 0.92) and 1 or 0
+      if self.animT >= dur then
+        self.anim = "idle"
+        self.animT = 0
+        self.drawScale = 1
+        self._attackStepped = nil
+        self._attackJump = nil
       end
     elseif anim == "cast" then
       -- Special: stay on cell, still read as an action (rise + glow pulse).

@@ -3,6 +3,9 @@
 -- Queried once at staging from the live map (collision / water / warps /
 -- blocking entities). Results become grid.blocked. The map itself is never
 -- edited. EXTRA_U / HALF_V grow the fight envelope beyond the 5×3 formation.
+--
+-- Formation cells from Layout.plan are snapped onto surveyed walkable tiles;
+-- illegal homes are never force-marked walkable (that parked mons under roofs).
 
 local Coords = require("coords")
 
@@ -70,29 +73,55 @@ function Survey.cellAllowed(map, wx, wy)
   end
   local walkable = callBool(map, "isWalkableCell", wx, wy)
   local grass = callBool(map, "isGrassCell", wx, wy)
-  if walkable == false and grass ~= true then
+  -- Require an explicit walkable/grass yes. Unknown (nil) is not a free pass
+  -- when the map exposes collision predicates.
+  if walkable == true or grass == true then
+    return true
+  end
+  if walkable == false then
     return false
   end
-  return true
-end
-
-local function forceCell(out, layout, wx, wy)
-  if wx == nil or wy == nil then return end
-  local u, v = Coords.worldToPad(layout, wx, wy)
-  if Coords.inPad(layout, u, v) then
-    out[Coords.key(u, v)] = true
+  -- No isWalkableCell on the map object: keep prior permissive behavior.
+  if type(map.isWalkableCell) ~= "function" then
+    return true
   end
+  return false
 end
 
-local function relocateMon(plan, layout, walkable, side, occupied)
-  local xKey = side == "player" and "pMonX" or "eMonX"
-  local yKey = side == "player" and "pMonY" or "eMonY"
-  local wantedU, wantedV = Coords.worldToPad(layout, plan[xKey], plan[yKey])
+--- Prefer open tiles; penalize wall-hugging cells (roofs / building edges).
+local function opennessPenalty(layout, walkable, u, v)
+  local pen = 0
+  for du = -1, 1 do
+    for dv = -1, 1 do
+      if not (du == 0 and dv == 0) then
+        local nu, nv = u + du, v + dv
+        if not Coords.inPad(layout, nu, nv) then
+          pen = pen + 2
+        elseif not walkable[Coords.key(nu, nv)] then
+          pen = pen + 4
+        end
+      end
+    end
+  end
+  return pen
+end
+
+local function relocateAnchor(plan, layout, walkable, occupied, xKey, yKey, preferSide)
+  local wx, wy = plan[xKey], plan[yKey]
+  if wx == nil or wy == nil then
+    return false
+  end
+  local wantedU, wantedV = Coords.worldToPad(layout, wx, wy)
   local wantedKey = Coords.key(wantedU, wantedV)
   if walkable[wantedKey] and not occupied[wantedKey] then
-    occupied[wantedKey] = true
-    return
+    -- Still prefer a more open neighbor when the planned cell hugs a wall.
+    local hug = opennessPenalty(layout, walkable, wantedU, wantedV)
+    if hug <= 8 then
+      occupied[wantedKey] = true
+      return true
+    end
   end
+
   local midU = math.floor(((layout.sizeU or 1) - 1) / 2)
   local best, bestScore
   for u = 0, (layout.sizeU or 1) - 1 do
@@ -100,28 +129,52 @@ local function relocateMon(plan, layout, walkable, side, occupied)
       local key = Coords.key(u, v)
       if walkable[key] and not occupied[key] then
         local sidePenalty = 0
-        if side == "player" and u >= midU then sidePenalty = 20 end
-        if side == "enemy" and u <= midU then sidePenalty = 20 end
-        local score = math.abs(u - wantedU) + math.abs(v - wantedV) + sidePenalty
+        if preferSide == "player" and u >= midU then
+          sidePenalty = 20
+        elseif preferSide == "enemy" and u <= midU then
+          sidePenalty = 20
+        end
+        local score = math.abs(u - wantedU) + math.abs(v - wantedV)
+            + sidePenalty
+            + opennessPenalty(layout, walkable, u, v)
         if not bestScore or score < bestScore then
           best, bestScore = { u = u, v = v }, score
         end
       end
     end
   end
-  if best then
-    local wx, wy = Coords.padToWorld(layout, best.u, best.v)
-    plan[xKey], plan[yKey] = wx, wy
-    occupied[Coords.key(best.u, best.v)] = true
-  else
-    walkable[wantedKey] = true
-    occupied[wantedKey] = true
+  if not best then
+    return false
   end
+  local nx, ny = Coords.padToWorld(layout, best.u, best.v)
+  plan[xKey], plan[yKey] = nx, ny
+  occupied[Coords.key(best.u, best.v)] = true
+  return true
 end
 
-function Survey.build(map, plan, opts)
-  opts = opts or {}
-  local rect = Survey.envelopeRect(plan, opts.extraU, opts.halfV)
+local function seedFallback(walkable, layout, occupied, map, wx, wy, plan, xKey, yKey)
+  if wx == nil or wy == nil then
+    return false
+  end
+  if not Survey.cellAllowed(map, wx, wy) then
+    return false
+  end
+  local u, v = Coords.worldToPad(layout, wx, wy)
+  if not Coords.inPad(layout, u, v) then
+    return false
+  end
+  local key = Coords.key(u, v)
+  if occupied[key] then
+    return false
+  end
+  walkable[key] = true
+  plan[xKey], plan[yKey] = wx, wy
+  occupied[key] = true
+  return true
+end
+
+local function buildOnce(map, plan, opts, extraU, halfV)
+  local rect = Survey.envelopeRect(plan, extraU, halfV)
   local layout = Coords.layoutPad(rect, plan and plan.sx or 1, plan and plan.sy or 0)
   local walkable = {}
   local occupiedWorld = {}
@@ -144,22 +197,44 @@ function Survey.build(map, plan, opts)
     end
   end
 
-  -- Trainers stand on cells already occupied in the live map. Preserve those
-  -- anchors, then relocate only Pokémon homes if a nearby tile is unsuitable.
-  forceCell(walkable, layout, plan and plan.pCellX, plan and plan.pCellY)
-  if plan and plan.hasFoeTrainer then
-    forceCell(walkable, layout, plan.eCellX, plan.eCellY)
-  end
   local occupied = {}
   if plan then
-    local pu, pv = Coords.worldToPad(layout, plan.pCellX, plan.pCellY)
-    occupied[Coords.key(pu, pv)] = true
-    if plan.hasFoeTrainer then
-      local eu, ev = Coords.worldToPad(layout, plan.eCellX, plan.eCellY)
-      occupied[Coords.key(eu, ev)] = true
+    -- Snap trainers first so parkTrainer never lands on roofs / solid tiles.
+    if not relocateAnchor(plan, layout, walkable, occupied,
+        "pCellX", "pCellY", "player") then
+      local p = opts.player
+      seedFallback(walkable, layout, occupied, map,
+        p and p.cellX, p and p.cellY, plan, "pCellX", "pCellY")
     end
-    relocateMon(plan, layout, walkable, "player", occupied)
-    relocateMon(plan, layout, walkable, "enemy", occupied)
+    if plan.hasFoeTrainer then
+      if not relocateAnchor(plan, layout, walkable, occupied,
+          "eCellX", "eCellY", "enemy") then
+        local f = opts.foe
+        seedFallback(walkable, layout, occupied, map,
+          f and f.cellX, f and f.cellY, plan, "eCellX", "eCellY")
+      end
+    end
+    if not relocateAnchor(plan, layout, walkable, occupied,
+        "pMonX", "pMonY", "player") then
+      local p = opts.player
+      seedFallback(walkable, layout, occupied, map,
+        p and p.cellX, p and p.cellY, plan, "pMonX", "pMonY")
+    end
+    if not relocateAnchor(plan, layout, walkable, occupied,
+        "eMonX", "eMonY", "enemy") then
+      local f = opts.foe
+      if not seedFallback(walkable, layout, occupied, map,
+          f and f.cellX, f and f.cellY, plan, "eMonX", "eMonY") then
+        local p = opts.player
+        seedFallback(walkable, layout, occupied, map,
+          p and p.cellX, p and p.cellY, plan, "eMonX", "eMonY")
+      end
+    end
+  end
+
+  local walkCount = 0
+  for _ in pairs(walkable) do
+    walkCount = walkCount + 1
   end
 
   return {
@@ -167,7 +242,32 @@ function Survey.build(map, plan, opts)
     pad = layout,
     walkable = walkable,
     readOnly = true,
+    walkCount = walkCount,
   }
+end
+
+function Survey.build(map, plan, opts)
+  opts = opts or {}
+  local extraU = opts.extraU or Survey.EXTRA_U
+  local halfV = opts.halfV or Survey.HALF_V
+  local best
+  -- Widen the envelope when the strip is mostly buildings / water.
+  for attempt = 0, 2 do
+    local result = buildOnce(map, plan, opts, extraU + attempt * 2, halfV + attempt)
+    best = result
+    if result and plan and plan.pMonX ~= nil and plan.eMonX ~= nil then
+      local pU, pV = Coords.worldToPad(result.pad, plan.pMonX, plan.pMonY)
+      local eU, eV = Coords.worldToPad(result.pad, plan.eMonX, plan.eMonY)
+      if result.walkable[Coords.key(pU, pV)]
+          and result.walkable[Coords.key(eU, eV)]
+          and (result.walkCount or 0) >= 4 then
+        return result
+      end
+    elseif result and (result.walkCount or 0) >= 4 then
+      return result
+    end
+  end
+  return best
 end
 
 return Survey

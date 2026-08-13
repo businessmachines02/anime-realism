@@ -347,6 +347,35 @@ function Grid.knockback(g, ent, fromEnt)
   return Grid.step(g, ent, su, sv)
 end
 
+--- True when a cover prop / third party sits between two battlers on the pad.
+function Grid.pathObstructed(g, fromEnt, toEnt)
+  if not (g and fromEnt and toEnt) then
+    return false
+  end
+  local u0, v0 = padOf(g, fromEnt)
+  local u1, v1 = padOf(g, toEnt)
+  local du, dv = u1 - u0, v1 - v0
+  local steps = math.max(math.abs(du), math.abs(dv))
+  if steps <= 1 then
+    return false
+  end
+  local fromId = fromEnt.id
+  local toId = toEnt.id
+  for i = 1, steps - 1 do
+    local t = i / steps
+    local u = math.floor(u0 + du * t + 0.5)
+    local v = math.floor(v0 + dv * t + 0.5)
+    if Grid.isBlocked(g, u, v) then
+      return true
+    end
+    local who = g.occ and g.occ[key(u, v)]
+    if who ~= nil and who ~= fromId and who ~= toId then
+      return true
+    end
+  end
+  return false
+end
+
 --- Nearest free cell adjacent to a prop, preferring far side on u from foe.
 function Grid.seekCover(g, ent, foeEnt)
   if not (g and ent) or #g.props == 0 then

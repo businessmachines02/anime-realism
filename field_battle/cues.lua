@@ -1,8 +1,9 @@
 -- Field battle — arFieldCue → grid steps + cast anims.
 --
--- Physical attacks step in toward the foe; specials / status cast in place.
--- Hits may knock the target back one cell. Cue dedupe prevents double-steps
--- when multiple battle events fire for the same move beat.
+-- Physical attacks step in toward the foe (or jump over cover); specials
+-- cast in place with attacker→foe projectiles. Hits may knock the target
+-- back one cell. Cue dedupe prevents double-steps when multiple battle
+-- events fire for the same move beat.
 
 local Cues = {}
 
@@ -114,26 +115,54 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     end
     -- Physical: close distance on the pad, then return home.
     -- Special: hold cell; still play an in-place cast anim.
+    local Projectiles = session._deps and session._deps.Projectiles
     if category == "special" then
       ent._returnAt = nil
       ent._attackStepped = nil
-      local Projectiles = session._deps and session._deps.Projectiles
       if Projectiles and type(Projectiles.move) == "function" then
-        Projectiles.move(session, side, opts)
+        local jump = type(Grid.pathObstructed) == "function"
+            and Grid.pathObstructed(g, ent, foe)
+        Projectiles.move(session, side, {
+          category = "special",
+          jump = jump,
+          moveType = opts.moveType,
+          moveId = opts.moveId,
+        })
       end
       if type(ent.play) == "function" then
         ent:play("cast")
       end
     else
+      -- Physical: mon charges (step / jump over cover); impact FX at the foe only.
+      local obstructed = type(Grid.pathObstructed) == "function"
+          and Grid.pathObstructed(g, ent, foe)
+      local canStep = false
+      do
+        local u, v = ent.padU, ent.padV
+        local fu = foe and foe.padU
+        if u ~= nil and fu ~= nil then
+          local du = 0
+          if fu > u then
+            du = 1
+          elseif fu < u then
+            du = -1
+          end
+          canStep = du ~= 0 and Grid.isFree(g, u + du, v, ent.id)
+        end
+      end
+      local jump = obstructed or not canStep
+      ent._attackJump = jump and true or nil
       ent._attackStepped = Grid.attackStep(g, ent, foe) == true
-      local Projectiles = session._deps and session._deps.Projectiles
       if Projectiles and type(Projectiles.contact) == "function" then
         Projectiles.contact(session, side, opts)
       end
-      -- Let the one-cell lerp and attack pose land before walking home.
-      ent._returnAt = now(session) + 0.48
+      if ent._attackStepped then
+        ent._returnAt = now(session) + (jump and 0.56 or 0.48)
+      else
+        ent._returnAt = nil
+      end
       if type(ent.play) == "function" then
-        ent:play("attack")
+        ent:play(jump and "jump" or "attack")
       end
     end
     return true

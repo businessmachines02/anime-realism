@@ -35,11 +35,18 @@ local function center(session, ent)
   if not ent then
     return nil, nil
   end
+  -- Prefer live sprite pose so specials track bob / mid-lerp toward the foe.
+  if type(ent.px) == "number" and type(ent.py) == "number" then
+    return ent.px + 8, ent.py + 4
+  end
+  if type(ent.basePx) == "number" and type(ent.basePy) == "number" then
+    return ent.basePx + 8, ent.basePy + 4
+  end
   if session and session.grid and ent.padU ~= nil then
     local x, y = Coords.padCenterPx(session.grid, ent.padU, ent.padV)
     return x, y - 4
   end
-  return (ent.px or ent.basePx or 0) + 8, (ent.py or ent.basePy or 0) + 4
+  return nil, nil
 end
 
 local function removeEntity(session, projectile)
@@ -214,6 +221,7 @@ function Projectiles.move(session, side, opts)
   local moveType = tostring(opts.moveType or ""):upper()
   local moveId = tostring(opts.moveId or ""):upper()
   local color = TYPE_COLORS[moveType]
+  local jump = opts.jump == true
   if AREA_MOVES[moveId] then
     return spawn(session, {
       kind = "effect",
@@ -223,6 +231,7 @@ function Projectiles.move(session, side, opts)
       arc = 0,
       radius = 20,
       color = color,
+      onDone = opts.onDone,
     })
   end
   if BEAM_TYPES[moveType] then
@@ -233,15 +242,18 @@ function Projectiles.move(session, side, opts)
       duration = 0.28,
       arc = 0,
       color = color,
+      onDone = opts.onDone,
     })
   end
+  -- Special orbs travel attacker → foe; arc higher when cover sits on the path.
   return spawn(session, {
     kind = "move",
     sx = sx, sy = sy,
     ex = ex, ey = ey,
-    duration = 0.34,
-    arc = 5,
+    duration = jump and 0.42 or 0.34,
+    arc = jump and 20 or 5,
     color = color,
+    onDone = opts.onDone,
   })
 end
 

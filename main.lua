@@ -3772,48 +3772,6 @@ return function(mod)
             table.insert(battle.queue, battle.nextInsert, item)
         end
 
-        maybeEnqueueSendBanter = function(battle, originalText)
-            if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
-                return
-            end
-            if not rollTrainerBanter() then
-                return
-            end
-            local aboutPlayer = isPlayerSendOutText(originalText)
-            local aboutEnemy = isEnemySendOutText(originalText)
-            if not aboutPlayer and not aboutEnemy then
-                return
-            end
-            local persona = trainerPersona(battle)
-            local pack = S.BANTER[persona] or S.BANTER.generic
-            local speaker = banterSpeaker(battle)
-            local line
-            if aboutPlayer then
-                local mon = playerMonName(battle)
-                line = pickFormatted(pack.player, speaker, mon)
-                    or (speaker .. ":\nA " .. mon .. ", huh?!\nLooks tough!")
-            else
-                local mon = enemyMonName(battle)
-                line = pickFormatted(pack.enemy, speaker, mon)
-                    or (speaker .. ":\nGo, " .. mon .. "!")
-            end
-            -- Don't splice the line between "Go!" and the POOF — wait until the
-            -- mon is actually on the field (sendingOut / POOF finished).
-            local state = momentumState(battle)
-            state.pendingSendBanter = {
-                line = line,
-                side = aboutPlayer and "player" or "enemy",
-            }
-            state.sendBanterArmFrames = 8
-            if aboutPlayer and battle.sendingOut then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
-            elseif aboutEnemy and battle.enemySendingOut then
-                state.sawSendOut = true
-                state.sendBanterArmFrames = nil
-            end
-        end
-
         local function queueHasPoof(battle)
             if type(battle) ~= "table" or type(battle.queue) ~= "table" then
                 return false
@@ -3827,6 +3785,98 @@ return function(mod)
             return false
         end
 
+        local function queueHasBanter(battle)
+            if type(battle) ~= "table" then
+                return false
+            end
+            if battle.current and battle.current.arBanter then
+                return true
+            end
+            local q = battle.queue
+            if type(q) ~= "table" then
+                return false
+            end
+            for i = 1, #q do
+                if q[i] and q[i].arBanter then
+                    return true
+                end
+            end
+            return false
+        end
+
+        -- Battle box is 2 lines; extra \n scrolls like separate callouts.
+        local function clampBanterText(line)
+            local parts = {}
+            for chunk in (tostring(line or "") .. "\n"):gmatch("(.-)\n") do
+                chunk = chunk:match("^%s*(.-)%s*$") or chunk
+                if chunk ~= "" then
+                    parts[#parts + 1] = chunk
+                end
+            end
+            if #parts <= 2 then
+                return table.concat(parts, "\n")
+            end
+            local speaker = parts[1]
+            local body = table.concat(parts, " ", 2)
+            if fitsBattleLine(body) then
+                return speaker .. "\n" .. body
+            end
+            return speaker .. "\n" .. parts[2]
+        end
+
+        maybeEnqueueSendBanter = function(battle, originalText)
+            if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
+                return
+            end
+            local aboutPlayer = isPlayerSendOutText(originalText)
+            local aboutEnemy = isEnemySendOutText(originalText)
+            if not aboutPlayer and not aboutEnemy then
+                return
+            end
+            local state = momentumState(battle)
+            -- One send-in reaction per wave: SHIFT (foe send + your Go!) used to
+            -- queue two banters back-to-back.
+            if state.pendingSendBanter then
+                return
+            end
+            if (state.sendBanterCooldown or 0) > 0 then
+                return
+            end
+            if queueHasBanter(battle) then
+                return
+            end
+            if not rollTrainerBanter() then
+                return
+            end
+            local persona = trainerPersona(battle)
+            local pack = S.BANTER[persona] or S.BANTER.generic
+            local speaker = banterSpeaker(battle)
+            local line
+            if aboutPlayer then
+                local mon = playerMonName(battle)
+                line = pickFormatted(pack.player, speaker, mon)
+                    or (speaker .. ":\nA " .. mon .. ", huh?!")
+            else
+                local mon = enemyMonName(battle)
+                line = pickFormatted(pack.enemy, speaker, mon)
+                    or (speaker .. ":\nGo, " .. mon .. "!")
+            end
+            line = clampBanterText(line)
+            -- Don't splice the line between "Go!" and the POOF — wait until the
+            -- mon is actually on the field (sendingOut / POOF finished).
+            state.pendingSendBanter = {
+                line = line,
+                side = aboutPlayer and "player" or "enemy",
+            }
+            state.sendBanterArmFrames = 8
+            if aboutPlayer and battle.sendingOut then
+                state.sawSendOut = true
+                state.sendBanterArmFrames = nil
+            elseif aboutEnemy and battle.enemySendingOut then
+                state.sawSendOut = true
+                state.sendBanterArmFrames = nil
+            end
+        end
         -- Banter cameo: slide the enemy trainer pic in from the right while their
         -- line is up. Flat battles draw in battle.overlay. Under 3D-BTL the fight
         -- is in the world — briefly show the intro trainer on the enemy billboard
@@ -4128,7 +4178,13 @@ return function(mod)
                 return
             end
             local state = momentumByBattle[battle]
-            if not state or not state.pendingSendBanter then
+            if not state then
+                return
+            end
+            if (state.sendBanterCooldown or 0) > 0 then
+                state.sendBanterCooldown = state.sendBanterCooldown - 1
+            end
+            if not state.pendingSendBanter then
                 return
             end
             local pending = state.pendingSendBanter
@@ -4155,12 +4211,17 @@ return function(mod)
             if type(battle.queue) ~= "table" then
                 return
             end
+            if queueHasBanter(battle) then
+                return
+            end
             local item = { text = pending.line, arBanter = true }
             if not markBubbleWait(item, "foe", true, battle) then
                 item.auto = true
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, 1, item)
+            -- Cover the foe-send + player-Go! SHIFT wave so only one reaction lands.
+            state.sendBanterCooldown = 120
             BanterCameo.start(battle, pending.line)
         end
 
@@ -4174,6 +4235,12 @@ return function(mod)
             local ms = momentumState(battle)
             -- Skip while anything cinematic / cover-related is going on.
             if ms.awaitingPick or ms.pendingDamage or ms.againInProgress then
+                return
+            end
+            if ms.pendingSendBanter or (ms.sendBanterCooldown or 0) > 0 then
+                return
+            end
+            if queueHasBanter(battle) then
                 return
             end
             local t = ms.temp or {}
@@ -4202,6 +4269,7 @@ return function(mod)
             local speaker = banterSpeaker(battle)
             local line = pickContextualIdleLine(battle, persona, speaker)
                 or (speaker .. ":\nCome on!")
+            line = clampBanterText(line)
             ms.lastIdleBanterTurn = turn
             ms.lastIdleBanterLine = line
             local item = { text = line, arBanter = true }
@@ -4212,7 +4280,6 @@ return function(mod)
             table.insert(battle.queue, item)
             BanterCameo.start(battle, line)
         end
-
         local function tagQueueBubble(battle, bubble, forceWait)
             if not opt("speech_bubbles") or not battle or not bubble then
                 return
