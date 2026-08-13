@@ -113,24 +113,58 @@ local function fieldEntity(battle, side)
     return nil
 end
 
+local function barInitial(battler)
+    local mon = battler and battler.mon
+    local name = mon and (mon.nickname or mon.name or mon.species) or "?"
+    name = tostring(name):gsub("^Enemy%s+", "")
+    local ch = name:match("[%a]") or name:sub(1, 1) or "?"
+    if ch == "" then
+        ch = "?"
+    end
+    return ch:upper()
+end
+
 local function drawWorldHP(g, battle)
     local ow = battle and battle.game and battle.game.overworld
     local cam = ow and ow.camera
-    if not cam then return end
+    if not cam then
+        return
+    end
+    local Font = font()
     for _, item in ipairs({
         { side = "player", battler = battle.player },
         { side = "enemy",  battler = battle.enemy },
     }) do
         local ent = fieldEntity(battle, item.side)
-        if ent then
-            local x = math.floor((ent.px or 0) - (cam.x or 0) + 8.5)
-            local y = math.floor((ent.py or 0) - (cam.y or 0) - 5.5)
-            x = math.max(12, math.min(148, x))
-            y = math.max(3, math.min(136, y))
-            hpBar(g, x - 11, y, 22, battlerHP(item.battler))
-            -- Tiny downward pointer keeps the bar visually attached to its Pokémon.
-            g.setColor(0.12, 0.09, 0.08, 1)
-            g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+        local battler = item.battler
+        if ent and battler and not ent.hidden and not ent._removed then
+            -- Match sprite feet/center: pad origin is top-left of the 16×16 cell.
+            local lift = ent._fieldBarLift or 10
+            local x = math.floor((ent.px or 0) - (cam.x or 0) + 8 + 0.5)
+            local y = math.floor((ent.py or 0) - (cam.y or 0) - lift + 0.5)
+            -- Skip if fully off the classic viewport (don't clamp — that unhooks the bar).
+            if x >= -4 and x <= 164 and y >= -6 and y <= 150 then
+                local initial = barInitial(battler)
+                local barW = 20
+                local letterW = 6
+                local totalW = letterW + 1 + barW
+                local left = x - math.floor(totalW / 2)
+                if Font and type(Font.draw) == "function" then
+                    g.setColor(0.08, 0.06, 0.05, 1)
+                    g.push()
+                    g.translate(left, y - 1)
+                    g.scale(0.75, 0.75)
+                    Font.draw(initial, 0, 0)
+                    g.pop()
+                else
+                    g.setColor(0.08, 0.06, 0.05, 1)
+                    g.print(initial, left, y - 2)
+                end
+                hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
+                -- Pointer under the mon center (not the letter).
+                g.setColor(0.12, 0.09, 0.08, 1)
+                g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+            end
         end
     end
 end

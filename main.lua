@@ -3716,6 +3716,10 @@ return function(mod)
             end
             item.arFieldCue.moveType = moveType
             item.arFieldCue.moveId = moveId
+            -- Soft reddish dialogue fill while a foe damaging move is announced.
+            if side == "enemy" and kind == "attack" then
+                item.arThreatToast = true
+            end
             return true
         end
 
@@ -8069,6 +8073,7 @@ return function(mod)
             if battle.phase ~= "messages" then
                 battle._arLastBubble = nil
                 battle._arLastBubbleText = nil
+                battle._arLastBubbleThreat = nil
                 return nil
             end
             local cur = battle.current
@@ -8080,6 +8085,20 @@ return function(mod)
                 end
                 battle._arLastBubble = side
                 battle._arLastBubbleText = cur.text
+                -- Incoming foe move announce → reddish toast (QoL threat cue).
+                local cue = cur.arFieldCue
+                local threat = cur.arThreatToast == true
+                if not threat and cue and cue.side == "enemy" and cue.kind == "attack" then
+                    threat = true
+                end
+                if not threat then
+                    local mon, move = parseUsedMoveText(cur.text)
+                    if mon and move then
+                        local _, isEnemy = stripEnemyPrefix(mon)
+                        threat = isEnemy and true or false
+                    end
+                end
+                battle._arLastBubbleThreat = threat and true or nil
                 return side
             end
             -- Keep the last bubble up through move anim / CONT waits (pokered keeps
@@ -8091,6 +8110,7 @@ return function(mod)
             end
             battle._arLastBubble = nil
             battle._arLastBubbleText = nil
+            battle._arLastBubbleThreat = nil
             return nil
         end
 
@@ -8265,15 +8285,22 @@ return function(mod)
             end
 
             -- Classic text-box look: white fill, double black border.
+            -- Incoming foe attack: soft reddish fill so the threat reads instantly.
+            local threat = battle._arLastBubbleThreat == true
+                or (battle.current and battle.current.arThreatToast == true)
+            local fillR, fillG, fillB = 1, 1, 1
+            if threat then
+                fillR, fillG, fillB = 1.00, 0.78, 0.74
+            end
             g.push("all")
-            g.setColor(1, 1, 1, 1)
+            g.setColor(fillR, fillG, fillB, 1)
             g.rectangle("fill", x, y, bw, bh)
             g.setColor(0, 0, 0, 1)
             g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
             g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
             if anchorX then
                 local tailX = math.max(x + 5, math.min(x + bw - 5, anchorX))
-                g.setColor(1, 1, 1, 1)
+                g.setColor(fillR, fillG, fillB, 1)
                 g.polygon("fill", tailX - 4, y + bh - 1,
                     tailX + 4, y + bh - 1, anchorX, math.min(anchorY - 2, y + bh + 6))
                 g.setColor(0, 0, 0, 1)
@@ -8283,13 +8310,13 @@ return function(mod)
                     tailX + 4, y + bh - 1)
             elseif not narrator then
                 if side == "foe" then
-                    g.setColor(1, 1, 1, 1)
+                    g.setColor(fillR, fillG, fillB, 1)
                     g.polygon("fill", x + bw - 12, y + 1, x + bw - 4, y - 5, x + bw - 20, y + 1)
                     g.setColor(0, 0, 0, 1)
                     g.line(x + bw - 12, y + 1, x + bw - 4, y - 5)
                     g.line(x + bw - 4, y - 5, x + bw - 20, y + 1)
                 else
-                    g.setColor(1, 1, 1, 1)
+                    g.setColor(fillR, fillG, fillB, 1)
                     g.polygon("fill", x + 12, y + 1, x + 4, y - 5, x + 20, y + 1)
                     g.setColor(0, 0, 0, 1)
                     g.line(x + 12, y + 1, x + 4, y - 5)

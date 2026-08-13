@@ -574,7 +574,11 @@ function tests.lifecycle_cleanup_restores_world()
     _arFieldEngaging = true,
     entities = worldEntities,
     camera = {
-      follow = function(_, x, y)
+      x = 200, y = 200,
+      follow = function(self, x, y, vw, vh)
+        vw, vh = vw or 160, vh or 144
+        self.x = x - (vw / 2 - 16)
+        self.y = y - (vh / 2 - 8)
         followed = (x == 144 and y == 144)
       end,
     },
@@ -649,6 +653,10 @@ function tests.lifecycle_cleanup_restores_world()
   eq(overworld.entities[2], npc, "restore npc entity")
   eq(overworld.entities[3], nil, "remove field entity")
   truthy(followed, "camera follows player after restore")
+  truthy(overworld.cameraPan and overworld.cameraPan.arFieldReturn,
+    "exit soft-pan starts instead of hard snap")
+  truthy(math.abs(overworld.cameraPan.ox) > 1 or math.abs(overworld.cameraPan.oy) > 1,
+    "exit pan retains battle framing offset")
   eq(battle._arAnimeField, nil, "clear battle marker")
   eq(Lifecycle.get(battle), nil, "remove session")
   eq(#setCalls, 0, "voxel restore does not bounce through off")
@@ -656,6 +664,36 @@ function tests.lifecycle_cleanup_restores_world()
   eq(voxel3d.camera, nil, "clear leftover Voxel3D.camera")
   truthy(ended, "unbind leftover Voxel3D scene canvas")
   eq(voxelState.ready, true, "voxel tween is allowed to resume")
+end
+
+function tests.camera_pans_to_player_on_finish()
+  local player = { px = 144, py = 144 }
+  local camera = { x = 40, y = 20 }
+  function camera:follow(px, py, vw, vh)
+    vw, vh = vw or 160, vh or 144
+    self.x = px - (vw / 2 - 16)
+    self.y = py - (vh / 2 - 8)
+  end
+  local overworld = { player = player, camera = camera, entities = { player } }
+  local battle = { game = { overworld = overworld }, _arAnimeField = true }
+  Lifecycle._testBind(battle, {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    playerPose = { cellX = 9, cellY = 9, px = 144, py = 144, facing = "down" },
+    savedEntities = overworld.entities,
+    _deps = { Layout = Layout, Grid = Grid, Compat = Compat },
+  })
+  Lifecycle.finish(battle, { Layout = Layout, Grid = Grid, Compat = Compat })
+  truthy(overworld.cameraPan and overworld.cameraPan.arFieldReturn,
+    "return pan armed")
+  local startOx = overworld.cameraPan.ox
+  local startOy = overworld.cameraPan.oy
+  truthy(math.abs(startOx) > 1 or math.abs(startOy) > 1, "non-zero exit offset")
+
+  for _ = 1, 180 do
+    Lifecycle.tickReturnCamera(overworld, 1 / 60)
+  end
+  eq(overworld.cameraPan, nil, "return pan settles onto player")
 end
 
 function tests.parks_overworld_follower_during_field()

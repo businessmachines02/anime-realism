@@ -108,6 +108,10 @@ return function(env)
     return Lifecycle.focusCamera(battle)
   end
 
+  function FBV.tickReturnCamera(ow, dt)
+    return Lifecycle.tickReturnCamera(ow, dt)
+  end
+
   function FBV.animShift(battle)
     return Lifecycle.animShift(battle, Anims)
   end

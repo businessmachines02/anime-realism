@@ -85,6 +85,9 @@ local function restoreVoxel(session)
     pcall(Pipelines.setLevel, "voxel", saved)
 end
 
+--- Soft-pan the overworld camera back onto the player after FIELD ends.
+--- Uses OverworldState.cameraPan (offset on top of follow) so the next
+--- ow update keeps framing continuous while we ease the offset to zero.
 local function restoreCamera(session, battle, ow)
     if not (ow and ow.camera and ow.player) then
         return
@@ -100,12 +103,62 @@ local function restoreCamera(session, battle, ow)
             vw, vh = a, b or vh
         end
     end
-    if type(ow.camera.follow) == "function" then
-        pcall(ow.camera.follow, ow.camera, ow.player.px, ow.player.py, vw, vh)
+    local cam = ow.camera
+    local beforeX, beforeY = cam.x, cam.y
+    if type(cam.follow) == "function" then
+        pcall(cam.follow, cam, ow.player.px, ow.player.py, vw, vh)
     else
-        ow.camera.x = (ow.player.px or 0) - vw / 2
-        ow.camera.y = (ow.player.py or 0) - vh / 2
+        cam.x = (ow.player.px or 0) - vw / 2
+        cam.y = (ow.player.py or 0) - vh / 2
     end
+    local ox = (type(beforeX) == "number") and (beforeX - cam.x) or 0
+    local oy = (type(beforeY) == "number") and (beforeY - cam.y) or 0
+    local snap = Lifecycle.CAMERA_PAN_SNAP
+    if (ox * ox + oy * oy) <= snap * snap then
+        ow.cameraPan = nil
+        return
+    end
+    -- Keep the current framing this frame; ow update will follow+offset.
+    cam.x = beforeX
+    cam.y = beforeY
+    ow.cameraPan = {
+        ox = ox,
+        oy = oy,
+        arFieldReturn = true,
+    }
+end
+
+--- Ease battle-exit cameraPan toward zero at CAMERA_PAN_RATE.
+function Lifecycle.tickReturnCamera(ow, dt)
+    if not ow then
+        return false
+    end
+    local pan = ow.cameraPan
+    if not (pan and pan.arFieldReturn) then
+        return false
+    end
+    local useDt = (type(dt) == "number" and dt > 0) and dt or (1 / 60)
+    if useDt > 1 / 15 then
+        useDt = 1 / 15
+    end
+    local ox, oy = pan.ox or 0, pan.oy or 0
+    local snap = Lifecycle.CAMERA_PAN_SNAP
+    if (ox * ox + oy * oy) <= snap * snap then
+        ow.cameraPan = nil
+        return false
+    end
+    local alpha = 1 - math.exp(-useDt * Lifecycle.CAMERA_PAN_RATE)
+    ox = ox + (0 - ox) * alpha
+    oy = oy + (0 - oy) * alpha
+    if (ox * ox + oy * oy) <= snap * snap then
+        ow.cameraPan = nil
+        return false
+    end
+    pan.ox, pan.oy = ox, oy
+    -- Scripted pans use frames; keep ours outside that linear ramp.
+    pan.frames = nil
+    pan.onDone = nil
+    return true
 end
 
 local function restoreWorldEntities(session, ow)
@@ -1122,21 +1175,15 @@ end
 --- render.letterbox, and battle.overlay — deduped so bob never freezes
 --- under menus. Must NOT early-out on waitingUI / stack top / auto==false.
 function Lifecycle.tickPresent(game, dt, deps)
+    local ow = game and game.overworld
     local battle, session = Lifecycle.liveBattle(game)
-    if not (battle and session and session.live) then
-        return false
-    end
-    deps = deps or session._deps
 
     local t = wallNow(session)
-    -- Already advanced this display frame (another driver got here first).
-    if t and session._lastPresentAt and (t - session._lastPresentAt) < 0.008 then
-        return false
-    end
-
     local useDt = dt
-    if t and session._lastPresentAt then
+    if t and session and session._lastPresentAt then
         useDt = t - session._lastPresentAt
+    elseif t and Lifecycle._returnPanAt then
+        useDt = t - Lifecycle._returnPanAt
     end
     if type(useDt) ~= "number" or useDt <= 0 then
         useDt = 1 / 60
@@ -1144,6 +1191,29 @@ function Lifecycle.tickPresent(game, dt, deps)
     if useDt > 1 / 15 then
         useDt = 1 / 15
     end
+
+    -- Exit pan keeps running after the session is unbound.
+    if ow and ow.cameraPan and ow.cameraPan.arFieldReturn then
+        local skip = t and Lifecycle._returnPanAt
+            and (t - Lifecycle._returnPanAt) < 0.008
+        if not skip then
+            if t then
+                Lifecycle._returnPanAt = t
+            end
+            Lifecycle.tickReturnCamera(ow, useDt)
+        end
+    end
+
+    if not (battle and session and session.live) then
+        return false
+    end
+    deps = deps or session._deps
+
+    -- Already advanced this display frame (another driver got here first).
+    if t and session._lastPresentAt and (t - session._lastPresentAt) < 0.008 then
+        return false
+    end
+
     if t then
         session._lastPresentAt = t
     else

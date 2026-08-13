@@ -200,6 +200,12 @@ local function finishStandalone(self, fbv, _mod)
         end
       end
       pcall(ow.camera.follow, ow.camera, ow.player.px, ow.player.py, vw, vh)
+      -- Preserve FIELD exit soft-pan (offset rides on top of follow).
+      local pan = ow.cameraPan
+      if pan and pan.arFieldReturn then
+        ow.camera.x = (ow.camera.x or 0) + (pan.ox or 0)
+        ow.camera.y = (ow.camera.y or 0) + (pan.oy or 0)
+      end
     end
   end
 
