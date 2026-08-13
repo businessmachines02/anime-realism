@@ -1,8 +1,9 @@
 -- Field battle — world-space projectiles for hybrid flat/voxel maps.
 --
--- Ordinary overworld draw entities, so the active world camera and voxel
--- renderer remain authoritative. No separate staged arena is required.
--- Spawned from battle.move_used / ball_thrown cues via hooks.lua.
+-- Drawn from Lifecycle.drawWorldOverlay, not ow.entities. Dramatic Shape's
+-- voxel pass calls e:pose() then sprite.def; a nil sprite wedges the 3D
+-- canvas for the rest of the session. Spawned from battle.move_used /
+-- ball_thrown cues via hooks.lua.
 
 local Coords = require("coords")
 
@@ -185,11 +186,20 @@ local function spawn(session, spec)
     end
   end
   session.projectiles[#session.projectiles + 1] = p
-  local ow = session._battle.game and session._battle.game.overworld
-  if ow and type(ow.entities) == "table" then
-    ow.entities[#ow.entities + 1] = p
-  end
   return p
+end
+
+function Projectiles.draw(session, camX, camY)
+  local list = session and session.projectiles
+  if type(list) ~= "table" then
+    return
+  end
+  for i = 1, #list do
+    local p = list[i]
+    if p and not p._removed and type(p.draw) == "function" then
+      p:draw(camX, camY)
+    end
+  end
 end
 
 function Projectiles.move(session, side, opts)

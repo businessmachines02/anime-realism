@@ -171,6 +171,9 @@ return function(env)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
     end
+    if Lifecycle and type(Lifecycle.drawWorldOverlay) == "function" then
+      pcall(Lifecycle.drawWorldOverlay, battle)
+    end
     if UI and type(UI.draw) == "function" then
       return UI.draw(battle)
     end

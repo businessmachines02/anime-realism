@@ -23,6 +23,7 @@ local function armBattle(battle)
   battle._arFieldHost = battle
   battle.isOpaque = false
   battle.isBattle = true
+  battle.letterboxWhite = false
   battle.BG_WORLD_DIM = 0
   battle.showPlayerBack = false
   battle.showEnemyTrainer = false

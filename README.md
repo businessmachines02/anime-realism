@@ -2,7 +2,7 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: hide levels and HP everywhere so you play by feel instead of numbers. In the anime you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting.
 
-**Current build:** `4.5.18` (`anime_realism-4.5.18.zip`)
+**Current build:** `4.5.20` (`anime_realism-4.5.20.zip`)
 
 ## Why hide levels too?
 

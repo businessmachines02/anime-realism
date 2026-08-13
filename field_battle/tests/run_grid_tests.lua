@@ -353,7 +353,9 @@ function tests.world_space_projectiles()
   truthy(move and move._arFieldProjectile, "spawn move projectile")
   truthy(type(move.cellX) == "number" and type(move.cellY) == "number",
     "projectile satisfies overworld cell contract")
-  eq(overworld.entities[#overworld.entities], move, "projectile uses world entity list")
+  eq(overworld.entities[#overworld.entities], enemy,
+    "projectile stays off the voxel entity list")
+  eq(#overworld.entities, 2, "live map cast is unchanged by a projectile")
   Projectiles.tick(session, 0.17)
   truthy(move.px > move.sx and move.px < move.ex, "projectile travels between mons")
   eq(move.cellX, math.floor(move.px / 16), "projectile keeps world cell synchronized")
@@ -407,6 +409,7 @@ function tests.camera_avoids_battle_menu()
     enemyMon = enemy,
     envelope = { gridRect = grid.worldRect },
   })
+  -- No prior camera pose → settle on the envelope immediately.
   Lifecycle.focusCamera(battle)
   Lifecycle._testUnbind(battle)
 
@@ -415,6 +418,57 @@ function tests.camera_avoids_battle_menu()
   local actionY = ((rect.minY + rect.maxY) / 2) * Coords.CELL + Coords.CELL / 2
   eq(followed.y, actionY + Lifecycle.CAMERA_UI_BIAS_Y,
     "camera stably frames envelope above menu")
+end
+
+function tests.camera_pans_to_envelope()
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    -- Seed away from the envelope so focusCamera must ease, not snap.
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = 0 }
+  local enemy = { padU = grid.home.enemy.u, padV = 0 }
+  Lifecycle._testBind(battle, {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+  })
+
+  local rect = grid.worldRect
+  local targetX = ((rect.minX + rect.maxX) / 2) * Coords.CELL + Coords.CELL / 2
+  local targetY = ((rect.minY + rect.maxY) / 2) * Coords.CELL + Coords.CELL / 2
+    + Lifecycle.CAMERA_UI_BIAS_Y
+
+  Lifecycle.focusCamera(battle, 1 / 60)
+  truthy(followed, "camera begins soft pan")
+  local mid1 = followed
+  truthy(math.abs(mid1.x - targetX) > 1 or math.abs(mid1.y - targetY) > 1,
+    "first frame has not snapped to envelope")
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  eq(followed.x, targetX, "pan settles on envelope X")
+  eq(followed.y, targetY, "pan settles on envelope Y above menu")
 end
 
 function tests.sprite_cast_and_animation()
@@ -512,11 +566,18 @@ function tests.lifecycle_cleanup_restores_world()
   }
   local npc = { id = "npc" }
   local transient = { id = "field", _arFieldBattler = true }
+  local worldEntities = { player, npc, transient }
+  local followed = false
   local overworld = {
     player = player,
     engaging = true,
     _arFieldEngaging = true,
-    entities = { transient },
+    entities = worldEntities,
+    camera = {
+      follow = function(_, x, y)
+        followed = (x == 144 and y == 144)
+      end,
+    },
   }
   local battle = { game = { overworld = overworld }, _arAnimeField = true }
   local grid = sampleGrid()
@@ -524,14 +585,48 @@ function tests.lifecycle_cleanup_restores_world()
   player.cellX, player.cellY, player.px, player.py = 20, 20, 320, 320
   player.frozen, player.wanders = true, false
 
+  local ended = false
+  local voxel3d = {
+    camera = { kind = "battle" },
+    endScene = function()
+      ended = true
+    end,
+  }
+  local voxelState = { ready = false }
+  local finishCalls = 0
   Lifecycle._testBind(battle, {
     state = Lifecycle.STATE.Live,
     live = true,
     playerPose = pose,
-    savedEntities = { player, npc },
+    savedEntities = worldEntities,
     grid = grid,
     voxelSaved = 2,
-    _deps = { Layout = Layout, Grid = Grid },
+    _mod = {
+      find = function()
+        return {
+          exports = {
+            lib = {
+              require = function(name)
+                if name == "OverworldBattle" then
+                  return {
+                    finish = function()
+                      finishCalls = finishCalls + 1
+                    end,
+                  }
+                end
+                if name == "Voxel3D" then
+                  return voxel3d
+                end
+                if name == "VoxelState" then
+                  return voxelState
+                end
+              end,
+            },
+          },
+        }
+      end,
+    },
+    _deps = { Layout = Layout, Grid = Grid, Compat = Compat },
   })
   local setCalls = {}
   package.loaded["src.render.Pipelines"] = {
@@ -540,7 +635,7 @@ function tests.lifecycle_cleanup_restores_world()
       setCalls[#setCalls + 1] = { name, level }
     end,
   }
-  Lifecycle.finish(battle, { Layout = Layout, Grid = Grid })
+  Lifecycle.finish(battle, { Layout = Layout, Grid = Grid, Compat = Compat })
   package.loaded["src.render.Pipelines"] = nil
 
   eq(player.cellX, 9, "restore player cell x")
@@ -549,14 +644,85 @@ function tests.lifecycle_cleanup_restores_world()
   eq(player.padU, nil, "clear temporary player pad coordinate")
   eq(player.padV, nil, "clear temporary player pad coordinate")
   eq(player.inputLocked, false, "unlock player")
+  eq(overworld.entities, worldEntities, "restore original entities table")
   eq(overworld.entities[1], player, "restore player entity")
   eq(overworld.entities[2], npc, "restore npc entity")
   eq(overworld.entities[3], nil, "remove field entity")
+  truthy(followed, "camera follows player after restore")
   eq(battle._arAnimeField, nil, "clear battle marker")
   eq(Lifecycle.get(battle), nil, "remove session")
-  eq(setCalls[1] and setCalls[1][1], "voxel", "voxel restore targets pipeline")
-  eq(setCalls[1] and setCalls[1][2], 0, "voxel restore bounces through off")
-  eq(setCalls[2] and setCalls[2][2], 2, "voxel restore reapplies pre-battle level")
+  eq(#setCalls, 0, "voxel restore does not bounce through off")
+  eq(finishCalls, 3, "release OverworldBattle.finish on DS/voxel mods")
+  eq(voxel3d.camera, nil, "clear leftover Voxel3D.camera")
+  truthy(ended, "unbind leftover Voxel3D scene canvas")
+  eq(voxelState.ready, true, "voxel tween is allowed to resume")
+end
+
+function tests.parks_overworld_follower_during_field()
+  local player = { id = "red" }
+  local follower = {
+    id = "pikachu",
+    isFollower = true,
+    sprite = { def = { id = "SPRITE_PIKACHU" } },
+  }
+  local npc = { id = "npc" }
+  local battler = { id = "field", _arFieldBattler = true }
+  local worldEntities = { player, follower, npc, battler }
+  local overworld = { player = player, entities = worldEntities }
+  local session = { foe = nil, parkedFollowers = nil }
+  truthy(Lifecycle.isOverworldFollower(follower, player, nil),
+    "party follower is detected")
+  truthy(not Lifecycle.isOverworldFollower(player, player, nil),
+    "player is not parked as a follower")
+  truthy(not Lifecycle.isOverworldFollower(battler, player, nil),
+    "field battler is not parked as a follower")
+  Lifecycle.parkOverworldFollowers(session, overworld)
+  eq(overworld.entities[1], player, "player stays on the live voxel list")
+  eq(overworld.entities[2], npc, "npcs stay on the live voxel list")
+  eq(overworld.entities[3], battler, "field battler stays on the live voxel list")
+  eq(overworld.entities[4], nil, "follower leaves the live voxel list")
+  eq(follower.hidden, true, "parked follower is hidden")
+  eq(overworld.entities, worldEntities, "park keeps the same entity table")
+  Lifecycle.restoreOverworldFollowers(session, overworld)
+  eq(overworld.entities[2], follower, "follower returns at its original index")
+  eq(follower.hidden, false, "restored follower is visible")
+  eq(follower._arFieldParked, nil, "park marker is cleared")
+end
+
+function tests.field_overlay_draws_projectiles()
+  local drawn = 0
+  local projectile = {
+    _removed = false,
+    draw = function()
+      drawn = drawn + 1
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = { x = 0, y = 0 } },
+    },
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    projectiles = { projectile },
+    _deps = {
+      Projectiles = {
+        draw = function(s, camX, camY)
+          eq(camX, 0, "overlay uses camera x")
+          eq(camY, 0, "overlay uses camera y")
+          for i = 1, #s.projectiles do
+            s.projectiles[i]:draw(camX, camY)
+          end
+        end,
+      },
+    },
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.drawWorldOverlay(battle)
+  Lifecycle.drawWorldOverlay(battle)
+  eq(drawn, 2, "overlay paints projectiles every drawUI call")
+  Lifecycle._testUnbind(battle)
 end
 
 local count = 0

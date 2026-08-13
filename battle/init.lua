@@ -10,51 +10,51 @@
 --   field_battle/  → overworld viewer
 
 return function(env)
-  local loadFile = env and env.load
-  local mod = env and env.mod
+    local loadFile = env and env.load
+    local mod = env and env.mod
 
-  local Battle = {
-    id = "battle",
-    title = "Battle systems",
-  }
+    local Battle = {
+        id = "battle",
+        title = "Battle systems",
+    }
 
-  Battle.OPTION_KEYS = {
-    "anime_move_calls",
-    "momentum_counter",
-    "callout_style",
-    "callout_buffs",
-    "callout_pick",
-    "speech_bubbles",
-    "trainer_banter",
-    "momentum_chips",
-    "focus_chip",
-    "dev_overlay",
-    "battle_stage", -- stage preference is shared; FIELD viewer is field_battle/
-  }
+    Battle.OPTION_KEYS = {
+        "anime_move_calls",
+        "momentum_counter",
+        "callout_style",
+        "callout_buffs",
+        "callout_pick",
+        "speech_bubbles",
+        "trainer_banter",
+        "momentum_chips",
+        "focus_chip",
+        "dev_overlay",
+        "battle_stage", -- stage preference is shared; FIELD viewer is field_battle/
+    }
 
-  local ReactiveDefense
-  if type(loadFile) == "function" then
-    local ok, value = pcall(loadFile, "reactive_defense.lua")
-    if ok and type(value) == "table" then
-      ReactiveDefense = value
-    else
-      print("[anime_realism] battle/reactive_defense: " .. tostring(value))
+    local ReactiveDefense
+    if type(loadFile) == "function" then
+        local ok, value = pcall(loadFile, "reactive_defense.lua")
+        if ok and type(value) == "table" then
+            ReactiveDefense = value
+        else
+            print("[anime_realism] battle/reactive_defense: " .. tostring(value))
+        end
     end
-  end
-  Battle.ReactiveDefense = ReactiveDefense
+    Battle.ReactiveDefense = ReactiveDefense
 
-  function Battle.ownsOption(key)
-    for i = 1, #Battle.OPTION_KEYS do
-      if Battle.OPTION_KEYS[i] == key then
+    function Battle.ownsOption(key)
+        for i = 1, #Battle.OPTION_KEYS do
+            if Battle.OPTION_KEYS[i] == key then
+                return true
+            end
+        end
+        return false
+    end
+
+    function Battle.install(_mod)
         return true
-      end
     end
-    return false
-  end
 
-  function Battle.install(_mod)
-    return true
-  end
-
-  return Battle
+    return Battle
 end
