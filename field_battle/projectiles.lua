@@ -52,7 +52,13 @@ local MOVE_FX = {
   BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE_BEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },
-  SURF = { style = "wave", duration = 0.48, radius = 22 },
+  SURF = {
+    style = "surf",
+    glitz = "tide",
+    duration = 0.68,
+    radius = 18,
+    color = { 0.18, 0.62, 0.98 },
+  },
   BLIZZARD = { style = "area", glitz = "frost", radius = 22 },
   PSYCHIC = {
     style = "aura",
@@ -76,7 +82,12 @@ local MOVE_FX = {
   MEGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.48 },
   GIGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.52 },
   ABSORB = { style = "drain", glitz = "leaf", duration = 0.42 },
-  RAZOR_LEAF = { style = "multi", glitz = "leaf", duration = 0.36 },
+  RAZOR_LEAF = {
+    style = "razor",
+    glitz = "blade",
+    duration = 0.58,
+    color = { 0.42, 0.88, 0.22 },
+  },
   PETAL_DANCE = { style = "multi", glitz = "leaf", duration = 0.44 },
   VINE_WHIP = { style = "stream", glitz = "leaf" },
   LEECH_SEED = {
@@ -314,6 +325,8 @@ local TRAVEL_STYLES = {
   area = true,
   wave = true,
   bolt = true,
+  surf = true,
+  razor = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -665,6 +678,225 @@ local function drawSeedPlant(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Surf: curling tidal wall that swells at the caster, rushes the field, then crashes.
+local function drawSurfTide(g, x, y, ox, oy, t, age, c, radius)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local fade = 1
+  if t > 0.84 then
+    fade = 1 - (t - 0.84) / 0.16
+  end
+  local swell = math.min(1, t / 0.20)
+  local rush = math.max(0, math.min(1, (t - 0.10) / 0.62))
+  local crash = math.max(0, (t - 0.68) / 0.32)
+  local cr, cg, cb = c[1] or 0.2, c[2] or 0.58, c[3] or 1
+  local height = (5 + rush * 11) * (1 - crash * 0.55)
+  local width = (radius or 16) * (0.45 + swell * 0.55 + rush * 0.35)
+
+  -- Swell bloom at the caster's feet.
+  g.setColor(cr, cg, cb, 0.22 * swell * fade)
+  g.ellipse("fill", ox, oy + 3, 8 + swell * 7, 3 + swell * 2)
+  for i = 1, 5 do
+    local a = (age or 0) * 7 + i * 1.3
+    local rise = swell * (4 + i) - math.sin(a) * 1.2
+    g.setColor(cr, cg, cb, (0.55 - swell * 0.2) * fade)
+    g.circle("fill",
+      ox + math.cos(a) * (3 + swell * 4),
+      oy + 2 - rise,
+      1.2 + (i % 2) * 0.6)
+    g.setColor(1, 1, 1, 0.45 * fade * swell)
+    g.circle("fill",
+      ox + math.cos(a) * (3 + swell * 4) - 0.4,
+      oy + 2 - rise - 0.4,
+      0.5)
+  end
+
+  -- Flood sheet from caster toward the crest.
+  if rush > 0.02 then
+    local midX = ox + dx * 0.5
+    local midY = oy + dy * 0.5 + 3
+    g.setColor(cr * 0.55, cg * 0.7, cb, 0.18 * fade)
+    g.ellipse("fill", midX, midY, math.max(8, len * 0.55), 5 + rush * 3)
+    for i = 1, 4 do
+      local u = (i / 5) * rush
+      local px = ox + dx * u
+      local py = oy + dy * u + 3
+      g.setColor(1, 1, 1, 0.18 * fade * (1 - u))
+      g.setLineWidth(1)
+      g.ellipse("line", px, py, 6 + u * 4, 2.2)
+    end
+  end
+
+  -- Curling breaker at the traveling crest.
+  if rush > 0.04 and crash < 0.95 then
+    local lean = 2.5 + rush * 3
+    local cx = x - fx * lean
+    local cy = y + 2
+    g.setColor(0.08, 0.22, 0.48, 0.55 * fade)
+    g.ellipse("fill", cx, cy + 1, width * 0.95, height * 0.42)
+    g.setColor(cr, cg, cb, 0.72 * fade)
+    g.ellipse("fill", cx + fx * 1.2, cy - height * 0.15, width * 0.82, height * 0.38)
+    g.setColor(0.55, 0.82, 1.00, 0.45 * fade)
+    g.ellipse("fill", cx + fx * 2, cy - height * 0.28, width * 0.5, height * 0.22)
+    g.setColor(0.92, 0.98, 1.00, 0.88 * fade)
+    g.ellipse("fill", x + fx * 1.5, cy - height * 0.55, width * 0.62, 2.4 + rush * 1.4)
+    g.setColor(1, 1, 1, 0.7 * fade)
+    g.ellipse("line", x + fx * 1.5, cy - height * 0.55, width * 0.68, 2.8)
+    for i = 1, 8 do
+      local side = ((i % 2) * 2 - 1)
+      local along = (i % 4) * 1.4
+      local px = x + nx * (width * 0.35 * side) * math.sin((age or 0) * 9 + i)
+          + fx * along
+      local py = cy - height * 0.7 - (i % 3) * 1.6
+          + math.sin((age or 0) * 14 + i) * 1.2
+      g.setColor(1, 1, 1, (0.75 - i * 0.06) * fade)
+      g.circle("fill", px, py, 1.1 + (i % 3) * 0.35)
+    end
+    -- Vertical columns so the wall reads in 2.5D.
+    for i = -2, 2 do
+      local wx = cx + nx * i * (width / 5)
+      local wy = cy - 1
+      local h = height * (0.7 + math.sin((age or 0) * 8 + i) * 0.12)
+      g.setColor(cr, cg, cb, 0.35 * fade)
+      g.rectangle("fill", wx - 1.6, wy - h, 3.2, h)
+      g.setColor(1, 1, 1, 0.22 * fade)
+      g.rectangle("fill", wx - 0.5, wy - h, 1.1, h * 0.45)
+    end
+  end
+
+  -- Crash: geyser + foam burst at the foe.
+  if crash > 0 then
+    local burst = math.sin(crash * math.pi)
+    g.setColor(cr, cg, cb, 0.32 * fade * burst)
+    g.ellipse("fill", x, y + 3, 10 + crash * 14, 4 + crash * 5)
+    g.setColor(0.9, 0.97, 1, 0.55 * fade)
+    g.setLineWidth(2)
+    g.ellipse("line", x, y + 3, 8 + crash * 12, 3 + crash * 4)
+    for i = 1, 12 do
+      local a = i * 0.52 + (age or 0) * 3
+      local dist = crash * (8 + (i % 4) * 4)
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.45 - crash * (6 + i % 5) * 1.6
+      local r = 1.4 + (i % 3) * 0.7
+      g.setColor(cr, cg, cb, (0.7 - crash * 0.35) * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(1, 1, 1, 0.55 * fade * (1 - crash * 0.4))
+      g.circle("fill", px - 0.4, py - 0.5, r * 0.4)
+    end
+    g.setColor(0.75, 0.9, 1, 0.4 * burst * fade)
+    g.ellipse("fill", x, y - crash * 8, 4 + burst * 3, 7 + crash * 6)
+  end
+end
+
+--- Spinning leaf-blade (elongated diamond + midrib).
+local function drawLeafBlade(g, px, py, rot, scale, c, alpha)
+  scale = scale or 1
+  alpha = alpha or 1
+  local ca, sa = math.cos(rot), math.sin(rot)
+  local function pt(lx, ly)
+    return px + lx * ca * scale - ly * sa * scale,
+      py + lx * sa * scale + ly * ca * scale
+  end
+  local x1, y1 = pt(5.2, 0)
+  local x2, y2 = pt(0.8, 2.3)
+  local x3, y3 = pt(-4.4, 0)
+  local x4, y4 = pt(0.8, -2.3)
+  g.setColor(c[1], c[2], c[3], alpha)
+  g.polygon("fill", x1, y1, x2, y2, x3, y3, x4, y4)
+  g.setColor(0.16, 0.42, 0.12, alpha * 0.85)
+  g.setLineWidth(1)
+  g.line(x1, y1, x3, y3)
+  g.setColor(0.72, 1.00, 0.55, alpha * 0.55)
+  local hx, hy = pt(2.2, -0.7)
+  g.circle("fill", hx, hy, 0.7 * scale)
+end
+
+--- Razor Leaf: cyclone gather → staggered spinning blades → cutting slash.
+local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local fade = 1
+  if t > 0.82 then
+    fade = 1 - (t - 0.82) / 0.18
+  end
+  local spinUp = math.min(1, t / 0.22)
+  local launch = math.max(0, (t - 0.16) / 0.84)
+
+  -- Gather cyclone at the caster.
+  if spinUp > 0.02 and t < 0.55 then
+    local ringFade = (1 - math.max(0, (t - 0.32) / 0.23)) * fade
+    g.setColor(c[1], c[2], c[3], 0.18 * ringFade)
+    g.ellipse("fill", ox, oy + 2, 7 + spinUp * 4, 3)
+    for i = 1, 6 do
+      local a = (age or 0) * 14 + i * (math.pi * 2 / 6)
+      local r = 5 + spinUp * 3
+      local px = ox + math.cos(a) * r
+      local py = oy + math.sin(a) * r * 0.42 - 1
+      drawLeafBlade(g, px, py, a + math.pi * 0.5, 0.55 + spinUp * 0.2, c,
+        0.7 * ringFade)
+    end
+  end
+
+  -- Staggered flying blades with a weaving scatter.
+  local n = 7
+  for i = 1, n do
+    local delay = (i - 1) * 0.09
+    local u = (launch - delay) / math.max(0.35, 1 - delay)
+    if u > 0 and u < 1.15 then
+      local along = math.min(1, u)
+      local side = ((i % 2) * 2 - 1)
+      local weave = math.sin(along * math.pi * 1.6 + i) * (4.5 + (i % 3))
+      local px = ox + dx * along + nx * weave * side * 0.55
+      local py = oy + dy * along + ny * weave * side * 0.35
+          - math.sin(along * math.pi) * 3
+      local rot = (age or 0) * (16 + i * 1.4) + i * 0.9
+      local aLeaf = fade * (u < 1 and 0.95 or (1.15 - u) / 0.15)
+      drawLeafBlade(g, px, py, rot, 0.85 + (i % 3) * 0.12, c, aLeaf)
+      if along > 0.08 and along < 0.95 then
+        g.setColor(c[1], c[2], c[3], 0.35 * aLeaf)
+        g.setLineWidth(1.4)
+        g.line(px - dx * 0.08, py - dy * 0.08, px, py)
+      end
+      -- Cutting flashes as blades reach the foe.
+      if along > 0.78 and along < 1.05 then
+        local slash = (along - 0.78) / 0.27
+        local reach = 3 + slash * 7
+        local sa = rot + math.pi * 0.25
+        g.setColor(0.85, 1.00, 0.55, (0.8 - slash * 0.5) * fade)
+        g.setLineWidth(1.6)
+        g.line(
+          px - math.cos(sa) * reach, py - math.sin(sa) * reach,
+          px + math.cos(sa) * reach, py + math.sin(sa) * reach)
+        g.setColor(1, 1, 1, 0.55 * fade * (1 - slash))
+        g.circle("fill", px, py, 1.2)
+      end
+    end
+  end
+
+  -- Impact leaf burst past the target.
+  if t > 0.72 then
+    local burst = (t - 0.72) / 0.28
+    for i = 1, 5 do
+      local a = i * 1.256 + (age or 0) * 2
+      local dist = burst * (6 + i)
+      drawLeafBlade(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.55 - burst * 2,
+        a + burst * 4, 0.5, c, (0.7 - burst * 0.45) * fade)
+    end
+  end
+end
+
 local function drawMove(g, p, x, y)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "orb"
@@ -1005,6 +1237,10 @@ local function drawEffect(g, p, x, y, ox, oy)
         g.circle("line", x, y + 2, r)
       end
     end
+  elseif p.style == "surf" then
+    drawSurfTide(g, x, y, ox, oy, t, p.age, c, p.radius)
+  elseif p.style == "razor" then
+    drawRazorVolley(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "spiral" then
     if glitz == "psy" then
       drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
@@ -1653,6 +1889,33 @@ function Projectiles.move(session, side, opts)
           pcall(userDone)
         end
       end,
+    })
+  end
+
+  if fx.style == "surf" then
+    return spawn(session, {
+      kind = "effect",
+      style = "surf",
+      glitz = fx.glitz or "tide",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.68,
+      arc = 3,
+      radius = fx.radius or 18,
+      color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "razor" then
+    return spawn(session, {
+      kind = "effect",
+      style = "razor",
+      glitz = fx.glitz or "blade",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.58,
+      arc = 5,
+      color = fx.color,
+      onDone = opts.onDone,
     })
   end
 

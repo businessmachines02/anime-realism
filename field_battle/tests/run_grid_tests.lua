@@ -1179,6 +1179,26 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "GHOST", moveId = "NIGHT_SHADE",
   }), "night shade is a travel FX")
+  local surf = Projectiles.move(session, "player", {
+    moveType = "WATER", moveId = "SURF",
+  })
+  eq(surf.style, "surf", "surf uses rushing tide animation")
+  eq(surf.glitz, "tide", "surf uses tide glitz")
+  truthy(surf.sx < surf.ex, "surf travels toward the foe")
+  truthy((surf.duration or 0) >= 0.6, "surf holds a longer surge")
+  truthy(Projectiles.isTravelFx({
+    moveType = "WATER", moveId = "SURF",
+  }), "surf is a travel FX")
+  local razor = Projectiles.move(session, "player", {
+    moveType = "GRASS", moveId = "RAZOR_LEAF",
+  })
+  eq(razor.style, "razor", "razor leaf uses spinning blade animation")
+  eq(razor.glitz, "blade", "razor leaf uses blade glitz")
+  truthy(razor.sx < razor.ex, "razor leaf travels toward the foe")
+  truthy((razor.duration or 0) >= 0.5, "razor leaf holds a longer volley")
+  truthy(Projectiles.isTravelFx({
+    moveType = "GRASS", moveId = "RAZOR_LEAF",
+  }), "razor leaf is a travel FX")
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })
