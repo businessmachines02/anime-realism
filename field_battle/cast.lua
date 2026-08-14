@@ -10,10 +10,63 @@ local Cast = {}
 
 Cast.STEP_SPEED = 56
 
+local function worldBlockKeys(session, ignoreEnt)
+    local keys = {}
+    local function mark(e)
+        if e and e ~= ignoreEnt and not e._removed and not e.hidden
+            and e.cellX ~= nil then
+            local wx = math.floor((e.cellX or 0) + 0.5)
+            local wy = math.floor((e.cellY or 0) + 0.5)
+            keys[tostring(wx) .. ":" .. tostring(wy)] = true
+        end
+    end
+    mark(session.playerMon)
+    mark(session.enemyMon)
+    mark(session.foe)
+    local battle = session and session._battle
+    local ow = battle and battle.game and battle.game.overworld
+    if ow then
+        mark(ow.player)
+        local ents = ow.entities
+        if type(ents) == "table" then
+            for i = 1, #ents do
+                mark(ents[i])
+            end
+        end
+    end
+    return keys
+end
+
+local function voxelSafeSprite(ent)
+    local sprite = ent and ent.sprite
+    return sprite and type(sprite) == "table" and sprite.def ~= nil
+end
+
+local function ensureSpriteDef(ent)
+    if not ent then
+        return
+    end
+    if voxelSafeSprite(ent) then
+        return
+    end
+    ent._poseSafe = ent._poseSafe or {
+        def = { id = "ar_fbv_pose_" .. tostring(ent.id or "mon"), frames = 1 },
+        draw = function() end,
+    }
+    if not ent.sprite then
+        ent.sprite = ent._poseSafe
+    elseif type(ent.sprite) == "table" then
+        ent.sprite.def = ent.sprite.def or ent._poseSafe.def
+    else
+        ent.sprite = ent._poseSafe
+    end
+end
+
 local function appendOw(ow, ent)
     if not (ow and type(ow.entities) == "table" and ent) then
         return
     end
+    ensureSpriteDef(ent)
     local ents = ow.entities
     for i = 1, #ents do
         if ents[i] == ent then
@@ -58,7 +111,7 @@ local function bindHome(ent, plan, side, grid)
     end
 end
 
-local function occupyPad(Grid, session, ent)
+local function occupyPad(Grid, session, ent, ignoreId)
     if not (Grid and session and session.grid and ent) then
         return
     end
@@ -66,6 +119,11 @@ local function occupyPad(Grid, session, ent)
     if u == nil and session.grid and ent.cellX then
         u, v = Coords.worldToPad(session.grid, ent.cellX, ent.cellY)
         ent.padU, ent.padV = u, v
+    end
+    local blocked = worldBlockKeys(session, ent)
+    if type(Grid.placeOnFreePad) == "function" then
+        Grid.placeOnFreePad(session.grid, ent, u, v, ignoreId or ent.id, blocked)
+        return
     end
     if u ~= nil then
         Grid.occupy(session.grid, ent.id, u, v)
@@ -113,6 +171,11 @@ function Cast.stagePlayer(session, battle, mod, Sprites, Grid)
     end
     session.playerMon = ent
     session.awaitPlayerMon = false
+    session._playerSendLockT = 0.7
+    local battle = session._battle
+    if battle then
+        battle._arFieldRevealPlayer = nil
+    end
     appendOw(game and game.overworld, ent)
     return ent
 end
@@ -132,6 +195,7 @@ function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
     end
     local face = old and old.facing
         or ((side == "player") and plan.playerFace or plan.foeFace)
+    local ignoreId = old and old.id
     if old and Grid then
         Grid.release(session.grid, old.id)
     end
@@ -167,12 +231,17 @@ function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
                 ent.homePadU, ent.homePadV = old.homePadU, old.homePadV
             end
         end
-        occupyPad(Grid, session, ent)
+        occupyPad(Grid, session, ent, ignoreId)
         appendOw(ow, ent)
     end
     if side == "player" then
         session.playerMon = ent
         session.awaitPlayerMon = false
+        session._playerSendLockT = 0.7
+        local b = session._battle
+        if b then
+            b._arFieldRevealPlayer = nil
+        end
     else
         session.enemyMon = ent
     end

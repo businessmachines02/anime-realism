@@ -361,8 +361,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     end
     -- Trainer-owned mons get the red recall laser; wild foes keep the sink.
     local beamed = false
-    if Projectiles and type(Projectiles.recallBeam) == "function" then
-      beamed = Projectiles.recallBeam(session, side) ~= nil
+    if ent.anim ~= "sendout"
+        and Projectiles and type(Projectiles.recallBeam) == "function" then
+      beamed = Projectiles.recallBeam(session, side, { target = ent }) ~= nil
     end
     ent._fainting = true
     if type(ent.play) == "function" then
@@ -379,9 +380,17 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     if isExitPlaying(ent) then
       return true
     end
+    -- Don't shrink the live foe while the player is calling in.
+    if side == "enemy" then
+      local player = session.playerMon
+      if (session.awaitPlayerMon or session._playerSendLockT
+          or (player and player.anim == "sendout")) then
+        return true
+      end
+    end
     local Projectiles = session._deps and session._deps.Projectiles
     if Projectiles and type(Projectiles.recallBeam) == "function" then
-      Projectiles.recallBeam(session, side)
+      Projectiles.recallBeam(session, side, { target = ent })
     end
     if type(ent.play) == "function" then
       ent:play("recall")

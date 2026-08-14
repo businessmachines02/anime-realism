@@ -619,11 +619,21 @@ function Hooks.install(FBV, mod)
             local battle = ev and ev.battle
             if battle and isFieldBattle(battle) then
                 local side = ev.side
-                if side ~= "player" and side ~= "enemy" then
-                    if ev.battler and ev.battler.isPlayer then
+                if type(side) == "string" then
+                    side = side:lower()
+                    if side == "ally" then
                         side = "player"
-                    elseif ev.battler then
+                    elseif side == "foe" or side == "opponent" then
                         side = "enemy"
+                    end
+                end
+                if side ~= "player" and side ~= "enemy" then
+                    if ev.battler and ev.battler.isPlayer == true then
+                        side = "player"
+                    elseif ev.battler and ev.battler.isPlayer == false then
+                        side = "enemy"
+                    else
+                        side = nil
                     end
                 end
                 if side == "player" or (ev.battler and ev.battler.isPlayer) then

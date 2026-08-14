@@ -189,12 +189,19 @@ end
 
 function Grid.occupy(g, id, u, v)
   if not g or not id then
-    return
+    return false
+  end
+  if u ~= nil and v ~= nil then
+    local who = g.occ[key(u, v)]
+    if who and who ~= id then
+      return false
+    end
   end
   Grid.release(g, id)
   if u ~= nil and v ~= nil then
     g.occ[key(u, v)] = id
   end
+  return true
 end
 
 function Grid.release(g, id)
@@ -224,6 +231,91 @@ function Grid.lane(g, u)
     return "enemy"
   end
   return "mid"
+end
+
+--- Nearest legal empty pad, preferring `(u, v)`. Never returns a cell owned
+--- by another occupant (`ignoreId` may keep the caller's current tile).
+--- `blockedWorld` is an optional set of `"wx:wy"` keys that are already
+--- taken on the overworld (trainers, props, the other battler).
+function Grid.pickFreePad(g, u, v, ent, ignoreId, blockedWorld)
+  if not g then
+    return nil, nil
+  end
+  ignoreId = ignoreId or (ent and ent.id)
+  local function worldFree(nu, nv)
+    if type(blockedWorld) ~= "table" then
+      return true
+    end
+    local wx, wy = Coords.padToWorld(g, nu, nv)
+    return blockedWorld[tostring(wx) .. ":" .. tostring(wy)] ~= true
+  end
+  local function free(nu, nv)
+    return Grid.isFree(g, nu, nv, ignoreId, ent) and worldFree(nu, nv)
+  end
+  if u ~= nil and v ~= nil and free(u, v) then
+    return u, v
+  end
+  local originU = u or 0
+  local originV = v or 0
+  local su = g.sizeU or 0
+  local sv = g.sizeV or 0
+  local maxR = math.max(su, sv, 1)
+  for radius = 1, maxR do
+    for du = -radius, radius do
+      for dv = -radius, radius do
+        if math.max(math.abs(du), math.abs(dv)) == radius then
+          local nu, nv = originU + du, originV + dv
+          if free(nu, nv) then
+            return nu, nv
+          end
+        end
+      end
+    end
+  end
+  -- Last resort: any pad whose world cell is not the other battler / a prop,
+  -- even if a trainer is standing there. Never land on blockedWorld.
+  for nu = 0, su - 1 do
+    for nv = 0, sv - 1 do
+      if Grid.canTraverse(g, nu, nv, ent) and worldFree(nu, nv) then
+        local who = g.occ[key(nu, nv)]
+        if who == nil or who == ignoreId then
+          return nu, nv
+        end
+      end
+    end
+  end
+  for nu = 0, su - 1 do
+    for nv = 0, sv - 1 do
+      if worldFree(nu, nv) and Grid.inPad(g, nu, nv) then
+        return nu, nv
+      end
+    end
+  end
+  return nil, nil
+end
+
+--- Occupy a free pad for `ent`, relocating if `(u, v)` is taken. Snaps pixels
+--- onto that cell so a send-out never shares the other battler's tile.
+function Grid.placeOnFreePad(g, ent, u, v, ignoreId, blockedWorld)
+  if not (g and ent) then
+    return false
+  end
+  u = u or ent.padU
+  v = v or ent.padV
+  local nu, nv = Grid.pickFreePad(g, u, v, ent, ignoreId, blockedWorld)
+  if nu == nil then
+    return false
+  end
+  Grid.release(g, ent.id)
+  g.occ[key(nu, nv)] = ent.id
+  ent.padU, ent.padV = nu, nv
+  Grid.syncPx(g, ent)
+  local px, py = ent.targetPx, ent.targetPy
+  if px ~= nil then
+    ent.basePx, ent.basePy = px, py
+    ent.px, ent.py = px, py
+  end
+  return true
 end
 
 --- Step one pad cell if free. Mutates pad only; pixels via syncPx.

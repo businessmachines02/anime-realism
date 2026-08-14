@@ -40,7 +40,13 @@ Pixels are presentation only; **pad cells are truth**.
    world camera as the cast, preserving alignment on flat and voxelized maps.
 10. Switching is ordered recall → detach from `ow.entities` → replace
     occupancy/entity → send-out, and only the side that actually switched
-    is restaged. A player faint / send-out must not recall the foe. Faint /
+    is restaged. Send-out always occupies a **free** pad cell (home if empty,
+    else the nearest open neighbor) so it cannot steal the other battler's
+    tile. A player faint / send-out must not recall the foe. The red
+    thunder-laser is **recall only** (shrink + detach). Player call-in is a
+    grow (`sendout`); it must never fire that laser at the opposing mon,
+    even when `battler_switched` has no side or species strings disagree
+    (name vs dex). Faint /
     capture exit anims also detach as
     soon as they finish so voxel never samples a nil `pose()` sprite.
     Capture resolves ball flight/shakes before shrinking a caught target away.
@@ -48,6 +54,8 @@ Pixels are presentation only; **pad cells are truth**.
     Chebyshev radius of the fight mid soft-walk to a free watching tile, face
     the duel, and may emit uncommon floating shoutouts. Engaged player/foe
     trainers and followers are never recruited. Teardown is temporary.
+    FIELD battlers are never parked as overworld followers (the follower
+    lead lookup can otherwise hide the foe when the player send-out appears).
     Engaged trainers also keep facing each other (or the duel mid in wilds).
 12. **Wildlife scatter** (`wildlife.lua`): roaming overworld Pokémon
     (`overworldWildSpawn`) within ~7 tiles soft-walk outward away from the

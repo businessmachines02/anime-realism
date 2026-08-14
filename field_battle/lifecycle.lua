@@ -241,7 +241,11 @@ function Lifecycle.parkOverworldFollowers(session, ow)
     end
     for i = #list, 1, -1 do
         local e = list[i]
+        -- Never park the live FIELD cast. PikachuFollower.current() can
+        -- return the wild/enemy sprite once our send-out is on the map.
         if e and e ~= player and e ~= foe
+            and e ~= session.playerMon and e ~= session.enemyMon
+            and not isFieldActor(e)
             and (e == lead or Lifecycle.isOverworldFollower(e, player, foe)) then
             e._arFieldParked = true
             e.hidden = true
@@ -338,6 +342,33 @@ function Lifecycle.drawWorldOverlay(battle)
     end
     stampAnchor(session.playerMon)
     stampAnchor(session.enemyMon)
+    -- Battlers that were kept off ow.entities (no voxel-safe sprite.def) still
+    -- need a 2D stamp so send-out is visible without aborting the 3D pass.
+    local function onOwList(ent)
+        local ents = ow and ow.entities
+        if not (ent and type(ents) == "table") then
+            return false
+        end
+        for i = 1, #ents do
+            if ents[i] == ent then
+                return true
+            end
+        end
+        return false
+    end
+    local function drawBattler(ent)
+        if not ent or ent.hidden or ent._removed then
+            return
+        end
+        if onOwList(ent) then
+            return
+        end
+        if type(ent.draw) == "function" then
+            ent:draw(camX, camY)
+        end
+    end
+    drawBattler(session.playerMon)
+    drawBattler(session.enemyMon)
     if deps and deps.Spectators and type(deps.Spectators.draw) == "function" then
         pcall(deps.Spectators.draw, session, camX, camY, ren)
     end
@@ -799,7 +830,72 @@ local function liveSpecies(ent)
     if not ent then
         return ""
     end
-    return speciesKey(ent.species or ent._spriteSpecies)
+    return speciesKey(ent._spriteSpecies or ent.species)
+end
+
+local function samePokemon(ent, battler)
+    -- Identity is the species stamped on the sprite at spawn, not battler.mon
+    -- (that pointer is overwritten before battler_switched).
+    local live = liveSpecies(ent)
+    if live == "" then
+        return false
+    end
+    local mon = battler and battler.mon
+    if not mon then
+        return false
+    end
+    if live == speciesKey(mon.species) then
+        return true
+    end
+    if live == speciesKey(mon.id) then
+        return true
+    end
+    if live == speciesKey(mon.name) then
+        return true
+    end
+    local dex = tonumber(mon.dex)
+    if dex and (live == tostring(dex) or live == string.format("%03d", dex)) then
+        return true
+    end
+    return false
+end
+
+local function isArriving(ent)
+    return ent and ent.anim == "sendout"
+end
+
+--- Player call-in must never fire the red recall laser at the live foe.
+local function holdRecallForArrival(session, battle, side)
+    if side ~= "enemy" then
+        return false
+    end
+    if session.awaitPlayerMon then
+        return true
+    end
+    if (session._playerSendLockT or 0) > 0 then
+        return true
+    end
+    if battle and battle.sendingOut then
+        return true
+    end
+    if isArriving(session.playerMon) then
+        return true
+    end
+    return false
+end
+
+local function normalizeSwitchSide(side)
+    if type(side) ~= "string" then
+        return nil
+    end
+    side = side:lower()
+    if side == "player" or side == "ally" then
+        return "player"
+    end
+    if side == "enemy" or side == "foe" or side == "opponent" then
+        return "enemy"
+    end
+    return nil
 end
 
 local function battlerFainted(battler)
@@ -874,6 +970,10 @@ function Lifecycle.syncMons(battle, mod, deps, onlySide)
     local Sprites = deps.Sprites
 
     local function refresh(side, battler)
+        -- Player call-in: never recall/replace the live foe.
+        if holdRecallForArrival(session, battle, side) then
+            return
+        end
         if side == "player" and session.awaitPlayerMon then
             if leadPickerOpen(battle) then
                 session.sawLeadPicker = true
@@ -886,6 +986,15 @@ function Lifecycle.syncMons(battle, mod, deps, onlySide)
             return
         end
         local current = (side == "player") and session.playerMon or session.enemyMon
+        -- Pointer landed on the other battler: stage ours, never recall them.
+        if current and current._arFieldSide and current._arFieldSide ~= side then
+            if side == "player" then
+                session.playerMon = nil
+            else
+                session.enemyMon = nil
+            end
+            current = nil
+        end
         local wanted = wantedSpecies(battler)
         -- No living replacement yet (party menu / fainted slot). Never recall
         -- the other battler, and never send out a corpse.
@@ -899,7 +1008,7 @@ function Lifecycle.syncMons(battle, mod, deps, onlySide)
             end
             return
         end
-        if liveSpecies(current) == wanted then
+        if samePokemon(current, battler) then
             return
         end
         session.pendingSwitch = session.pendingSwitch or {}
@@ -921,7 +1030,7 @@ function Lifecycle.syncMons(battle, mod, deps, onlySide)
         if not alreadyExiting then
             local Projectiles = deps.Projectiles
             if Projectiles and type(Projectiles.recallBeam) == "function" then
-                pcall(Projectiles.recallBeam, session, side)
+                pcall(Projectiles.recallBeam, session, side, { target = current })
             end
             if type(current.play) == "function" then
                 current:play("recall")
@@ -929,13 +1038,45 @@ function Lifecycle.syncMons(battle, mod, deps, onlySide)
         end
     end
 
+    onlySide = normalizeSwitchSide(onlySide)
+    -- First player send-out: never restage/recall the live foe. A nil switch
+    -- side used to mismatch-recall the opponent as soon as we spawned.
+    if (session.awaitPlayerMon or (battle and battle.sendingOut)
+            or isArriving(session.playerMon))
+        and onlySide ~= "enemy" then
+        refresh("player", battle.player)
+        return
+    end
     if onlySide == "player" then
         refresh("player", battle.player)
     elseif onlySide == "enemy" then
         refresh("enemy", battle.enemy)
     else
-        refresh("player", battle.player)
-        refresh("enemy", battle.enemy)
+        -- Unknown switch side: only restage a battler whose live sprite no
+        -- longer matches. A matching opponent must never be recalled.
+        local function mismatch(side, battler)
+            if holdRecallForArrival(session, battle, side) then
+                return false
+            end
+            local current = (side == "player") and session.playerMon or session.enemyMon
+            local wanted = wantedSpecies(battler)
+            if wanted == "" or battlerFainted(battler) then
+                return false
+            end
+            if not current or current._removed then
+                return true
+            end
+            if current._arFieldSide and current._arFieldSide ~= side then
+                return true
+            end
+            return not samePokemon(current, battler)
+        end
+        if mismatch("player", battle.player) then
+            refresh("player", battle.player)
+        end
+        if mismatch("enemy", battle.enemy) then
+            refresh("enemy", battle.enemy)
+        end
     end
 end
 
@@ -946,6 +1087,11 @@ local function tickSwitches(session, battle, deps, dt)
     end
     for _, side in ipairs({ "player", "enemy" }) do
         local item = pending[side]
+        if item and holdRecallForArrival(session, battle, side) then
+            -- Player call-in must not finish a queued foe recall.
+            pending[side] = nil
+            item = nil
+        end
         if item then
             local current = (side == "player") and session.playerMon or session.enemyMon
             -- Wait out the recall shrink (and detach) before staging the next mon.
@@ -1382,6 +1528,13 @@ function Lifecycle.tick(battle, dt, deps)
     -- Present clock: never gate on waitingUI, stack top, or current.auto.
     deps = deps or session._deps
     dt = dt or (1 / 60)
+
+    if session._playerSendLockT then
+        session._playerSendLockT = session._playerSendLockT - dt
+        if session._playerSendLockT <= 0 then
+            session._playerSendLockT = nil
+        end
+    end
 
     local ow = battle.game and battle.game.overworld
     if ow then

@@ -8393,7 +8393,7 @@ return function(mod)
             if upper:find("CRITICAL HIT", 1, true) then return "CRITICAL HIT!" end
             if upper:find("BUT IT MISSED", 1, true)
                 or upper:find("ATTACK MISSED", 1, true) then
-                return "MISSED!"
+                return "MISSED THE TARGET!"
             end
             if upper:find("NO EFFECT", 1, true) then return "NO EFFECT!" end
             if upper:find("REGAINED HEALTH", 1, true) then return "HEALED!" end

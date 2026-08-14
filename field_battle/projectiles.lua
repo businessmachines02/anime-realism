@@ -1792,6 +1792,7 @@ local function spawn(session, spec)
     onDone = spec.onDone,
     pinTip = spec.pinTip,
     followSide = spec.followSide,
+    followEnt = spec.followEnt,
   }
   local dx, dy = p.ex - p.sx, p.ey - p.sy
   local len = math.sqrt(dx * dx + dy * dy)
@@ -2422,9 +2423,18 @@ end
 
 --- Red thunder-laser from the trainer into the mon (switch recall / faint recall).
 -- Returns nil when there is no trainer origin (e.g. wild foe).
+-- Never fires at a mon that is arriving (send-out / call-in).
 function Projectiles.recallBeam(session, side, opts)
   opts = opts or {}
-  local target = (side == "player") and session.playerMon or session.enemyMon
+  local target = opts.target
+      or ((side == "player") and session.playerMon or session.enemyMon)
+  if not target or target._removed then
+    return nil
+  end
+  -- Never aim the shrink laser at a battler from the other side.
+  if target._arFieldSide and side and target._arFieldSide ~= side then
+    return nil
+  end
   local ex, ey = center(session, target)
   if not (session and ex) then
     return nil
@@ -2450,6 +2460,7 @@ function Projectiles.recallBeam(session, side, opts)
     arc = 0,
     color = { 1.00, 0.28, 0.18 },
     pinTip = true,
+    followEnt = target,
     followSide = side,
   })
 end
@@ -2491,9 +2502,19 @@ function Projectiles.tick(session, dt)
     p.age = (p.age or 0) + (dt or 0)
     local t = math.min(1, math.max(0, p.age) / math.max(0.01, p.duration))
     if p.pinTip then
-      -- Recall laser: tip locked on the mon; origin stays at the trainer.
-      if p.followSide then
-        local ent = (p.followSide == "player") and session.playerMon or session.enemyMon
+      -- Recall laser: tip locked on the mon that was recalled, not whichever
+      -- battler currently occupies that side (send-out would steal the beam).
+      local ent = p.followEnt
+      if not ent or ent._removed or ent.hidden then
+        ent = nil
+      end
+      if not ent and p.followSide then
+        ent = (p.followSide == "player") and session.playerMon or session.enemyMon
+        if ent and ent.anim == "sendout" then
+          ent = nil
+        end
+      end
+      if ent then
         local cx, cy = center(session, ent)
         if cx then
           p.ex, p.ey = cx, cy

@@ -24,11 +24,11 @@ RD.COST = {
 
 RD.DODGE_COUNTER_CHANCE = 0.30
 RD.DODGE_COUNTER_POWER = 0.40
-RD.DODGE_COUNTER_CD = 3
-RD.DODGE_FAIL_MULT = 1.30
+RD.DODGE_COUNTER_CD = 2
+RD.DODGE_FAIL_MULT = 1.20
 
 RD.BRACE_WRONG_MULT = 1.18
-RD.BRACE_COUNTER_CHANCE = 0.40
+RD.BRACE_COUNTER_CHANCE = 0.35
 RD.BRACE_COUNTER_CD = 4
 RD.BRACE_STATUS_RESIST = 0.30
 
@@ -42,7 +42,7 @@ RD.ENTRENCH_TURNS_MIN = 2
 RD.ENTRENCH_TURNS_MAX = 3
 RD.ENTRENCH_PEN_PHYSICAL = 0.35
 RD.ENTRENCH_PEN_SPECIAL = 0.18
-RD.ENTRENCH_COUNTER_CHANCE = 0.18
+RD.ENTRENCH_COUNTER_CHANCE = 0.20
 RD.ENTRENCH_EARLY_REFUND = 5
 
 -- Small curated set; expand later. Unreactable still hits Cover durability hard.
@@ -96,12 +96,29 @@ local function levelOf(battler)
   return (mon and tonumber(mon.level)) or 50
 end
 
+
+-- local function baseSpeedOf(battler)
+--   -- Prefer species base if present; else battle speed stat.
+--   local mon = monOf(battler)
+--   if mon and mon.species and battler and battler.data and battler.data.pokemon then
+--     local def = battler.data.pokemon[mon.species]
+--     if def and def.stats and def.stats.speed then
+--       return tonumber(def.stats.speed) or 0
+--     end
+--   end
+--   if battler and battler.stats and battler.stats.speed then
+--     return tonumber(battler.stats.speed) or 0
+--   end
+--   return 0
+-- end
+
 local function baseSpeedOf(battler)
   -- Prefer species base if present; else battle speed stat.
   local mon = monOf(battler)
   if mon and mon.species and battler and battler.data and battler.data.pokemon then
     local def = battler.data.pokemon[mon.species]
     if def and def.stats and def.stats.speed then
+      print("Base speed: " .. (tonumber(def.stats.speed) or 0) .. " for " .. mon.species .. " with current battle speed " .. (tonumber(battler.stats.speed) or 0))
       return tonumber(def.stats.speed) or 0
     end
   end

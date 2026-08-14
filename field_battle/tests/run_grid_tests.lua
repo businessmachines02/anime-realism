@@ -673,6 +673,32 @@ function tests.occupancy_and_movement()
   truthy(Grid.setPad(grid, e, e.padU, e.padV), "place enemy")
   truthy(not Grid.setPad(grid, { id = "other" }, p.padU, p.padV),
     "reject occupied cell")
+  eq(Grid.occupy(grid, "intruder", p.padU, p.padV), false,
+    "occupy does not steal a taken cell")
+  eq(grid.occ[Coords.key(p.padU, p.padV)], p.id, "original occupant kept")
+
+  local relocated = { id = "spawn" }
+  truthy(Grid.placeOnFreePad(grid, relocated, p.padU, p.padV),
+    "send-out relocates off an occupied home")
+  truthy(relocated.padU ~= p.padU or relocated.padV ~= p.padV,
+    "relocated spawn is on a different pad")
+  eq(grid.occ[Coords.key(p.padU, p.padV)], p.id, "home occupant is unchanged")
+  eq(grid.occ[Coords.key(relocated.padU, relocated.padV)], relocated.id,
+    "spawn occupies the empty neighbor")
+
+  -- World-cell reservation: the foe's tile is not a legal send-out even if
+  -- pad occupancy was cleared.
+  Grid.release(grid, e.id)
+  local wx, wy = Coords.padToWorld(grid, e.padU, e.padV)
+  local worldKey = tostring(wx) .. ":" .. tostring(wy)
+  local spawn = { id = "player-sendout" }
+  truthy(Grid.placeOnFreePad(grid, spawn, e.padU, e.padV, spawn.id, {
+    [worldKey] = true,
+  }), "send-out finds a pad when the foe tile is world-blocked")
+  truthy(spawn.padU ~= e.padU or spawn.padV ~= e.padV,
+    "send-out does not land on the foe's world cell")
+  Grid.release(grid, spawn.id)
+  truthy(Grid.setPad(grid, e, e.padU, e.padV), "restore foe occupancy")
 
   local homeU, homeV = p.padU, p.padV
   -- Already adjacent: lunge cannot occupy the foe tile.
@@ -1256,8 +1282,12 @@ function tests.world_space_projectiles()
   local beam = Projectiles.recallBeam(session, "player")
   truthy(beam and beam.style == "recall", "player recall fires red laser")
   truthy(beam.pinTip, "recall tip stays on the mon")
+  eq(beam.followEnt, player, "recall laser is pinned to the recalled mon")
   eq(Projectiles.recallBeam(session, "enemy").style, "recall",
     "trainer foe recall fires red laser")
+  player._arFieldSide = "player"
+  eq(Projectiles.recallBeam(session, "enemy", { target = player }), nil,
+    "enemy recall cannot target the player send-out")
   session.foe = nil
   session._battle = { kind = "wild", game = { overworld = overworld } }
   eq(Projectiles.recallBeam(session, "enemy"), nil,
@@ -1578,6 +1608,25 @@ function tests.switch_and_capture_choreography()
   eq(session.enemyMon.anim, foeAnim, "player faint/send-out does not animate the foe")
   eq(session.pendingSwitch.enemy, nil, "player faint does not queue a foe recall")
 
+  -- Foe wandered onto player home: send-out must not steal that tile.
+  local foe = session.enemyMon
+  local pHome = grid.home.player
+  Grid.release(grid, session.playerMon.id)
+  truthy(Grid.setPad(grid, foe, pHome.u, pHome.v), "foe can stand on empty player home")
+  local foePadU, foePadV = foe.padU, foe.padV
+  battle.player = { mon = { species = "FOURTH_MON" } }
+  local spawned = Cast.replace(session, battle, nil, Sprites, Grid, "player",
+    battle.player)
+  truthy(spawned, "replacement still stages")
+  eq(session.enemyMon, foe, "opposing sprite is not replaced")
+  truthy(not foe.hidden and not foe._removed, "opposing sprite stays visible")
+  eq(foe.padU, foePadU, "foe keeps its pad u")
+  eq(foe.padV, foePadV, "foe keeps its pad v")
+  eq(grid.occ[Coords.key(foe.padU, foe.padV)], foe.id, "foe still owns its cell")
+  truthy(spawned.padU ~= foe.padU or spawned.padV ~= foe.padV,
+    "send-out landed on an empty tile")
+  eq(spawned.species, "FOURTH_MON", "new player species staged beside the foe")
+
   local savedEnemyMon = battle.enemy.mon
   battle.enemy.mon = nil
   Lifecycle.syncMons(battle, nil, deps)
@@ -1755,10 +1804,135 @@ function tests.parks_overworld_follower_during_field()
   eq(overworld.entities[4], nil, "follower leaves the live voxel list")
   eq(follower.hidden, true, "parked follower is hidden")
   eq(overworld.entities, worldEntities, "park keeps the same entity table")
+
+  -- Once our send-out is on the map, PikachuFollower.current() may return the
+  -- wild/enemy sprite as the "lead". That must not hide the live opponent.
+  local prevPF = package.loaded["src.world.PikachuFollower"]
+  package.loaded["src.world.PikachuFollower"] = {
+    current = function()
+      return battler
+    end,
+  }
+  Lifecycle.parkOverworldFollowers(session, overworld)
+  local foeListed = false
+  for i = 1, #overworld.entities do
+    if overworld.entities[i] == battler then
+      foeListed = true
+    end
+  end
+  truthy(foeListed, "lead-follower lookup does not park the field foe")
+  truthy(not battler.hidden, "field foe stays visible after player send-out")
+  package.loaded["src.world.PikachuFollower"] = prevPF
   Lifecycle.restoreOverworldFollowers(session, overworld)
   eq(overworld.entities[2], follower, "follower returns at its original index")
   eq(follower.hidden, false, "restored follower is visible")
   eq(follower._arFieldParked, nil, "park marker is cleared")
+end
+
+function tests.player_sendout_leaves_foe_on_field()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "MY_MON" } },
+    enemy = { mon = { species = "WILD_MON" } },
+    _arFieldRevealPlayer = true,
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    plan = plan,
+    grid = grid,
+    awaitPlayerMon = true,
+    _battle = battle,
+  }
+  local deps = {
+    Cast = Cast,
+    Sprites = Sprites,
+    Grid = Grid,
+    Projectiles = Projectiles,
+    Cues = {
+      pumpCurrent = function() end,
+      tickReturns = function() end,
+      apply = function() end,
+    },
+    Anims = { cache = function() end },
+  }
+  session._deps = deps
+  local foe = Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  session.enemyMon = foe
+  Lifecycle._testBind(battle, session)
+  Lifecycle.syncMons(battle, nil, deps, nil)
+  truthy(session.playerMon, "player send-out stages")
+  eq(session.awaitPlayerMon, false, "player reveal completes")
+  eq(session.enemyMon, foe, "foe entity is not replaced")
+  eq(foe.anim, "sendout", "foe is not recalled on player spawn")
+  truthy(not foe.hidden and not foe._removed, "foe stays visible")
+  local listed = false
+  for i = 1, #overworld.entities do
+    if overworld.entities[i] == foe then
+      listed = true
+    end
+  end
+  truthy(listed, "foe stays on the overworld list")
+  Lifecycle._testUnbind(battle)
+end
+
+function tests.player_callin_does_not_recall_foe()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local enemyBattler = { mon = { species = "GEODUDE" } }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "PIKACHU" } },
+    enemy = enemyBattler,
+    sendingOut = true,
+    kind = "trainer",
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    plan = plan,
+    grid = grid,
+    awaitPlayerMon = false,
+    foe = { px = 90, py = 32 },
+    _battle = battle,
+  }
+  local deps = {
+    Cast = Cast,
+    Sprites = Sprites,
+    Grid = Grid,
+    Projectiles = Projectiles,
+    Cues = {
+      pumpCurrent = function() end,
+      tickReturns = function() end,
+      apply = function() end,
+    },
+    Anims = { cache = function() end },
+  }
+  session._deps = deps
+  local foe = Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  foe._spriteSpecies = "GEODUDE"
+  -- Engine often reports a dex id after send-out; that is not a switch.
+  battle.enemy = { mon = { species = 74 } }
+  local spawned = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  Lifecycle._testBind(battle, session)
+  Projectiles.clear(session)
+  Lifecycle.syncMons(battle, nil, deps, nil)
+  eq(session.enemyMon, foe, "foe is not replaced during player call-in")
+  eq(foe.anim, "sendout", "foe is not shrunk by the recall laser")
+  truthy(not foe.hidden and not foe._removed, "foe stays visible")
+  local beams = 0
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "recall" then
+      beams = beams + 1
+    end
+  end
+  eq(beams, 0, "player call-in does not fire a recall laser")
+  truthy(spawned and spawned.anim == "sendout", "player uses send-out grow")
+  eq(Cues.apply(session, "enemy", "recall", Grid, nil, battle), true)
+  eq(foe.anim, "sendout", "recall cue is ignored while the player is calling in")
+  Lifecycle._testUnbind(battle)
 end
 
 function tests.status_auras_follow_field_mons()

@@ -516,12 +516,22 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
 
   function ent:pose()
     -- Dramatic Shape ignores `hidden` and crashes on a nil sprite. Always
-    -- return a real sprite while this entity might still be on ow.entities.
-    -- Faint / recall / capture must Cast.detachScene before leaving the list.
-    if not self.sprite then
-      return nil
+    -- return a real sprite.def while this entity might still be on ow.entities.
+    -- A nil return aborts Voxel3D.beginScene and hides the other battler.
+    local sprite = self.sprite
+    if not (sprite and sprite.def) then
+      self._poseSafe = self._poseSafe or {
+        def = { id = "ar_fbv_pose_" .. tostring(self.id or "mon"), frames = 1 },
+        draw = function() end,
+      }
+      sprite = self._poseSafe
+      if not self.sprite then
+        self.sprite = sprite
+      elseif not self.sprite.def then
+        self.sprite.def = sprite.def
+      end
     end
-    return self.sprite, self.px, self.py, self.facing, self._walkFrame or 0, false
+    return sprite, self.px, self.py, self.facing, self._walkFrame or 0, false
   end
 
   function ent:walkPhase()
@@ -1209,7 +1219,23 @@ local function sheetToVisual(sheet, side)
       love.graphics.draw(img, quads[frame], x, y)
     end
   end
-  return { sprite = nil, drawer = drawer, lift = (fh >= 32) and 24 or 8 }
+  -- Voxel samples sprite.def; a drawer-only visual used to return nil and
+  -- abort the 3D pass (hiding the other battler) as soon as this mon spawned.
+  local sprite = {
+    def = {
+      id = "ar_fbv_" .. tostring(side) .. "_" .. tostring(sheet.surface or "land"),
+      image = sheet.image,
+      frames = n,
+      walker = true,
+    },
+    draw = function(_, px, py, camX, camY, facing, walkFrame)
+      drawer({
+        px = px, py = py, facing = facing, _walkFrame = walkFrame,
+        hidden = false,
+      }, camX, camY)
+    end,
+  }
+  return { sprite = sprite, drawer = drawer, lift = (fh >= 32) and 24 or 8 }
 end
 
 function Sprites.applySurface(ent, surface)
