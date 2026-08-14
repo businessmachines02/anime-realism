@@ -54,8 +54,24 @@ local MOVE_FX = {
   BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },
   SURF = { style = "wave", duration = 0.48, radius = 22 },
   BLIZZARD = { style = "area", glitz = "frost", radius = 22 },
-  PSYCHIC = { style = "spiral", glitz = "psy", duration = 0.50 },
-  CONFUSION = { style = "orb", glitz = "psy", arc = 14 },
+  PSYCHIC = {
+    style = "aura",
+    glitz = "psy",
+    duration = 0.62,
+    color = { 0.92, 0.34, 0.82 },
+  },
+  PSYCHIC_M = {
+    style = "aura",
+    glitz = "psy",
+    duration = 0.62,
+    color = { 0.92, 0.34, 0.82 },
+  },
+  CONFUSION = {
+    style = "aura",
+    glitz = "confuse",
+    duration = 0.50,
+    color = { 0.86, 0.48, 0.96 },
+  },
   DREAM_EATER = { style = "drain", glitz = "psy", duration = 0.52 },
   MEGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.48 },
   GIGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.52 },
@@ -230,6 +246,7 @@ local TRAVEL_STYLES = {
   drain = true,
   multi = true,
   spiral = true,
+  aura = true,
   area = true,
   wave = true,
   bolt = true,
@@ -379,6 +396,83 @@ local function drawShadeSmoke(g, x, y, t, age, c)
   -- Soft dark bloom under the puff.
   g.setColor(0.05, 0.02, 0.08, 0.45 * fade)
   g.circle("fill", x, y + 1, 7 + life * 12)
+end
+
+--- Psychic / Confusion: enveloping aura around the target.
+--- crush = Psychic squeeze rings; confuse = dizzy reverse-orbit motes.
+local function drawPsyAura(g, x, y, ox, oy, t, age, c, opts)
+  opts = opts or {}
+  local crush = opts.crush == true
+  local confuse = opts.confuse == true
+  local fade = 1 - t * 0.18
+  if t > 0.72 then
+    fade = fade * (1 - (t - 0.72) / 0.28)
+  end
+  local pulse = 0.55 + 0.45 * math.abs(math.sin((age or 0) * 8.5))
+  -- Thought sparkles from caster → target on the way in.
+  if ox and oy and (math.abs(ox - x) + math.abs(oy - y) > 4) then
+    local n = crush and 7 or 5
+    for i = 1, n do
+      local u = ((i / n) + t * 0.85) % 1
+      local px = ox + (x - ox) * u
+      local py = oy + (y - oy) * u + math.sin(u * math.pi) * -3
+          + math.sin((age or 0) * 9 + i) * 1.4
+      local a = (0.25 + 0.55 * u) * fade * (1 - t * 0.35)
+      g.setColor(c[1], c[2], c[3], a * 0.55)
+      g.circle("fill", px, py, crush and 2.4 or 1.8)
+      g.setColor(1, 0.9, 1, a)
+      g.circle("fill", px, py, crush and 1.1 or 0.8)
+    end
+  end
+  -- Soft magenta bloom under the target.
+  g.setColor(c[1], c[2], c[3], 0.22 * fade * pulse)
+  g.ellipse("fill", x, y + 3, crush and (16 + pulse * 4) or (11 + pulse * 3),
+    crush and 7 or 5)
+  -- Concentric telekinetic rings.
+  local rings = crush and 4 or 3
+  for i = 1, rings do
+    local u = i / rings
+    local squeeze = crush and (1 - 0.26 * math.sin(t * math.pi * 2.2 + i * 0.7)) or 1
+    local wobble = confuse and math.sin((age or 0) * 9 + i * 1.4) * 2.1 or 0
+    local grow = 0.62 + t * 0.55
+    local rx = (6.5 + u * (crush and 11 or 8)) * squeeze * grow
+    local ry = (3.0 + u * (crush and 5.2 or 3.8)) * squeeze * grow
+    g.setColor(c[1], c[2], c[3], (0.72 - u * 0.22) * fade)
+    g.setLineWidth(crush and 2.3 or 1.5)
+    g.ellipse("line", x + wobble, y - 1 - u * 1.4, rx, ry)
+    if crush then
+      g.setColor(1, 0.78, 1, 0.28 * fade * pulse)
+      g.ellipse("line", x, y - 1 - u * 1.4, rx * 0.86, ry * 0.86)
+    end
+  end
+  -- Orbiting motes (Confusion spins the other way and wobbles).
+  local n = crush and 8 or 6
+  local spin = (age or 0) * (confuse and -7.4 or 6.6)
+  for i = 1, n do
+    local a = spin + i * (math.pi * 2 / n)
+    local orbit = crush
+      and (9 + math.sin(t * math.pi) * 7)
+      or (7 + math.sin((age or 0) * 4.2 + i) * 3.2)
+    local px = x + math.cos(a) * orbit
+    local py = y + math.sin(a) * orbit * 0.46 - 3
+        - math.sin((age or 0) * 5.2 + i) * (confuse and 2.6 or 1.6)
+    g.setColor(c[1], c[2], c[3], 0.82 * fade)
+    g.circle("fill", px, py, crush and 1.9 or 1.45)
+    g.setColor(1, 1, 1, 0.7 * fade)
+    g.circle("fill", px - 0.35, py - 0.45, crush and 0.7 or 0.55)
+  end
+  -- Core flash / dizzy spark.
+  g.setColor(1, 0.82, 1, (crush and 0.38 or 0.28) * fade * pulse)
+  g.circle("fill", x, y - 2, crush and 5.2 or 3.4)
+  if confuse then
+    -- Tiny star motes for the dizzy hit.
+    for i = 1, 3 do
+      local a = (age or 0) * 5 + i * 2.1
+      local r = 4 + i * 2
+      g.setColor(1, 0.92, 1, 0.55 * fade)
+      g.circle("fill", x + math.cos(a) * r, y - 6 + math.sin(a * 1.4) * 2, 0.9)
+    end
+  end
 end
 
 local function drawMove(g, p, x, y)
@@ -722,14 +816,23 @@ local function drawEffect(g, p, x, y, ox, oy)
       end
     end
   elseif p.style == "spiral" then
-    for i = 1, 8 do
-      local a = t * math.pi * 5 + i * 0.7
-      local r = 3 + i * 1.6 * (0.35 + 0.65 * math.sin(t * math.pi))
-      g.setColor(c[1], c[2], c[3], 0.85 * (1 - t * 0.5))
-      g.circle("fill", x + math.cos(a) * r, y + math.sin(a) * r, 2)
+    if glitz == "psy" then
+      drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
+    else
+      for i = 1, 8 do
+        local a = t * math.pi * 5 + i * 0.7
+        local r = 3 + i * 1.6 * (0.35 + 0.65 * math.sin(t * math.pi))
+        g.setColor(c[1], c[2], c[3], 0.85 * (1 - t * 0.5))
+        g.circle("fill", x + math.cos(a) * r, y + math.sin(a) * r, 2)
+      end
+      g.setColor(1, 1, 1, 0.55 * (1 - t))
+      g.circle("line", x, y, 5 + t * 8)
     end
-    g.setColor(1, 1, 1, 0.55 * (1 - t))
-    g.circle("line", x, y, 5 + t * 8)
+  elseif p.style == "aura" then
+    drawPsyAura(g, x, y, ox, oy, t, p.age, c, {
+      crush = (glitz ~= "confuse"),
+      confuse = (glitz == "confuse"),
+    })
   elseif p.style == "stream" then
     -- Dense particle stream from caster origin → traveling tip.
     local age = p.age or 0
@@ -1260,6 +1363,22 @@ function Projectiles.move(session, side, opts)
       duration = fx.duration or 0.26,
       arc = 0,
       color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "aura" then
+    -- Envelop the foe; keep caster origin for thought-sparkle stream.
+    return spawn(session, {
+      kind = "effect",
+      style = "aura",
+      glitz = fx.glitz,
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.55,
+      arc = 0,
+      color = fx.color,
+      pinTip = true,
+      followSide = (side == "player") and "enemy" or "player",
       onDone = opts.onDone,
     })
   end

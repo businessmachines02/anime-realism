@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.26)
+# FIELD combat SPEC (v4.5.27)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -22,7 +22,7 @@ Pixels are presentation only; **pad cells are truth**.
 4. Player mon deferred until lead / send-out; stages onto player home pad cell.
 5. Callouts tag `arFieldCue`; FIELD plays pad steps when that row becomes `battle.current`. Physical vs special motion rules apply.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
-   contact, projectile, beam, area, stream, spiral, wave, drain, status, heal,
+   contact, projectile, beam, area, stream, spiral, aura, wave, drain, status, heal,
    shadow (Night Shade), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
    PSN / SLP / confusion auras tint field sprites. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,

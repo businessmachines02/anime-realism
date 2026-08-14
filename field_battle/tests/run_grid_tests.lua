@@ -1126,7 +1126,21 @@ function tests.world_space_projectiles()
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })
-  eq(psychic.style, "spiral", "psychic uses spiral ring")
+  eq(psychic.style, "aura", "psychic uses enveloping aura")
+  eq(psychic.glitz, "psy", "psychic uses crush aura glitz")
+  truthy(psychic.pinTip, "psychic aura stays on the target")
+  local psychicM = Projectiles.move(session, "player", {
+    moveType = "PSYCHIC", moveId = "PSYCHIC_M",
+  })
+  eq(psychicM.style, "aura", "PSYCHIC_M aliases psychic aura")
+  local confusion = Projectiles.move(session, "enemy", {
+    moveType = "PSYCHIC", moveId = "CONFUSION",
+  })
+  eq(confusion.style, "aura", "confusion uses enveloping aura")
+  eq(confusion.glitz, "confuse", "confusion uses dizzy aura glitz")
+  truthy(Projectiles.isTravelFx({
+    moveType = "PSYCHIC", moveId = "PSYCHIC",
+  }), "psychic is a travel FX")
   local slash = Projectiles.contact(session, "player", {
     moveType = "NORMAL", moveId = "SLASH",
   })
