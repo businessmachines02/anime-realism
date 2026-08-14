@@ -40,16 +40,17 @@ local MOVE_FX = {
   ICE_BEAM = { style = "beam", glitz = "frost" },
   AURORA_BEAM = { style = "beam", glitz = "frost" },
   PSYBEAM = { style = "beam", glitz = "psy" },
-  THUNDERBOLT = { style = "beam", glitz = "bolt" },
-  THUNDERSHOCK = { style = "beam", glitz = "bolt", duration = 0.22 },
-  THUNDER = { style = "bolt", duration = 0.38 },
-  FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.40 },
+  THUNDERBOLT = { style = "beam", glitz = "bolt", duration = 0.36 },
+  THUNDERSHOCK = { style = "beam", glitz = "bolt", duration = 0.30 },
+  THUNDER = { style = "bolt", duration = 0.42 },
+  FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.48 },
   FIRE_BLAST = { style = "area", glitz = "flame", radius = 24, duration = 0.50 },
   EMBER = { style = "orb", glitz = "flame", arc = 10 },
   FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.48 },
-  HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.40 },
+  HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
   WATER_GUN = { style = "orb", glitz = "bubble" },
-  BUBBLEBEAM = { style = "stream", glitz = "bubble" },
+  BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
+  BUBBLE_BEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },
   SURF = { style = "wave", duration = 0.48, radius = 22 },
   BLIZZARD = { style = "area", glitz = "frost", radius = 22 },
@@ -239,36 +240,152 @@ local function trailPoints(p, x, y, n, spacing)
   return pts
 end
 
+--- Jagged lightning polyline from (ox,oy) → (x,y). Returns point list.
+local function lightningPoints(ox, oy, x, y, age, segs, amp)
+  segs = segs or 7
+  amp = amp or 5.5
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local pts = { { ox, oy } }
+  for i = 1, segs - 1 do
+    local u = i / segs
+    local jitter = math.sin((age or 0) * 58 + i * 2.7) * amp
+        + math.sin((age or 0) * 23 + i * 5.1) * (amp * 0.55)
+        + math.cos((age or 0) * 81 + i * 1.4) * (amp * 0.3)
+    local envelope = math.sin(u * math.pi)
+    pts[#pts + 1] = {
+      ox + dx * u + nx * jitter * envelope,
+      oy + dy * u + ny * jitter * envelope,
+    }
+  end
+  pts[#pts + 1] = { x, y }
+  return pts, nx, ny
+end
+
+local function strokePoly(g, pts, width, r, gr, b, a)
+  if not (pts and #pts >= 2) then
+    return
+  end
+  g.setColor(r, gr, b, a)
+  g.setLineWidth(width)
+  for i = 1, #pts - 1 do
+    g.line(pts[i][1], pts[i][2], pts[i + 1][1], pts[i + 1][2])
+  end
+end
+
+local function drawLightningBolt(g, ox, oy, x, y, age, c, opts)
+  opts = opts or {}
+  local fade = opts.fade or 1
+  local flash = 0.55 + 0.45 * math.abs(math.sin((age or 0) * 34))
+  local pts, nx, ny = lightningPoints(ox, oy, x, y, age, opts.segs or 8, opts.amp or 5.5)
+  local cr, cg, cb = c[1] or 1, c[2] or 0.88, c[3] or 0.18
+  strokePoly(g, pts, opts.glow or 5.5, cr, cg, cb, 0.28 * fade * flash)
+  strokePoly(g, pts, opts.mid or 2.8, cr, cg * 0.95, cb * 0.55, 0.8 * fade)
+  strokePoly(g, pts, opts.core or 1.3, 1, 1, 0.92, 0.95 * fade * flash)
+  -- Forks / side branches.
+  local forks = opts.forks
+  if forks == nil then
+    forks = true
+  end
+  if forks then
+    for i = 2, #pts - 1, 2 do
+      local px, py = pts[i][1], pts[i][2]
+      local side = (i % 4 < 2) and 1 or -1
+      local fork = (opts.forkLen or 5) + (i % 3)
+      local fx = px + nx * fork * side + math.sin((age or 0) * 44 + i) * 1.4
+      local fy = py + ny * fork * side + math.cos((age or 0) * 39 + i) * 1.4
+      g.setColor(cr, cg, cb, 0.55 * fade * flash)
+      g.setLineWidth(1.6)
+      g.line(px, py, fx, fy)
+      g.setColor(1, 1, 0.9, 0.7 * fade * flash)
+      g.setLineWidth(1)
+      g.line(px, py, fx, fy)
+    end
+  end
+  -- Tip sparks.
+  for i = 1, 4 do
+    local a = (age or 0) * 20 + i * 1.7
+    local r = 3 + (i % 2) * 2
+    g.setColor(1, 1, 0.7, 0.55 * fade * flash)
+    g.setLineWidth(1)
+    g.line(x, y, x + math.cos(a) * r, y + math.sin(a) * r)
+  end
+  g.setColor(1, 1, 1, 0.85 * fade * flash)
+  g.circle("fill", x, y, 1.8)
+end
+
 local function drawMove(g, p, x, y)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "orb"
-  local trail = trailPoints(p, x, y, (glitz == "flame" or glitz == "bubble") and 5 or 3, 4)
+  local age = p.age or 0
+  local trail = trailPoints(p, x, y, (glitz == "flame" or glitz == "bubble") and 8 or 3,
+    (glitz == "flame" or glitz == "bubble") and 3.2 or 4)
 
   if glitz == "flame" then
-    for i = 1, #trail do
+    for i = #trail, 1, -1 do
       local tp = trail[i]
-      local r = 5 - (i - 1) * 0.7
-      g.setColor(c[1], c[2] * 0.55, 0.05, 0.55 * tp.a)
-      g.circle("fill", tp.x, tp.y - (i - 1), r)
+      local wobble = math.sin(age * 22 + i * 1.7) * 1.8
+      local nx = -(p.dirY or 0) * wobble
+      local ny = (p.dirX or 1) * wobble
+      local r = 5.5 - (i - 1) * 0.45
+      g.setColor(c[1], c[2] * 0.35, 0.02, 0.28 * tp.a)
+      g.circle("fill", tp.x + nx * 0.4, tp.y + ny * 0.4 - (i - 1) * 0.6, r + 2)
+      g.setColor(c[1], c[2] * 0.55, 0.05, 0.6 * tp.a)
+      g.circle("fill", tp.x + nx, tp.y + ny - (i - 1) * 0.5, r)
     end
-    g.setColor(1, 0.92, 0.45, 0.95)
-    g.circle("fill", x, y, 2.5)
+    -- Embers peeling off the tip.
+    for i = 1, 5 do
+      local a = age * 14 + i * 2.1
+      local d = 3 + (i % 3) * 2
+      g.setColor(1, 0.7 + (i % 2) * 0.2, 0.2, 0.7)
+      g.circle("fill",
+        x + math.cos(a) * d * 0.6 - (p.dirX or 0) * (i + 1),
+        y + math.sin(a) * d * 0.5 - 2 - i * 0.4,
+        1.4 - i * 0.12)
+    end
+    g.setColor(1, 0.95, 0.55, 0.95)
+    g.circle("fill", x, y, 2.8)
+    g.setColor(1, 1, 1, 0.85)
+    g.circle("fill", x, y - 0.5, 1.2)
     return
   end
 
   if glitz == "bubble" then
     for i = 1, #trail do
       local tp = trail[i]
-      local r = 3.5 - (i - 1) * 0.35
-      g.setColor(c[1], c[2], c[3], 0.35 * tp.a)
-      g.circle("line", tp.x, tp.y + math.sin((p.age or 0) * 18 + i) * 1.2, r)
-      g.setColor(1, 1, 1, 0.55 * tp.a)
-      g.circle("fill", tp.x - 1, tp.y - 1, 1)
+      local bob = math.sin(age * 16 + i * 1.9) * 2.2
+      local side = math.cos(age * 11 + i * 2.4) * 1.6
+      local nx = -(p.dirY or 0)
+      local ny = (p.dirX or 1)
+      local r = 4.2 - (i - 1) * 0.28 + (i % 3) * 0.35
+      local bx = tp.x + nx * side
+      local by = tp.y + ny * side + bob * 0.35
+      g.setColor(c[1], c[2], c[3], 0.22 * tp.a)
+      g.circle("fill", bx, by, r)
+      g.setColor(c[1], c[2], c[3], 0.55 * tp.a)
+      g.circle("line", bx, by, r)
+      g.setColor(1, 1, 1, 0.65 * tp.a)
+      g.circle("fill", bx - r * 0.35, by - r * 0.35, math.max(0.6, r * 0.28))
+    end
+    -- Extra satellite bubbles around the tip.
+    for i = 1, 4 do
+      local a = age * 9 + i * 1.8
+      local r = 1.6 + (i % 2) * 0.8
+      local bx = x + math.cos(a) * (4 + i)
+      local by = y + math.sin(a * 1.3) * (3 + i * 0.4)
+      g.setColor(c[1], c[2], c[3], 0.5)
+      g.circle("line", bx, by, r)
+      g.setColor(1, 1, 1, 0.7)
+      g.circle("fill", bx - 0.5, by - 0.5, 0.7)
     end
     g.setColor(c[1], c[2], c[3], 0.85)
-    g.circle("fill", x, y, 3.5)
-    g.setColor(1, 1, 1, 0.9)
-    g.circle("fill", x - 1, y - 1, 1.2)
+    g.circle("fill", x, y, 3.8)
+    g.setColor(1, 1, 1, 0.92)
+    g.circle("fill", x - 1.2, y - 1.2, 1.3)
     return
   end
 
@@ -407,16 +524,29 @@ local function drawEffect(g, p, x, y, ox, oy)
   if p.style == "beam" then
     local thick = (glitz == "thick") and 7 or 5
     if glitz == "bolt" then
-      local mx = (ox + x) * 0.5 + math.sin((p.age or 0) * 40) * 3
-      local my = (oy + y) * 0.5 + math.cos((p.age or 0) * 36) * 2
-      g.setColor(c[1], c[2], c[3], 0.4)
-      g.setLineWidth(thick)
-      g.line(ox, oy, mx, my)
-      g.line(mx, my, x, y)
-      g.setColor(1, 1, 1, 0.95)
-      g.setLineWidth(2)
-      g.line(ox, oy, mx, my)
-      g.line(mx, my, x, y)
+      drawLightningBolt(g, ox, oy, x, y, p.age, c, {
+        fade = 1 - t * 0.25,
+        segs = 9,
+        amp = 6.2,
+        glow = 5.5,
+        mid = 2.8,
+        core = 1.35,
+        forkLen = 5.5,
+      })
+      -- Secondary delayed fork for a multi-bolt feel.
+      local midAge = (p.age or 0) + 0.37
+      local mx = ox + (x - ox) * 0.62
+      local my = oy + (y - oy) * 0.62
+      drawLightningBolt(g, ox, oy, mx + math.sin(midAge * 12) * 4,
+        my + math.cos(midAge * 10) * 3, midAge, c, {
+          fade = 0.55 * (1 - t),
+          segs = 5,
+          amp = 4,
+          glow = 3.5,
+          mid = 1.8,
+          core = 1,
+          forks = false,
+        })
     else
       g.setColor(c[1], c[2], c[3], 0.34)
       g.setLineWidth(thick)
@@ -435,19 +565,22 @@ local function drawEffect(g, p, x, y, ox, oy)
       end
     end
   elseif p.style == "bolt" then
-    -- Vertical thunder strike onto the target.
-    local top = y - 28 + t * 8
-    local mid = y - 12
-    local jx = math.sin((p.age or 0) * 50) * 4
-    g.setColor(c[1], c[2], c[3], 0.85 * (1 - t * 0.4))
-    g.setLineWidth(3)
-    g.line(x + jx, top, x - jx, mid)
-    g.line(x - jx, mid, x, y)
-    g.setColor(1, 1, 1, 0.9 * (1 - t))
-    g.setLineWidth(1)
-    g.line(x + jx * 0.5, top, x, y)
-    g.setColor(c[1], c[2], c[3], 0.35 * (1 - t))
-    g.circle("fill", x, y, 6 + t * 8)
+    -- Vertical thunder strike onto the target (Thunder).
+    local top = y - 30 + t * 6
+    drawLightningBolt(g, x + math.sin((p.age or 0) * 8) * 2, top, x, y, p.age, c, {
+      fade = 1 - t * 0.35,
+      segs = 7,
+      amp = 5,
+      glow = 5,
+      mid = 2.6,
+      core = 1.2,
+      forkLen = 6,
+    })
+    -- Ground impact bloom.
+    g.setColor(c[1], c[2], c[3], 0.4 * (1 - t))
+    g.circle("fill", x, y, 5 + t * 10)
+    g.setColor(1, 1, 1, 0.55 * (1 - t))
+    g.circle("line", x, y, 4 + t * 7)
   elseif p.style == "area" then
     local radius = 3 + math.sin(t * math.pi) * (p.radius or 18)
     g.setColor(c[1], c[2], c[3], 0.30 * (1 - t))
@@ -495,15 +628,86 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.setColor(1, 1, 1, 0.55 * (1 - t))
     g.circle("line", x, y, 5 + t * 8)
   elseif p.style == "stream" then
-    -- Traveling stream painted as a thick beam segment that follows px/py.
-    local backX = x - (p.dirX or 0) * 14
-    local backY = y - (p.dirY or 0) * 14
-    g.setColor(c[1], c[2], c[3], 0.4)
-    g.setLineWidth(6)
-    g.line(backX, backY, x, y)
-    g.setColor(1, 1, 1, 0.85)
-    g.setLineWidth(2)
-    g.line(backX, backY, x, y)
+    -- Dense particle stream from caster origin → traveling tip.
+    local age = p.age or 0
+    local dx, dy = x - ox, y - oy
+    local len = math.sqrt(dx * dx + dy * dy)
+    local nx, ny = 0, 1
+    if len > 0.1 then
+      nx, ny = -dy / len, dx / len
+    end
+    local n = (glitz == "flame" or glitz == "bubble") and 14
+        or (glitz == "blob" and 10 or 8)
+    if glitz == "flame" then
+      for i = 0, n do
+        local u = i / n
+        -- Particles lag slightly behind the tip so the stream fills in.
+        local along = u * math.min(1, t * 1.15 + 0.08)
+        local wobble = math.sin(age * 18 + i * 1.6) * (2.8 + u * 2)
+            + math.cos(age * 11 + i * 2.3) * 1.4
+        local px = ox + dx * along + nx * wobble
+        local py = oy + dy * along + ny * wobble - u * 2
+        local r = 2.2 + (1 - u) * 3.5 + math.sin(age * 20 + i) * 0.6
+        local a = (0.25 + 0.55 * (1 - u)) * (1 - t * 0.2)
+        g.setColor(c[1], c[2] * 0.3, 0.02, a * 0.45)
+        g.circle("fill", px, py - 1, r + 2)
+        g.setColor(c[1], c[2] * 0.55, 0.08, a)
+        g.circle("fill", px, py, r)
+        if i % 3 == 0 then
+          g.setColor(1, 0.9, 0.4, a * 0.85)
+          g.circle("fill", px, py - 0.5, math.max(0.8, r * 0.35))
+        end
+      end
+      -- Tip bloom + embers.
+      g.setColor(1, 0.55, 0.12, 0.45)
+      g.circle("fill", x, y, 7)
+      for i = 1, 6 do
+        local a = age * 16 + i * 1.9
+        g.setColor(1, 0.75, 0.25, 0.75)
+        g.circle("fill",
+          x + math.cos(a) * (3 + i % 3),
+          y + math.sin(a) * 2 - 2,
+          1.5)
+      end
+    elseif glitz == "bubble" then
+      for i = 0, n do
+        local u = i / n
+        local along = u * math.min(1, t * 1.1 + 0.1)
+        local bob = math.sin(age * 14 + i * 2.1) * (2.5 + u * 2)
+        local side = math.cos(age * 9 + i * 1.7) * (1.8 + u * 1.5)
+        local px = ox + dx * along + nx * side
+        local py = oy + dy * along + ny * side * 0.4 + bob * 0.45
+        local r = 1.6 + (1 - u) * 2.8 + (i % 4) * 0.45
+        local a = (0.3 + 0.5 * (1 - u)) * (1 - t * 0.15)
+        g.setColor(c[1], c[2], c[3], a * 0.35)
+        g.circle("fill", px, py, r)
+        g.setColor(c[1], c[2], c[3], a)
+        g.circle("line", px, py, r)
+        g.setColor(1, 1, 1, a * 0.85)
+        g.circle("fill", px - r * 0.3, py - r * 0.3, math.max(0.5, r * 0.25))
+      end
+      -- Foam splash at the tip.
+      for i = 1, 5 do
+        local a = age * 10 + i * 1.5
+        local r = 1.4 + (i % 2)
+        g.setColor(c[1], c[2], c[3], 0.55)
+        g.circle("line", x + math.cos(a) * (3 + i), y + math.sin(a) * 2.5, r)
+      end
+    else
+      -- Generic dense stream (leaf / blob / dragon / acid).
+      for i = 0, n do
+        local u = i / n
+        local along = u * math.min(1, t * 1.1 + 0.1)
+        local wobble = math.sin(age * 16 + i * 1.8) * 2.2
+        local px = ox + dx * along + nx * wobble
+        local py = oy + dy * along + ny * wobble
+        local r = 2 + (1 - u) * 2.5
+        g.setColor(c[1], c[2], c[3], (0.35 + 0.45 * (1 - u)) * (1 - t * 0.2))
+        g.circle("fill", px, py, r)
+      end
+      g.setColor(1, 1, 1, 0.55)
+      g.circle("fill", x, y, 2.2)
+    end
     drawMove(g, p, x, y)
   elseif p.style == "multi" then
     local n = (glitz == "tri") and 3 or 5

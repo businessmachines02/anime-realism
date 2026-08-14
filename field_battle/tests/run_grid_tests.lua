@@ -679,6 +679,21 @@ function tests.world_space_projectiles()
   })
   eq(flamethrower.style, "stream", "named fire move uses stream glitz")
   eq(flamethrower.glitz, "flame", "flamethrower paints flame trail")
+  truthy((flamethrower.duration or 0) >= 0.45, "flamethrower holds a longer stream")
+  local bubblebeam = Projectiles.move(session, "player", {
+    moveType = "WATER", moveId = "BUBBLEBEAM",
+  })
+  eq(bubblebeam.style, "stream", "bubble beam uses stream particles")
+  eq(bubblebeam.glitz, "bubble", "bubble beam paints bubble particles")
+  local thunderbolt = Projectiles.move(session, "player", {
+    moveType = "ELECTRIC", moveId = "THUNDERBOLT",
+  })
+  eq(thunderbolt.style, "beam", "thunderbolt is a beam")
+  eq(thunderbolt.glitz, "bolt", "thunderbolt uses lightning bolt glitz")
+  local shock = Projectiles.move(session, "enemy", {
+    moveType = "ELECTRIC", moveId = "THUNDERSHOCK",
+  })
+  eq(shock.glitz, "bolt", "thundershock uses lightning bolt glitz")
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })
