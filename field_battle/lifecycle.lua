@@ -3,7 +3,7 @@
 -- One weak-keyed session per BattleState. Lifecycle owns:
 --   begin/finish   survey envelope, stage battlers onto the live map, camera
 --   tick/tickPresent  bob, steps, projectiles, trainer dodge-aside
---   syncMons / stagePlayerMon / capture / despawn
+--   syncMons / stagePlayerMon / capture / despawn / watchHpFaint
 --   onTurnStarted / onTurnEnded / react (cue fan-out)
 --
 -- States:
@@ -783,7 +783,86 @@ function Lifecycle.tryRevealPlayerMon(battle)
     end
 end
 
-function Lifecycle.syncMons(battle, mod, deps)
+local function speciesKey(value)
+    return tostring(value or ""):upper():gsub("%s+", "_")
+end
+
+local function wantedSpecies(battler)
+    local mon = battler and battler.mon
+    if not mon then
+        return ""
+    end
+    return speciesKey(mon.species or mon.id)
+end
+
+local function liveSpecies(ent)
+    if not ent then
+        return ""
+    end
+    return speciesKey(ent.species or ent._spriteSpecies)
+end
+
+local function battlerFainted(battler)
+    local mon = battler and battler.mon
+    local hp = tonumber(battler and battler.shownHP) or tonumber(mon and mon.hp)
+    if hp ~= nil and hp <= 0 then
+        return true
+    end
+    local status = mon and tostring(mon.status or ""):upper()
+    return status == "FNT" or status == "FAINT"
+end
+
+local function shownBarHP(battler)
+    return tonumber(battler and battler.shownHP)
+end
+
+--- Play faint/recall when the painted HP bar empties. Engine `battle.fainted`
+--- is usually queued with the "fainted!" line, after `shownHP` is already 0.
+function Lifecycle.watchHpFaint(battle, deps)
+    local session = Lifecycle.get(battle)
+    if not (session and session.live and battle) then
+        return
+    end
+    deps = deps or session._deps
+    if not (deps and deps.Cues and type(deps.Cues.apply) == "function") then
+        return
+    end
+    session._barHP = session._barHP or {}
+    for _, side in ipairs({ "player", "enemy" }) do
+        local battler = (side == "player") and battle.player or battle.enemy
+        local ent = (side == "player") and session.playerMon or session.enemyMon
+        local hp = shownBarHP(battler)
+        local prev = session._barHP[side]
+        if hp ~= nil then
+            session._barHP[side] = hp
+        end
+        if hp ~= nil and ent and not ent._removed
+            and prev ~= nil and prev > 0 and hp <= 0 then
+            Lifecycle.react(battle, side, "faint")
+        end
+    end
+end
+
+--- `battle.fainted` fallback. Skip while the bar is still draining so the
+--- laser is not the dialogue beat; skip if watchHpFaint already played it.
+function Lifecycle.onFainted(battle, side)
+    if not battle or (side ~= "player" and side ~= "enemy") then
+        return
+    end
+    local battler = (side == "player") and battle.player or battle.enemy
+    local shown = shownBarHP(battler)
+    if shown ~= nil and shown > 0 then
+        return
+    end
+    if Lifecycle.shouldSkipEventReact(battle, side, "faint") then
+        return
+    end
+    return Lifecycle.react(battle, side, "faint")
+end
+
+--- Restage a side after a switch. `onlySide` limits the pass so a player faint
+--- / send-out cannot recall the foe (and vice versa).
+function Lifecycle.syncMons(battle, mod, deps, onlySide)
     local session = Lifecycle.get(battle)
     if not (session and session.live) then
         return
@@ -807,15 +886,20 @@ function Lifecycle.syncMons(battle, mod, deps)
             return
         end
         local current = (side == "player") and session.playerMon or session.enemyMon
-        local wanted = battler and battler.mon and battler.mon.species
-        if not current then
+        local wanted = wantedSpecies(battler)
+        -- No living replacement yet (party menu / fainted slot). Never recall
+        -- the other battler, and never send out a corpse.
+        if wanted == "" or battlerFainted(battler) then
+            return
+        end
+        if not current or current._removed then
             local ent = Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
             if ent and type(ent.play) == "function" then
                 ent:play("sendout")
             end
             return
         end
-        if tostring(current.species or ""):upper() == tostring(wanted or ""):upper() then
+        if liveSpecies(current) == wanted then
             return
         end
         session.pendingSwitch = session.pendingSwitch or {}
@@ -845,8 +929,14 @@ function Lifecycle.syncMons(battle, mod, deps)
         end
     end
 
-    refresh("player", battle.player)
-    refresh("enemy", battle.enemy)
+    if onlySide == "player" then
+        refresh("player", battle.player)
+    elseif onlySide == "enemy" then
+        refresh("enemy", battle.enemy)
+    else
+        refresh("player", battle.player)
+        refresh("enemy", battle.enemy)
+    end
 end
 
 local function tickSwitches(session, battle, deps, dt)
@@ -1311,6 +1401,7 @@ function Lifecycle.tick(battle, dt, deps)
         deps.Projectiles.tick(session, dt)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
+    Lifecycle.watchHpFaint(battle, deps)
     deps.Cues.tickReturns(session, deps.Grid)
     if type(deps.Cues.syncSemiInvuln) == "function" then
       deps.Cues.syncSemiInvuln(session, deps.Grid)

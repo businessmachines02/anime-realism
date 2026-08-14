@@ -319,7 +319,9 @@ end
 function RD.dodgeSuccessChance(defender, attacker)
   local speDef = speedStat(defender)
   local speAtk = speedStat(attacker)
-  return clamp(20 + (speDef - speAtk) * 0.1, 10, 75) / 100
+  local chance = clamp(35 + (speDef - speAtk) * 0.14, 20, 85) / 100
+  print("Dodge success chance: " .. chance .. " for defender speed " .. speDef .. " vs attacker speed " .. speAtk)
+  return chance
 end
 
 function RD.braceReduction(defender, category)
@@ -479,7 +481,15 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     if rng() <= chance then
       result.forceMiss = true
       result.cancelAnim = false -- keep swing for drama; main may still cancel
-      result.lines[#result.lines + 1] = "Dodged aside!"
+      local dodgeLines = {
+        "Dodged aside!",
+        "Leapt clear just in time!",
+        "Slipped past the attack!",
+        "Narrowly avoided it!",
+        "Evaded skillfully!"
+      }
+      result.lines[#result.lines + 1] = dodgeLines[math.random(#dodgeLines)]
+ 
       if (side.dodgeCounterCd or 0) <= 0 and rng() < RD.DODGE_COUNTER_CHANCE then
         side.dodgeCounterCd = RD.DODGE_COUNTER_CD
         result.counter = {
@@ -487,7 +497,16 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
           powerFrac = RD.DODGE_COUNTER_POWER,
           useSpeed = true,
         }
-        result.lines[#result.lines + 1] = "A quick\ncounter!"
+        local counterLines = {
+          "It's a counterattack!",
+          "But it countered right away!",
+          "Counter! The foe strikes back!",
+          "A sudden counter!",
+          "It retaliated with a counter move!",
+        }
+   
+        result.lines[#result.lines + 1] = counterLines[math.random(#counterLines)]
+   
       end
     else
       result.damageMult = RD.DODGE_FAIL_MULT

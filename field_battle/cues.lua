@@ -348,8 +348,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
 
   if kind == "faint" then
-    -- Faint is one-shot: the engine event AND the "fainted!" dialogue cue
-    -- both try to play this. A second pass would fire another recall laser.
+    -- Owned by the HP bar hitting 0, not the "fainted!" dialogue.
     if isExitPlaying(ent) then
       return true
     end
@@ -399,7 +398,7 @@ end
 function Cues.shouldSkipEvent(session, side, kind)
   kind = tostring(kind or "")
   -- Faint / recall stay one-shot even after the 1.25s beat window: the
-  -- "fainted!" dialogue often becomes current well after battle.fainted.
+  -- "fainted!" dialogue often becomes current well after the HP bar emptied.
   if session and (kind == "faint" or kind == "recall") then
     local ent = (side == "player") and session.playerMon or session.enemyMon
     if isExitPlaying(ent) then
@@ -441,6 +440,9 @@ function Cues.shouldSkipEvent(session, side, kind)
 end
 
 --- Drain one-shot cue from battle.current when it becomes active.
+-- Faint / recall are HP-bar events (`shownHP` → 0), not dialogue. The
+-- "fainted!" line often becomes current after the sprite is gone — applying
+-- it then would replay the laser on the replacement mon.
 function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   local cur = battle and battle.current
   local cue = cur and cur.arFieldCue
@@ -448,6 +450,10 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
     return false
   end
   cur._arFieldCueDone = true
+  local kind = tostring(cue.kind or "")
+  if kind == "faint" or kind == "recall" then
+    return false
+  end
   return Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, {
     category = cue.category,
     moveType = cue.moveType,
@@ -534,6 +540,8 @@ function Cues.tagSelfDamage(battle, text, sideHint)
 end
 
 --- Tag the latest queue row when a mon faints.
+-- Kept for tests / callers; FIELD does not play exit FX from this tag.
+-- Recall / faint sprites fire when the HP bar (`shownHP`) reaches 0.
 function Cues.tagFaint(battle, text)
   if type(battle) ~= "table" or type(text) ~= "string" then
     return false

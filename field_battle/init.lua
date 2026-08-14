@@ -155,8 +155,8 @@ return function(env)
     return Lifecycle.finish(battle, deps)
   end
 
-  function FBV.syncMons(battle, mod)
-    return Lifecycle.syncMons(battle, mod, deps)
+  function FBV.syncMons(battle, mod, side)
+    return Lifecycle.syncMons(battle, mod, deps, side)
   end
 
   function FBV.stagePlayerMon(battle, mod)
@@ -207,6 +207,10 @@ return function(env)
 
   function FBV.shouldSkipEventReact(battle, side, kind)
     return Lifecycle.shouldSkipEventReact(battle, side, kind)
+  end
+
+  function FBV.onFainted(battle, side)
+    return Lifecycle.onFainted(battle, side)
   end
 
   function FBV.onTurnEnded(battle)

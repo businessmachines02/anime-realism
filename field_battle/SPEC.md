@@ -39,7 +39,9 @@ Pixels are presentation only; **pad cells are truth**.
 9. Move orbs and Poké Balls are temporary overworld entities. They use the same
    world camera as the cast, preserving alignment on flat and voxelized maps.
 10. Switching is ordered recall → detach from `ow.entities` → replace
-    occupancy/entity → send-out. Faint / capture exit anims also detach as
+    occupancy/entity → send-out, and only the side that actually switched
+    is restaged. A player faint / send-out must not recall the foe. Faint /
+    capture exit anims also detach as
     soon as they finish so voxel never samples a nil `pose()` sprite.
     Capture resolves ball flight/shakes before shrinking a caught target away.
 11. **Spectator trainers** (`spectators.lua`): trainer NPCs within a 4-tile
@@ -204,9 +206,14 @@ item.arFieldCue = {
 }
 ```
 
-One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` /
-`battle.fainted` are fallback only. Faint / recall stay one-shot on the battler
-so the fainted! dialogue cannot replay the red recall laser.
+One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are
+fallback only (dedupe ~1.25s). **Faint / recall FX are not dialogue cues.**
+They fire when the painted HP bar (`shownHP`) reaches 0. Engine
+`battle.fainted` is a fallback only if the bar is already empty and the
+exit has not played; it is skipped while the bar is still draining so the
+laser is not the "fainted!" beat. `pumpCurrent` ignores
+`kind == "faint"|"recall"` so that line cannot replay the laser on a
+replacement mon.
 
 | kind | pad motion | anim |
 |---|---|---|

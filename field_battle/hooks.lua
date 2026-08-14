@@ -394,9 +394,6 @@ function Hooks.install(FBV, mod)
                     if type(FBV.Cues.tagSelfDamage) == "function" then
                         pcall(FBV.Cues.tagSelfDamage, self, text)
                     end
-                    if type(FBV.Cues.tagFaint) == "function" then
-                        pcall(FBV.Cues.tagFaint, self, text)
-                    end
                     if type(FBV.Cues.tagChargeVanish) == "function" then
                         pcall(FBV.Cues.tagChargeVanish, self, text)
                     end
@@ -621,10 +618,18 @@ function Hooks.install(FBV, mod)
         mod.events:on("battle.battler_switched", function(ev)
             local battle = ev and ev.battle
             if battle and isFieldBattle(battle) then
-                if ev.side == "player" or (ev.battler and ev.battler.isPlayer) then
+                local side = ev.side
+                if side ~= "player" and side ~= "enemy" then
+                    if ev.battler and ev.battler.isPlayer then
+                        side = "player"
+                    elseif ev.battler then
+                        side = "enemy"
+                    end
+                end
+                if side == "player" or (ev.battler and ev.battler.isPlayer) then
                     battle._arFieldRevealPlayer = true
                 end
-                pcall(FBV.syncMons, battle, mod)
+                pcall(FBV.syncMons, battle, mod, side)
             end
         end)
 
@@ -735,13 +740,19 @@ function Hooks.install(FBV, mod)
                 return
             end
             local side = ev.battler.isPlayer and "player" or "enemy"
-            local skip = false
-            if type(FBV.shouldSkipEventReact) == "function" then
-                local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "faint")
-                skip = okS and s
-            end
-            if not skip then
-                pcall(FBV.react, battle, side, "faint")
+            -- Dialogue-timed event: only a fallback if the bar is already empty
+            -- and watchHpFaint has not played the exit yet.
+            if type(FBV.onFainted) == "function" then
+                pcall(FBV.onFainted, battle, side)
+            else
+                local skip = false
+                if type(FBV.shouldSkipEventReact) == "function" then
+                    local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "faint")
+                    skip = okS and s
+                end
+                if not skip then
+                    pcall(FBV.react, battle, side, "faint")
+                end
             end
         end)
 

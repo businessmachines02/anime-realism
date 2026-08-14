@@ -916,7 +916,7 @@ function tests.cues_and_dedupe()
   eq(enemy.lastAnim, "faint", "faint plays collapse")
   truthy(Cues.shouldSkipEvent(session, "enemy", "faint"), "dedupe faint")
 
-  -- Player faint: event + "fainted!" dialogue both apply. One recall laser.
+  -- Player faint: HP-zero apply plays the laser; dialogue must not.
   Projectiles.clear(session)
   grid.home.playerTrainer = { u = pHome.u - 1, v = pHome.v }
   player.px, player.py = 16, 32
@@ -945,12 +945,90 @@ function tests.cues_and_dedupe()
     "faint stays skipped while the mon is exiting")
   truthy(Cues.apply(session, "player", "faint", Grid, nil, nil),
     "second faint cue is idempotent")
-  eq(countStyle("recall"), 1, "faint text does not fire a second recall laser")
+  eq(countStyle("recall"), 1, "repeat faint apply does not fire a second laser")
+
+  -- Dialogue pump on a replacement mon (HP already 0 on the previous one).
+  Projectiles.clear(session)
+  player._fainting = nil
+  player._faintDone = nil
+  player._recallDone = nil
+  player.anim = "idle"
+  player.lastAnim = nil
   local battle = {
     current = { arFieldCue = { side = "player", kind = "faint" } },
   }
-  Cues.pumpCurrent(session, battle, Grid, nil)
-  eq(countStyle("recall"), 1, "pumped faint dialogue does not replay the laser")
+  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
+    "faint dialogue cue is ignored")
+  eq(countStyle("recall"), 0, "faint dialogue does not fire the recall laser")
+  eq(player.lastAnim, nil, "faint dialogue does not start the exit anim")
+end
+
+function tests.faint_follows_hp_bar_not_dialogue()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  grid.home.playerTrainer = { u = pHome.u - 1, v = pHome.v }
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    px = 16, py = 32,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  local battle = {
+    kind = "wild",
+    player = { isPlayer = true, shownHP = 20, mon = { hp = 20, species = "PIKACHU" } },
+    enemy = { shownHP = 18, mon = { hp = 18, species = "RATTATA" } },
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = { id = "enemy" },
+    _now = 30,
+    _battle = battle,
+    _deps = { Cues = Cues, Grid = Grid, Projectiles = Projectiles },
+  }
+  session._deps.Cues = Cues
+  Lifecycle._testBind(battle, session)
+
+  local function countStyle(style)
+    local n = 0
+    for i = 1, #(session.projectiles or {}) do
+      if session.projectiles[i].style == style then
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  Lifecycle.watchHpFaint(battle)
+  Lifecycle.onFainted(battle, "player")
+  eq(countStyle("recall"), 0, "faint event is ignored while the bar is draining")
+  eq(player.lastAnim, nil, "no recall anim while shownHP > 0")
+
+  battle.player.shownHP = 0
+  battle.player.mon.hp = 0
+  Lifecycle.watchHpFaint(battle)
+  eq(player.lastAnim, "recall", "recall starts when the HP bar hits 0")
+  eq(countStyle("recall"), 1, "one recall laser when the bar empties")
+
+  Lifecycle.onFainted(battle, "player")
+  eq(countStyle("recall"), 1, "battle.fainted after the bar does not replay the laser")
+
+  Projectiles.clear(session)
+  player._fainting = nil
+  player._faintDone = nil
+  player._recallDone = nil
+  player.lastAnim = nil
+  session._barHP = nil
+  battle.player.shownHP = 12
+  Lifecycle.watchHpFaint(battle)
+  battle.current = { text = "PIKACHU\nfainted!", arFieldCue = { side = "player", kind = "faint" } }
+  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
+    "fainted dialogue does not apply the exit")
+  eq(countStyle("recall"), 0, "dialogue pump does not fire the laser")
+  eq(player.lastAnim, nil, "dialogue does not start recall")
+
+  Lifecycle._testUnbind(battle)
 end
 
 function tests.self_damage_tags_field_cue()
@@ -1472,18 +1550,23 @@ function tests.switch_and_capture_choreography()
   eq(old.anim, "recall", "old battler recalls before switch")
   truthy(session.pendingSwitch and session.pendingSwitch.player,
     "replacement waits for recall")
+  eq(session.enemyMon.anim, "sendout", "foe is not recalled on a player switch")
+  eq(session.pendingSwitch.enemy, nil, "player switch does not queue a foe send-out")
   Lifecycle.tick(battle, 0.55, deps)
   eq(session.playerMon.species, "SECOND_MON", "replacement species staged")
   truthy(session.playerMon._sendoutStarted, "replacement uses send-out animation")
   truthy(old._arFieldDetached or old._recallDone,
     "recalled mon left the live entity list")
+  eq(session.enemyMon.species, "WILD_MON", "foe species unchanged after player switch")
+  truthy(session.enemyMon.anim ~= "recall", "foe stays off the recall path")
 
   Projectiles.clear(session)
   local fainted = session.playerMon
   fainted._fainting = true
   fainted.anim = "recall"
+  local foeAnim = session.enemyMon.anim
   battle.player = { mon = { species = "THIRD_MON" } }
-  Lifecycle.syncMons(battle, nil, deps)
+  Lifecycle.syncMons(battle, nil, deps, "player")
   local beams = 0
   for i = 1, #(session.projectiles or {}) do
     if session.projectiles[i].style == "recall" then
@@ -1492,6 +1575,14 @@ function tests.switch_and_capture_choreography()
   end
   eq(beams, 0, "switch after faint does not fire a second recall laser")
   eq(fainted.anim, "recall", "already-recalling anim is not restarted")
+  eq(session.enemyMon.anim, foeAnim, "player faint/send-out does not animate the foe")
+  eq(session.pendingSwitch.enemy, nil, "player faint does not queue a foe recall")
+
+  local savedEnemyMon = battle.enemy.mon
+  battle.enemy.mon = nil
+  Lifecycle.syncMons(battle, nil, deps)
+  eq(session.enemyMon.anim, foeAnim, "missing foe species does not recall the live foe")
+  battle.enemy.mon = savedEnemyMon
 
   truthy(Lifecycle.capture(battle, { caught = true, shakes = 1 }),
     "capture choreography starts")
