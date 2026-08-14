@@ -26,7 +26,8 @@ Pixels are presentation only; **pad cells are truth**.
    and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
    PSN / SLP / confusion auras tint field sprites. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
-   sink, and puff before despawn. Move / hit SFX play from field cues
+   sink, and puff before despawn. Switch recalls (and trainer-side faints) fire a
+   red thunder-laser into the ball. Move / hit SFX play from field cues
    (`audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
    the session so nothing doubles. Engine anim rows still advance for timing.
 7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind).
@@ -172,7 +173,7 @@ anim/lerp use the present clock.
 ```lua
 item.arFieldCue = {
   side = "player"|"enemy",
-  kind = "dodge"|"cover"|"brace"|"attack"|"status"|"hit"|"selfhit"|"faint",
+  kind = "dodge"|"cover"|"brace"|"attack"|"status"|"hit"|"selfhit"|"faint"|"recall",
   category = "physical"|"special"|nil,  -- for attack / hit
   moveType = string|nil,
   moveId = string|nil,
@@ -191,7 +192,8 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
 | status | stay | `cast` + world-space orbit |
 | hit | knockback chance (phys > special) | `hit` |
 | selfhit | stay | `selfhit` + bonk burst (confusion / recoil / crash) |
-| faint | stay | stagger, sink/shrink + dust puff, then despawn |
+| faint | stay | dust puff; trainer-owned → red recall laser + shrink; wild → sink |
+| recall | stay | red thunder-laser from trainer + shrink |
 
 ## Grid rules
 

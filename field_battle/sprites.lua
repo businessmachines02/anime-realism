@@ -753,13 +753,22 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "recall" then
+      -- Shrink into the trainer's red recall laser.
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.32)
-      self.drawScale = math.max(0.05, 1 - t)
-      oy = oy - t * 10
-      if self.animT >= 0.32 then
+      local dur = 0.48
+      local t = math.min(1, self.animT / dur)
+      local flash = math.sin(t * math.pi * 6) * (1 - t) * 1.5
+      self.drawScale = math.max(0.04, 1 - t * t)
+      ox = ox + flash
+      oy = oy - t * 12 - math.sin(t * math.pi) * 3
+      if self.animT >= dur then
         self._recallDone = true
         self.hidden = true
+        self.drawScale = 0.04
+        -- Faint→recall path still triggers the faint despawn.
+        if self._fainting then
+          self._faintDone = true
+        end
       end
     elseif anim == "capture" then
       self.animT = (self.animT or 0) + dt

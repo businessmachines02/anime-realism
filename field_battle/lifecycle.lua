@@ -814,8 +814,12 @@ function Lifecycle.syncMons(battle, mod, deps)
         session.pendingSwitch[side] = {
             battler = battler,
             species = wanted,
-            delay = 0.34,
+            delay = 0.50,
         }
+        local Projectiles = deps.Projectiles
+        if Projectiles and type(Projectiles.recallBeam) == "function" then
+            pcall(Projectiles.recallBeam, session, side)
+        end
         if type(current.play) == "function" then
             current:play("recall")
         end

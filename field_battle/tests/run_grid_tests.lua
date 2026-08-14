@@ -654,6 +654,24 @@ function tests.world_space_projectiles()
     "self-hit paints a bonk burst on the user")
   eq(Projectiles.faint(session, "enemy").style, "puff",
     "faint paints a dust puff on the fallen mon")
+  local home = {
+    playerTrainer = { u = grid.home.player.u - 1, v = grid.home.player.v },
+    enemyTrainer = { u = grid.home.enemy.u + 1, v = grid.home.enemy.v },
+  }
+  session.grid.home = home
+  session.foe = { px = 90, py = 32 }
+  session._battle = { kind = "trainer", game = { overworld = overworld } }
+  player.px, player.py = 16, 32
+  enemy.px, enemy.py = 80, 32
+  local beam = Projectiles.recallBeam(session, "player")
+  truthy(beam and beam.style == "recall", "player recall fires red laser")
+  truthy(beam.pinTip, "recall tip stays on the mon")
+  eq(Projectiles.recallBeam(session, "enemy").style, "recall",
+    "trainer foe recall fires red laser")
+  session.foe = nil
+  session._battle = { kind = "wild", game = { overworld = overworld } }
+  eq(Projectiles.recallBeam(session, "enemy"), nil,
+    "wild foe has no trainer recall laser")
   Projectiles.clear(session)
 
   local flamethrower = Projectiles.move(session, "player", {
@@ -847,7 +865,7 @@ function tests.switch_and_capture_choreography()
   eq(old.anim, "recall", "old battler recalls before switch")
   truthy(session.pendingSwitch and session.pendingSwitch.player,
     "replacement waits for recall")
-  Lifecycle.tick(battle, 0.40, deps)
+  Lifecycle.tick(battle, 0.55, deps)
   eq(session.playerMon.species, "SECOND_MON", "replacement species staged")
   truthy(session.playerMon._sendoutStarted, "replacement uses send-out animation")
 

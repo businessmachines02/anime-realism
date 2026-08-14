@@ -580,6 +580,60 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.25 * fade)
       g.circle("fill", px - 0.4, py - 0.6, 0.7)
     end
+  elseif p.style == "recall" then
+    -- Anime red recall laser: irregular thunder forks trainer → mon.
+    local fade = 1 - t * 0.25
+    local flash = 0.55 + 0.45 * math.abs(math.sin((p.age or 0) * 30))
+    local dx, dy = x - ox, y - oy
+    local len = math.sqrt(dx * dx + dy * dy)
+    local nx, ny = 0, 1
+    if len > 0.1 then
+      nx, ny = -dy / len, dx / len
+    end
+    local segs = 8
+    local pts = { { ox, oy } }
+    for i = 1, segs - 1 do
+      local u = i / segs
+      local jitter = math.sin((p.age or 0) * 52 + i * 2.9) * 5.5
+          + math.sin((p.age or 0) * 21 + i * 5.3) * 3.2
+          + math.cos((p.age or 0) * 73 + i * 1.7) * 1.8
+      -- Stronger mid-bolt thrash; ends stay closer to the true line.
+      local amp = math.sin(u * math.pi)
+      pts[#pts + 1] = {
+        ox + dx * u + nx * jitter * amp,
+        oy + dy * u + ny * jitter * amp,
+      }
+    end
+    pts[#pts + 1] = { x, y }
+    local function stroke(width, r, gr, b, a)
+      g.setColor(r, gr, b, a)
+      g.setLineWidth(width)
+      for i = 1, #pts - 1 do
+        g.line(pts[i][1], pts[i][2], pts[i + 1][1], pts[i + 1][2])
+      end
+    end
+    stroke(6, 1.00, 0.12, 0.10, 0.28 * fade * flash)
+    stroke(3.2, 1.00, 0.28, 0.18, 0.75 * fade)
+    stroke(1.4, 1.00, 0.85, 0.75, 0.95 * fade * flash)
+    -- Side forks (thunder branches).
+    for i = 2, #pts - 1, 2 do
+      local px, py = pts[i][1], pts[i][2]
+      local fork = 4 + (i % 3)
+      local side = (i % 4 < 2) and 1 or -1
+      local fx = px + nx * fork * side + math.sin((p.age or 0) * 40 + i) * 1.5
+      local fy = py + ny * fork * side + math.cos((p.age or 0) * 37 + i) * 1.5
+      g.setColor(1.00, 0.35, 0.22, 0.55 * fade * flash)
+      g.setLineWidth(1.5)
+      g.line(px, py, fx, fy)
+      g.setColor(1, 0.92, 0.85, 0.7 * fade * flash)
+      g.setLineWidth(1)
+      g.line(px, py, fx, fy)
+    end
+    -- Impact bloom on the mon.
+    g.setColor(1.00, 0.45, 0.30, 0.45 * fade * flash)
+    g.circle("fill", x, y, 3 + flash * 2)
+    g.setColor(1, 1, 1, 0.8 * fade * flash)
+    g.circle("fill", x, y, 1.6)
   end
 end
 
@@ -697,6 +751,8 @@ local function spawn(session, spec)
     glitz = spec.glitz,
     radius = spec.radius,
     onDone = spec.onDone,
+    pinTip = spec.pinTip,
+    followSide = spec.followSide,
   }
   local dx, dy = p.ex - p.sx, p.ey - p.sy
   local len = math.sqrt(dx * dx + dy * dy)
@@ -1012,6 +1068,61 @@ function Projectiles.faint(session, side)
   })
 end
 
+local function trainerOrigin(session, side)
+  local home = session and session.grid and session.grid.home
+  local slot = home and ((side == "player") and home.playerTrainer or home.enemyTrainer)
+  if slot then
+    local sx, sy = Coords.padCenterPx(session.grid, slot.u, slot.v)
+    return sx, sy - 7
+  end
+  if side == "player" then
+    return center(session, session.playerMon)
+  end
+  -- Trainer battles keep session.foe parked on the enemy edge.
+  local foe = session and session.foe
+  if foe and type(foe.px) == "number" then
+    return foe.px + 8, foe.py
+  end
+  if foe and foe.cellX ~= nil then
+    return foe.cellX * 16 + 8, foe.cellY * 16
+  end
+  return nil, nil
+end
+
+--- Red thunder-laser from the trainer into the mon (switch recall / faint recall).
+-- Returns nil when there is no trainer origin (e.g. wild foe).
+function Projectiles.recallBeam(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local ex, ey = center(session, target)
+  if not (session and ex) then
+    return nil
+  end
+  -- Wild foes have no trainer to fire the laser; keep the ground faint.
+  if side == "enemy" then
+    local battle = session._battle
+    local kind = battle and tostring(battle.kind or ""):lower() or ""
+    if not session.foe and kind ~= "trainer" then
+      return nil
+    end
+  end
+  local sx, sy = trainerOrigin(session, side)
+  if not sx then
+    return nil
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "recall",
+    sx = sx, sy = sy,
+    ex = ex, ey = ey,
+    duration = opts.duration or 0.48,
+    arc = 0,
+    color = { 1.00, 0.28, 0.18 },
+    pinTip = true,
+    followSide = side,
+  })
+end
+
 function Projectiles.ball(session, opts)
   opts = opts or {}
   local target = session and session.enemyMon
@@ -1048,8 +1159,21 @@ function Projectiles.tick(session, dt)
     local p = list[i]
     p.age = (p.age or 0) + (dt or 0)
     local t = math.min(1, p.age / math.max(0.01, p.duration))
-    p.px = p.sx + (p.ex - p.sx) * t
-    p.py = p.sy + (p.ey - p.sy) * t - math.sin(t * math.pi) * (p.arc or 0)
+    if p.pinTip then
+      -- Recall laser: tip locked on the mon; origin stays at the trainer.
+      if p.followSide then
+        local ent = (p.followSide == "player") and session.playerMon or session.enemyMon
+        local cx, cy = center(session, ent)
+        if cx then
+          p.ex, p.ey = cx, cy
+        end
+      end
+      p.px = p.ex
+      p.py = p.ey
+    else
+      p.px = p.sx + (p.ex - p.sx) * t
+      p.py = p.sy + (p.ey - p.sy) * t - math.sin(t * math.pi) * (p.arc or 0)
+    end
     if t >= 1 and p.kind == "ball" and p.hold > 0 then
       local holdAge = p.age - p.duration
       p.px = p.ex + math.sin(holdAge * 34) * math.max(0, 2 - holdAge * 3)

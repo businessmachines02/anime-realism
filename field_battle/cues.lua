@@ -222,8 +222,29 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     if Projectiles and type(Projectiles.faint) == "function" then
       Projectiles.faint(session, side)
     end
+    -- Trainer-owned mons get the red recall laser; wild foes keep the sink.
+    local beamed = false
+    if Projectiles and type(Projectiles.recallBeam) == "function" then
+      beamed = Projectiles.recallBeam(session, side) ~= nil
+    end
     if type(ent.play) == "function" and not ent._fainting then
-      ent:play("faint")
+      if beamed then
+        ent._fainting = true
+        ent:play("recall")
+      else
+        ent:play("faint")
+      end
+    end
+    return true
+  end
+
+  if kind == "recall" then
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.recallBeam) == "function" then
+      Projectiles.recallBeam(session, side)
+    end
+    if type(ent.play) == "function" then
+      ent:play("recall")
     end
     return true
   end
