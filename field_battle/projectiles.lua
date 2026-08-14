@@ -79,6 +79,12 @@ local MOVE_FX = {
   RAZOR_LEAF = { style = "multi", glitz = "leaf", duration = 0.36 },
   PETAL_DANCE = { style = "multi", glitz = "leaf", duration = 0.44 },
   VINE_WHIP = { style = "stream", glitz = "leaf" },
+  LEECH_SEED = {
+    style = "seed",
+    glitz = "leaf",
+    duration = 0.58,
+    color = { 0.28, 0.72, 0.24 },
+  },
   SLUDGE = { style = "orb", glitz = "blob", arc = 9 },
   SLUDGE_BOMB = { style = "orb", glitz = "blob", arc = 12 },
   ACID = { style = "stream", glitz = "blob" },
@@ -170,6 +176,24 @@ local STATUS_AURA = {
   TOX = { color = { 0.55, 0.16, 0.70 }, kind = "bubbles" },
   SLP = { color = { 0.72, 0.78, 0.96 }, kind = "zs" },
   CNF = { color = { 0.95, 0.78, 0.22 }, kind = "swirl" },
+  LEECH = { color = { 0.28, 0.72, 0.24 }, kind = "seed" },
+}
+
+-- Status moves that paint on the foe (not the user).
+local FOE_STATUS_MOVES = {
+  LEECH_SEED = true,
+  TOXIC = true,
+  SLEEP_POWDER = true,
+  STUN_SPORE = true,
+  POISONPOWDER = true,
+  HYPNOSIS = true,
+  CONFUSE_RAY = true,
+  THUNDER_WAVE = true,
+  GLARE = true,
+  SPORE = true,
+  LOVELY_KISS = true,
+  SING = true,
+  SUPERSONIC = true,
 }
 
 local function center(session, ent)
@@ -471,6 +495,89 @@ local function drawPsyAura(g, x, y, ox, oy, t, age, c, opts)
       local r = 4 + i * 2
       g.setColor(1, 0.92, 1, 0.55 * fade)
       g.circle("fill", x + math.cos(a) * r, y - 6 + math.sin(a * 1.4) * 2, 0.9)
+    end
+  end
+end
+
+--- Leech Seed plant burst + traveling seed (attack) and pulsing sprouts (aura).
+local function drawSeedSprouts(g, x, y, phase, c, opts)
+  opts = opts or {}
+  local planted = opts.planted == true
+  local fade = opts.fade or 1
+  local pulse = 0.55 + 0.45 * math.abs(math.sin((phase or 0) * 3.4))
+  local baseY = y + (planted and 5 or 2)
+  -- Soft green ground bloom.
+  g.setColor(c[1], c[2], c[3], (planted and 0.22 or 0.14) * fade * pulse)
+  g.ellipse("fill", x, baseY, planted and (9 + pulse * 3) or 6, planted and 3.5 or 2.2)
+  -- Tiny grass blades.
+  for i = 1, (planted and 4 or 2) do
+    local bx = x + (i - (planted and 2.5 or 1.5)) * (planted and 3.2 or 2.8)
+    local sway = math.sin((phase or 0) * 5.5 + i * 1.3) * (planted and 1.2 or 0.6)
+    local h = (planted and (4 + pulse * 3) or 2.5)
+        + math.sin((phase or 0) * 4 + i * 2) * (planted and 1.4 or 0.5)
+    g.setColor(0.18, 0.48, 0.14, 0.85 * fade)
+    g.rectangle("fill", bx + sway * 0.3, baseY - h, 1.4, h)
+    g.setColor(c[1], c[2], c[3], 0.75 * fade)
+    g.rectangle("fill", bx + sway * 0.3 + 0.2, baseY - h + 0.8, 0.9, h - 1.2)
+    if planted and g.line then
+      g.setColor(0.12, 0.32, 0.08, 0.55 * fade)
+      g.setLineWidth(1)
+      g.line(bx, baseY, bx + sway, baseY - h)
+    end
+  end
+  if planted then
+    -- Embedded seed nub.
+    g.setColor(0.42, 0.28, 0.10, 0.9 * fade)
+    g.ellipse("fill", x, baseY - 0.5, 2.2, 1.4)
+    g.setColor(0.55, 0.38, 0.14, 0.7 * fade)
+    g.ellipse("line", x, baseY - 0.5, 2.4, 1.6)
+  end
+end
+
+local function drawSeedPlant(g, x, y, ox, oy, t, age, c)
+  local travelT = math.min(1, t / 0.52)
+  local plantT = math.max(0, (t - 0.48) / 0.52)
+  local tipX = ox + (x - ox) * travelT
+  local tipY = oy + (y - oy) * travelT - math.sin(travelT * math.pi) * 10
+  -- Leaf trail behind the seed.
+  if travelT < 0.98 then
+    for i = 1, 4 do
+      local u = travelT - i * 0.08
+      if u > 0 then
+        local px = ox + (x - ox) * u
+        local py = oy + (y - oy) * u - math.sin(u * math.pi) * 8
+            + math.sin((age or 0) * 12 + i) * 1.2
+        local rot = (age or 0) * 3 + i
+        g.setColor(c[1], c[2], c[3], 0.45 - i * 0.08)
+        g.setLineWidth(1.2)
+        g.line(px - 2, py, px + 2, py + math.sin(rot) * 0.8)
+        g.line(px, py - 1.5, px + math.cos(rot) * 1.5, py + 1)
+      end
+    end
+    -- Flying seed body.
+    g.setColor(0.38, 0.24, 0.08, 0.95)
+    g.ellipse("fill", tipX, tipY, 3.2, 2.2)
+    g.setColor(c[1], c[2], c[3], 0.85)
+    g.ellipse("fill", tipX - 0.4, tipY - 0.6, 2.4, 1.5)
+    g.setColor(0.22, 0.52, 0.16, 0.8)
+    g.line(tipX - 2.5, tipY - 0.5, tipX + 1, tipY - 2.2)
+    g.line(tipX + 2.2, tipY - 0.3, tipX + 0.5, tipY - 2)
+  end
+  -- Planting burst as the seed lands.
+  if plantT > 0 then
+    local fade = 1 - plantT * 0.35
+    drawSeedSprouts(g, x, y, (age or 0) + plantT * 2, c, {
+      planted = true,
+      fade = fade,
+    })
+    for i = 1, 5 do
+      local a = (age or 0) * 4 + i * 1.25
+      local dist = plantT * (5 + i * 1.8)
+      g.setColor(c[1], c[2], c[3], (0.65 - plantT * 0.4) * fade)
+      g.circle("fill",
+        x + math.cos(a) * dist,
+        y + 3 + math.sin(a) * dist * 0.5,
+        1.2 + (1 - plantT) * 0.8)
     end
   end
 end
@@ -833,6 +940,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       crush = (glitz ~= "confuse"),
       confuse = (glitz == "confuse"),
     })
+  elseif p.style == "seed" then
+    drawSeedPlant(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "stream" then
     -- Dense particle stream from caster origin → traveling tip.
     local age = p.age or 0
@@ -1164,6 +1273,8 @@ local function drawStatusAura(g, x, y, status, phase)
       g.setColor(1, 0.95, 0.55, flash * 0.7)
       g.circle("fill", px, py, 0.8)
     end
+  elseif aura.kind == "seed" then
+    drawSeedSprouts(g, x, y, phase, c, { planted = true, fade = 1 })
   end
 end
 
@@ -1277,8 +1388,9 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
     if confused and confused <= 0 then
       confused = nil
     end
+    local leech = item.battler and item.battler.leechSeeded
     if ent and not ent.hidden and not ent._removed and not ent._fainting
-        and ((status and STATUS_AURA[status]) or confused) then
+        and ((status and STATUS_AURA[status]) or confused or leech) then
       local wx, wy = center(session, ent)
       if wx then
         local x = wx - camX
@@ -1291,6 +1403,9 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
         end
         if confused then
           drawStatusAura(g, x, y, "CNF", phase)
+        end
+        if leech then
+          drawStatusAura(g, x, y, "LEECH", phase)
         end
       end
     end
@@ -1503,20 +1618,44 @@ end
 
 function Projectiles.status(session, side, opts)
   opts = opts or {}
-  local target = opts.target == "foe"
-    and ((side == "player") and session.enemyMon or session.playerMon)
-    or ((side == "player") and session.playerMon or session.enemyMon)
-  local x, y = center(session, target)
-  if not x then return nil end
   local fx = resolveFx(opts)
+  local moveId = fx.moveId
+  local foeTarget = FOE_STATUS_MOVES[moveId] == true
+  local targetEnt = foeTarget
+      and ((side == "player") and session.enemyMon or session.playerMon)
+      or ((side == "player") and session.playerMon or session.enemyMon)
+  local fromEnt = (side == "player") and session.playerMon or session.enemyMon
+  local ex, ey = center(session, targetEnt)
+  if not ex then return nil end
+
+  if fx.style == "seed" then
+    local sx, sy = center(session, fromEnt)
+    if not sx then
+      sx, sy = ex, ey
+    end
+    return spawn(session, {
+      kind = "effect",
+      style = "seed",
+      glitz = fx.glitz or "leaf",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.58,
+      arc = 8,
+      color = fx.color or TYPE_COLORS.GRASS,
+      pinTip = foeTarget and true or nil,
+      followSide = foeTarget and ((side == "player") and "enemy" or "player") or nil,
+      onDone = opts.onDone,
+    })
+  end
+
   return spawn(session, {
     kind = "effect",
     style = "status",
     glitz = fx.glitz,
-    sx = x, sy = y, ex = x, ey = y,
+    sx = ex, sy = ey, ex = ex, ey = ey,
     duration = 0.48,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType],
+    onDone = opts.onDone,
   })
 end
 

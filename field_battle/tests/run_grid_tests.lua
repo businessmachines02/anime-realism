@@ -1138,6 +1138,13 @@ function tests.world_space_projectiles()
   })
   eq(confusion.style, "aura", "confusion uses enveloping aura")
   eq(confusion.glitz, "confuse", "confusion uses dizzy aura glitz")
+  local leechSeed = Projectiles.status(session, "player", {
+    moveType = "GRASS", moveId = "LEECH_SEED",
+  })
+  eq(leechSeed.style, "seed", "leech seed uses planting animation")
+  eq(leechSeed.glitz, "leaf", "leech seed uses leaf glitz")
+  truthy(leechSeed.sx < leechSeed.ex, "leech seed travels toward the foe")
+  truthy(leechSeed.pinTip, "leech seed plants on the target")
   truthy(Projectiles.isTravelFx({
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   }), "psychic is a travel FX")
@@ -1507,15 +1514,24 @@ function tests.parks_overworld_follower_during_field()
 end
 
 function tests.status_auras_follow_field_mons()
-  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0 }
+  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0, seed = 0 }
   local prevLove = love
   love = {
     graphics = {
       setColor = function() end,
       setLineWidth = function() end,
       line = function() calls.sparks = calls.sparks + 1 end,
-      rectangle = function() calls.zs = calls.zs + 1 end,
+      rectangle = function() calls.zs = calls.zs + 1; calls.seed = calls.seed + 1 end,
       arc = function() calls.swirl = calls.swirl + 1 end,
+      ellipse = function(mode)
+        if mode == "fill" then
+          calls.ice = calls.ice + 1
+          calls.seed = calls.seed + 1
+        else
+          calls.bubbles = calls.bubbles + 1
+          calls.seed = calls.seed + 1
+        end
+      end,
       circle = function(mode)
         if mode == "fill" then
           calls.ice = calls.ice + 1
@@ -1554,11 +1570,21 @@ function tests.status_auras_follow_field_mons()
   truthy(calls.zs > 0, "sleep paints rising Zs")
   truthy(calls.swirl > 0, "confusion paints circling birds")
 
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed =
+      0, 0, 0, 0, 0, 0
   battle.player.mon.status = nil
   battle.enemy.confusedTurns = nil
-  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl = 0, 0, 0, 0, 0
+  battle.enemy.leechSeeded = true
   Projectiles.drawStatusAuras(session, battle, 0, 0)
-  eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl, 0,
+  truthy(calls.seed > 0, "leech seed paints pulsing grass on the seeded mon")
+
+  battle.player.mon.status = nil
+  battle.enemy.confusedTurns = nil
+  battle.enemy.leechSeeded = nil
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed =
+      0, 0, 0, 0, 0, 0
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl + calls.seed, 0,
     "healthy mons have no status aura")
   love = prevLove
 end
