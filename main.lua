@@ -8613,6 +8613,14 @@ return function(mod)
 
         mod.hooks:wrap("battle.bottom_ui_visible", function(next, who)
             if hud.fieldCompactActive(who) then
+                -- Keep the classic dialogue slab hidden on FIELD, but allow
+                -- stacked learn-move / YES-NO TextBoxes to paint (UIVisibility
+                -- asks the enclosing battle before drawing those overlays).
+                local Compat = FieldBattleViewer and FieldBattleViewer.Compat
+                if Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
+                    and Compat.fieldAllowsStackedBottomUI(who) then
+                    return true
+                end
                 return false
             end
             -- Hide the classic text box for all battle dialogue; bubbles carry it.

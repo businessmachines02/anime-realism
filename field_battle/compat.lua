@@ -146,4 +146,23 @@ function Compat.isFieldBattle(battle, FBV, mod)
     and FBV.shouldUse(mod, battle)
 end
 
+--- FIELD hides the classic bottom dialogue slab, but stacked translucent
+--- prompts (MoveLearnMenu TextBox / YES-NO ChoiceBox, nickname boxes, …)
+--- still need to paint. Opaque menus (Party/Bag) already own the screen.
+function Compat.fieldAllowsStackedBottomUI(battle)
+  if not battle then
+    return false
+  end
+  local stack = battle.game and battle.game.stack
+  local top = stack and type(stack.top) == "function" and stack:top() or nil
+  if not top or top == battle then
+    return false
+  end
+  -- Opaque full-screen menus draw themselves; don't unhide battle chrome.
+  if top.isOpaque == true then
+    return false
+  end
+  return true
+end
+
 return Compat

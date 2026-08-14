@@ -446,6 +446,11 @@ function Hooks.install(FBV, mod)
         end)
         mod.hooks:wrap("battle.bottom_ui_visible", function(next, battle)
             if battle and isFieldBattle(battle) then
+                local Compat = FBV and FBV.Compat
+                if Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
+                    and Compat.fieldAllowsStackedBottomUI(battle) then
+                    return true
+                end
                 return false
             end
             return next(battle)

@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.19)
+# FIELD combat SPEC (v4.5.21)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -40,6 +40,15 @@ Pixels are presentation only; **pad cells are truth**.
     Chebyshev radius of the fight mid soft-walk to a free watching tile, face
     the duel, and may emit uncommon floating shoutouts. Engaged player/foe
     trainers and followers are never recruited. Teardown is temporary.
+    Engaged trainers also keep facing each other (or the duel mid in wilds).
+12. **Wildlife scatter** (`wildlife.lua`): roaming overworld Pokémon
+    (`overworldWildSpawn`) within ~7 tiles soft-walk outward away from the
+    fight. Followers, ambient town décor, and FIELD cast are skipped. Poses
+    restore on finish.
+13. **Stacked prompts stay visible:** FIELD hides the classic bottom dialogue
+    slab, but translucent stack overlays (`TextBox` / `ChoiceBox` for
+    learn-move / YES-NO, etc.) must still paint via
+    `Compat.fieldAllowsStackedBottomUI`. Opaque menus (Party/Bag) do not.
 
 ## Coordinate model
 

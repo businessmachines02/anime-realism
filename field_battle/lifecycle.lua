@@ -704,6 +704,9 @@ function Lifecycle.begin(battle, mod, deps)
     if deps.Spectators and type(deps.Spectators.begin) == "function" then
         pcall(deps.Spectators.begin, session, battle, deps)
     end
+    if deps.Wildlife and type(deps.Wildlife.begin) == "function" then
+        pcall(deps.Wildlife.begin, session, battle, deps)
+    end
 
     -- now put the variable pieces on the board (trainer, mon, etc)
     Cast.stageEnemy(session, battle, mod, Sprites, Grid)
@@ -1320,6 +1323,9 @@ function Lifecycle.tick(battle, dt, deps)
     if deps.Spectators and type(deps.Spectators.tick) == "function" then
         pcall(deps.Spectators.tick, session, dt, deps)
     end
+    if deps.Wildlife and type(deps.Wildlife.tick) == "function" then
+        pcall(deps.Wildlife.tick, session, dt, deps)
+    end
 
     local moving = (p and p.targetPx and (
             math.abs((p.basePx or 0) - p.targetPx) > 1
@@ -1433,6 +1439,9 @@ function Lifecycle.finish(battle, deps)
 
     if deps and deps.Spectators and type(deps.Spectators.finish) == "function" then
         pcall(deps.Spectators.finish, session, deps)
+    end
+    if deps and deps.Wildlife and type(deps.Wildlife.finish) == "function" then
+        pcall(deps.Wildlife.finish, session, deps)
     end
 
     if Grid and session.grid then

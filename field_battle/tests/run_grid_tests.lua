@@ -32,10 +32,38 @@ local Compat = load("compat.lua")
 local Sprites = load("sprites.lua")
 local Cast = load("cast.lua")
 local Spectators = load("spectators.lua")
+local Wildlife = load("wildlife.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
 
 local tests = {}
+
+function tests.field_allows_learn_move_textbox()
+  local battle = {
+    _arAnimeField = true,
+    game = {
+      stack = {
+        states = {},
+        top = function(self)
+          return self.states[#self.states]
+        end,
+      },
+    },
+  }
+  battle.game.stack.states = { battle }
+  truthy(not Compat.fieldAllowsStackedBottomUI(battle),
+    "no stacked prompt while battle is top")
+
+  local textBox = { boxTx = 0, boxTy = 12, shown = {} } -- translucent TextBox
+  battle.game.stack.states = { battle, textBox }
+  truthy(Compat.fieldAllowsStackedBottomUI(battle),
+    "learn-move TextBox may paint over FIELD")
+
+  local party = { isOpaque = true, screenId = "PartyMenu" }
+  battle.game.stack.states = { battle, party }
+  truthy(not Compat.fieldAllowsStackedBottomUI(battle),
+    "opaque party menu does not unhide battle chrome")
+end
 
 function tests.supported_battle_gate()
   local mod = {
@@ -523,6 +551,113 @@ function tests.engaged_trainers_face_each_other()
   eq(player.facing, plan.playerFace, "player trainer faces foe trainer")
   eq(foe.facing, plan.foeFace, "foe trainer faces player trainer")
   Lifecycle._testUnbind(battle)
+end
+
+local function chebyshevDist(ax, ay, bx, by)
+  return math.max(math.abs((ax or 0) - (bx or 0)), math.abs((ay or 0) - (by or 0)))
+end
+
+function tests.overworld_wildlife_scatters_and_restores()
+  local grid, plan = sampleGrid()
+  plan.midX, plan.midY = 12, 10
+  local player = {
+    cellX = 10, cellY = 10, px = 160, py = 160, facing = "right",
+  }
+  local wildNear = {
+    id = "wild_rattata",
+    overworldWildSpawn = true,
+    _owwildEntity = true,
+    species = "RATTATA",
+    cellX = 12, cellY = 11, px = 192, py = 176,
+    facing = "down", frozen = false, wanders = true,
+    behaviorState = "AVAILABLE",
+    state = "AVAILABLE",
+  }
+  local wildFar = {
+    id = "wild_far",
+    overworldWildSpawn = true,
+    _owwildEntity = true,
+    cellX = 28, cellY = 28, px = 448, py = 448,
+    state = "AVAILABLE",
+  }
+  local ambient = {
+    id = "town_mon",
+    wildsAmbientPokemon = true,
+    overworldWildSpawn = false,
+    cellX = 12, cellY = 12, px = 192, py = 192,
+  }
+  local follower = {
+    id = "follower",
+    isFollower = true,
+    cellX = 11, cellY = 10, px = 176, py = 160,
+  }
+  local map = {
+    inBounds = function(_, x, y)
+      return x >= 0 and y >= 0 and x < 40 and y < 40
+    end,
+    isWalkableCell = function() return true end,
+    isWaterCell = function() return false end,
+  }
+  local ow = {
+    player = player,
+    map = map,
+    entities = { player, wildNear, wildFar, ambient, follower },
+  }
+  local session = {
+    midX = 12,
+    midY = 10,
+    plan = plan,
+    grid = grid,
+    _deps = {
+      Layout = Layout,
+      Survey = Survey,
+      Grid = Grid,
+      Coords = Coords,
+      Lifecycle = Lifecycle,
+    },
+  }
+  local battle = { game = { overworld = ow }, kind = "wild" }
+
+  truthy(Wildlife.isRoaming(wildNear, player, nil, Lifecycle),
+    "roaming wild is eligible")
+  truthy(not Wildlife.isRoaming(ambient, player, nil, Lifecycle),
+    "ambient town mon skipped")
+  truthy(not Wildlife.isRoaming(follower, player, nil, Lifecycle),
+    "follower skipped")
+
+  local gathered = Wildlife.gather(ow, session)
+  eq(#gathered, 1, "only nearby wild gathered")
+  eq(gathered[1].ent, wildNear, "near wild selected")
+
+  local n = Wildlife.begin(session, battle, session._deps)
+  eq(n, 1, "one wild staged to scatter")
+  local w = session.wildlife[1]
+  truthy(w.pose, "pose snapshotted")
+  eq(w.pose.cellX, 12, "snapshot start x")
+  eq(wildNear.frozen, true, "wild frozen during FIELD")
+  truthy(wildNear._arFieldWildlife, "wildlife flag set")
+  truthy(w.spotX ~= nil, "flee spot assigned")
+  truthy(chebyshevDist(w.spotX, w.spotY, 12, 10) >= Wildlife.FLEE_MIN,
+    "flee spot is away from mid")
+
+  for _ = 1, 300 do
+    Wildlife.tick(session, 1 / 30, session._deps)
+    if w.arrived then
+      break
+    end
+  end
+  truthy(w.arrived, "wild finishes scatter walk")
+  eq(wildNear.cellX, w.spotX, "cell matches flee x")
+  eq(wildNear.cellY, w.spotY, "cell matches flee y")
+
+  Wildlife.finish(session, session._deps)
+  eq(session.wildlife, nil, "wildlife cleared")
+  eq(wildNear.cellX, 12, "pose restored x")
+  eq(wildNear.cellY, 11, "pose restored y")
+  eq(wildNear.facing, "down", "pose restored facing")
+  eq(wildNear.frozen, false, "frozen restored")
+  eq(wildNear._arFieldWildlife, nil, "flag cleared")
+  eq(wildNear.behaviorState, "AVAILABLE", "behavior restored")
 end
 
 function tests.occupancy_and_movement()

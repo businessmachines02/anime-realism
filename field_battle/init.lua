@@ -26,6 +26,7 @@
 --   layout      tight adjacent-mon formation along the fight axis
 --   coords      pad ↔ world ↔ pixel conversions
 --   spectators  nearby trainers walk in, watch, rare shoutouts
+--   wildlife    roaming OW mons scatter away from the duel
 --   compat      suppress foreign staged battles while FIELD is on
 --   debug       optional pad occupancy overlay
 --
@@ -53,6 +54,7 @@ return function(env)
   local Anims = loadFile("anims.lua")
   local Lifecycle = loadFile("lifecycle.lua")
   local Spectators = loadFile("spectators.lua")
+  local Wildlife = loadFile("wildlife.lua")
   local Compat = loadFile("compat.lua")
   local Hooks = loadFile("hooks.lua")
   local Intercept = loadFile("intercept.lua")
@@ -74,6 +76,7 @@ return function(env)
     Anims = Anims,
     Lifecycle = Lifecycle,
     Spectators = Spectators,
+    Wildlife = Wildlife,
     Compat = Compat,
     Debug = Debug,
     UI = UI,
@@ -96,6 +99,7 @@ return function(env)
     Anims = Anims,
     Lifecycle = Lifecycle,
     Spectators = Spectators,
+    Wildlife = Wildlife,
     Compat = Compat,
     Debug = Debug,
     UI = UI,
