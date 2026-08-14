@@ -31,6 +31,7 @@ local Lifecycle = load("lifecycle.lua")
 local Compat = load("compat.lua")
 local Sprites = load("sprites.lua")
 local Cast = load("cast.lua")
+local Spectators = load("spectators.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
 
@@ -356,6 +357,117 @@ end
 local function sampleGrid()
   local plan = Layout.plan(10, 10, 18, 10)
   return Grid.build(nil, plan), plan
+end
+
+function tests.nearby_trainers_spectate_and_restore()
+  local player = {
+    cellX = 10, cellY = 10, px = 160, py = 160,
+    facing = "up", frozen = false, wanders = false,
+  }
+  local foe = {
+    id = "foe", cellX = 14, cellY = 10, px = 224, py = 160,
+    facing = "left", trainer = true,
+    def = { trainerClass = "OPP_YOUNGSTER", name = "JOEY" },
+  }
+  local bystander = {
+    id = "watcher", name = "SAM",
+    cellX = 12, cellY = 12, px = 192, py = 192,
+    facing = "down", frozen = false, wanders = true,
+    trainer = true,
+    def = { trainerClass = "OPP_LASS", name = "SAM" },
+  }
+  local far = {
+    id = "far", cellX = 30, cellY = 30, px = 480, py = 480,
+    trainer = true, def = { trainerClass = "OPP_BUG_CATCHER" },
+  }
+  local map = {
+    inBounds = function(_, x, y)
+      return x >= 0 and y >= 0 and x < 40 and y < 40
+    end,
+    isWalkableCell = function(_, x, y)
+      return true
+    end,
+    isWaterCell = function() return false end,
+  }
+  local ow = {
+    player = player,
+    map = map,
+    entities = { player, foe, bystander, far },
+    npcs = {},
+    npcPool = { foe = foe, watcher = bystander, far = far },
+  }
+  local grid, plan = sampleGrid()
+  -- Align plan mid with the staged fight so radius checks match.
+  plan.midX, plan.midY = 12, 10
+  local session = {
+    midX = 12,
+    midY = 10,
+    plan = plan,
+    grid = grid,
+    foe = foe,
+    _deps = {
+      Layout = Layout,
+      Survey = Survey,
+      Grid = Grid,
+      Coords = Coords,
+      Lifecycle = Lifecycle,
+    },
+  }
+  local battle = { game = { overworld = ow }, kind = "trainer" }
+
+  local gathered = Spectators.gather(ow, session)
+  eq(#gathered, 1, "only nearby trainer gathered")
+  eq(gathered[1].ent, bystander, "bystander is the nearby trainer")
+
+  local n = Spectators.begin(session, battle, session._deps)
+  eq(n, 1, "one spectator staged")
+  eq(#session.spectators, 1, "session tracks spectator")
+  local spec = session.spectators[1]
+  truthy(spec.pose, "spectator pose snapshotted")
+  eq(spec.pose.cellX, 12, "snapshot keeps start cell")
+  eq(bystander.frozen, true, "spectator frozen for FIELD")
+  eq(bystander.wanders, false, "spectator wander disabled")
+  truthy(bystander._arFieldSpectator, "spectator flagged")
+  truthy(spec.spotX ~= nil, "watching spot assigned")
+
+  -- Drive soft steps until arrival (or timeout).
+  for _ = 1, 240 do
+    Spectators.tick(session, 1 / 30, session._deps)
+    if spec.arrived then
+      break
+    end
+  end
+  truthy(spec.arrived, "spectator walks to watching tile")
+  eq(bystander.cellX, spec.spotX, "cell matches spot x")
+  eq(bystander.cellY, spec.spotY, "cell matches spot y")
+
+  -- Face the duel mid.
+  local fx, fy = 12, 10
+  local dx = fx - bystander.cellX
+  local dy = fy - bystander.cellY
+  local expect
+  if math.abs(dx) >= math.abs(dy) then
+    expect = dx >= 0 and "right" or "left"
+  else
+    expect = dy >= 0 and "down" or "up"
+  end
+  eq(bystander.facing, expect, "spectator faces the battle")
+
+  -- Force a shoutout for coverage.
+  session._specShoutCD = 0
+  Spectators.SHOUT_CHANCE = 1
+  Spectators.tick(session, 0.05, session._deps)
+  truthy(session._specShout and session._specShout.text, "rare shoutout fired")
+  Spectators.SHOUT_CHANCE = 0.10
+
+  Spectators.finish(session, session._deps)
+  eq(session.spectators, nil, "spectators cleared")
+  eq(bystander.cellX, 12, "pose restored x")
+  eq(bystander.cellY, 12, "pose restored y")
+  eq(bystander.facing, "down", "pose restored facing")
+  eq(bystander.frozen, false, "frozen restored")
+  eq(bystander.wanders, true, "wanders restored")
+  eq(bystander._arFieldSpectator, nil, "flag cleared")
 end
 
 function tests.occupancy_and_movement()

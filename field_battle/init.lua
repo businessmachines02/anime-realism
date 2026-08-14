@@ -25,6 +25,7 @@
 --   themes      map-id → kit (cover/grass/pond colors)
 --   layout      tight adjacent-mon formation along the fight axis
 --   coords      pad ↔ world ↔ pixel conversions
+--   spectators  nearby trainers walk in, watch, rare shoutouts
 --   compat      suppress foreign staged battles while FIELD is on
 --   debug       optional pad occupancy overlay
 --
@@ -51,6 +52,7 @@ return function(env)
   local Audio = loadFile("audio.lua")
   local Anims = loadFile("anims.lua")
   local Lifecycle = loadFile("lifecycle.lua")
+  local Spectators = loadFile("spectators.lua")
   local Compat = loadFile("compat.lua")
   local Hooks = loadFile("hooks.lua")
   local Intercept = loadFile("intercept.lua")
@@ -71,6 +73,7 @@ return function(env)
     Audio = Audio,
     Anims = Anims,
     Lifecycle = Lifecycle,
+    Spectators = Spectators,
     Compat = Compat,
     Debug = Debug,
     UI = UI,
@@ -92,6 +95,7 @@ return function(env)
     Audio = Audio,
     Anims = Anims,
     Lifecycle = Lifecycle,
+    Spectators = Spectators,
     Compat = Compat,
     Debug = Debug,
     UI = UI,

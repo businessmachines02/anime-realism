@@ -338,6 +338,9 @@ function Lifecycle.drawWorldOverlay(battle)
     end
     stampAnchor(session.playerMon)
     stampAnchor(session.enemyMon)
+    if deps and deps.Spectators and type(deps.Spectators.draw) == "function" then
+        pcall(deps.Spectators.draw, session, camX, camY, ren)
+    end
 end
 
 function Lifecycle.get(battle)
@@ -694,6 +697,12 @@ function Lifecycle.begin(battle, mod, deps)
 
     if foe then
         parkTrainer(foe, "enemyTrainer", plan.foeFace, "ar_field_enemy_trainer")
+    end
+
+    -- Nearby bystander trainers: soft-walk to a free watching tile and face
+    -- the duel. Restored in finish(). Safe no-op when deps.Spectators is nil.
+    if deps.Spectators and type(deps.Spectators.begin) == "function" then
+        pcall(deps.Spectators.begin, session, battle, deps)
     end
 
     -- now put the variable pieces on the board (trainer, mon, etc)
@@ -1308,6 +1317,10 @@ function Lifecycle.tick(battle, dt, deps)
         stepTrainerClear(session, session.foe, dt)
     end
 
+    if deps.Spectators and type(deps.Spectators.tick) == "function" then
+        pcall(deps.Spectators.tick, session, dt, deps)
+    end
+
     local moving = (p and p.targetPx and (
             math.abs((p.basePx or 0) - p.targetPx) > 1
             or math.abs((p.basePy or 0) - (p.targetPy or 0)) > 1))
@@ -1385,6 +1398,10 @@ function Lifecycle.finish(battle, deps)
     deps = deps or session._deps
     local Layout = deps and deps.Layout
     local Grid = deps and deps.Grid
+
+    if deps and deps.Spectators and type(deps.Spectators.finish) == "function" then
+        pcall(deps.Spectators.finish, session, deps)
+    end
 
     if Grid and session.grid then
         Grid.clear(session.grid)

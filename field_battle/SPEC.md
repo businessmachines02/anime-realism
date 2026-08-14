@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.18)
+# FIELD combat SPEC (v4.5.19)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -30,12 +30,16 @@ Pixels are presentation only; **pad cells are truth**.
    red thunder-laser into the ball. Move / hit SFX play from field cues
    (`audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
    the session so nothing doubles. Engine anim rows still advance for timing.
-7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind).
+7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind). Nearby spectator trainers restore to their pre-fight poses.
 8. **Present-clock continuity:** bob, foot-swap, cell lerp, attack/cast/hit anims, and delayed return-home keep advancing during any player prompt / overlay / `waitingUI`. Logic queue may wait; **sprites must not.**
 9. Move orbs and Poké Balls are temporary overworld entities. They use the same
    world camera as the cast, preserving alignment on flat and voxelized maps.
 10. Switching is ordered recall → replace occupancy/entity → send-out. Capture
     resolves ball flight/shakes before shrinking a caught target away.
+11. **Spectator trainers** (`spectators.lua`): trainer NPCs within a 4-tile
+    Chebyshev radius of the fight mid soft-walk to a free watching tile, face
+    the duel, and may emit uncommon floating shoutouts. Engaged player/foe
+    trainers and followers are never recruited. Teardown is temporary.
 
 ## Coordinate model
 
