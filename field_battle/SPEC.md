@@ -11,7 +11,7 @@ Pixels are presentation only; **pad cells are truth**.
 
 ## Non‑negotiables
 
-1. Stay on the flat map — transparent `BattleState`, `bgMode == "world"`, `BG_WORLD_DIM = 0`, no wipe / white return.
+1. Stay on the flat map — transparent `BattleState`, `bgMode == "world"`, `BG_WORLD_DIM = 0`, no wipe / white return. Overworld weather (`weather_fx`) keeps using the live sky on these world-backed fights.
 2. **The true overworld map is inviolable.** FIELD never writes map tiles. A
    bounded, one-time, read-only walkability survey excludes water, warps,
    blocked cells, and unrelated entities. The fight stays on the **live map**;
