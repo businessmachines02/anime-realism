@@ -1258,6 +1258,56 @@ function Projectiles.selfHit(session, side)
   })
 end
 
+function Projectiles.vanish(session, side, flavor)
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then return nil end
+  flavor = tostring(flavor or "dig")
+  if flavor == "fly" then
+    return spawn(session, {
+      kind = "effect",
+      style = "puff",
+      sx = x, sy = y - 6, ex = x, ey = y - 18,
+      duration = 0.40,
+      arc = 0,
+      color = { 0.78, 0.88, 1.00 },
+    })
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "puff",
+    sx = x, sy = y + 4, ex = x, ey = y + 4,
+    duration = 0.44,
+    arc = 0,
+    color = { 0.72, 0.58, 0.36 },
+  })
+end
+
+function Projectiles.emerge(session, side, flavor)
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then return nil end
+  flavor = tostring(flavor or "dig")
+  if flavor == "fly" then
+    return spawn(session, {
+      kind = "effect",
+      style = "puff",
+      sx = x, sy = y - 10, ex = x, ey = y - 2,
+      duration = 0.28,
+      arc = 0,
+      color = { 0.82, 0.90, 1.00 },
+    })
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "puff",
+    sx = x, sy = y + 3, ex = x, ey = y + 3,
+    duration = 0.32,
+    arc = 0,
+    color = { 0.78, 0.62, 0.38 },
+  })
+end
+
 function Projectiles.faint(session, side)
   local target = (side == "player") and session.playerMon or session.enemyMon
   local x, y = center(session, target)

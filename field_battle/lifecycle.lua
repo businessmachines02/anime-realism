@@ -1293,6 +1293,9 @@ function Lifecycle.tick(battle, dt, deps)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
     deps.Cues.tickReturns(session, deps.Grid)
+    if type(deps.Cues.syncSemiInvuln) == "function" then
+      deps.Cues.syncSemiInvuln(session, deps.Grid)
+    end
 
     if session.camNudgeT and session.camNudgeT > 0 then
         session.camNudgeT = math.max(0, session.camNudgeT - dt)

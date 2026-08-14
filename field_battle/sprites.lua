@@ -629,6 +629,15 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._fainting = true
       self.wanderTx, self.wanderTy = nil, nil
       self.returning = nil
+    elseif kind == "vanish_dig" or kind == "vanish_fly" then
+      self.hidden = false
+      self._fieldVanished = nil
+      self._emerging = nil
+      self.drawScale = 1
+    elseif kind == "emerge_dig" or kind == "emerge_fly" then
+      self.hidden = false
+      self._emerging = true
+      self.drawScale = 0.15
     else
       self.drawScale = 1
     end
@@ -918,6 +927,75 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self.animT = (self.animT or 0) + dt
       oy = oy - math.min(6, self.animT * 14)
       if self.animT >= 0.45 then
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "vanish_dig" then
+      -- Sink into the ground; dust handled by Projectiles.vanish.
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.42
+      local t = math.min(1, self.animT / dur)
+      oy = oy + t * t * 18
+      self.drawScale = math.max(0.08, 1 - t * 0.92)
+      ox = ox + math.sin(t * math.pi * 5) * (1 - t) * 2
+      if self.animT >= dur then
+        self._fieldVanished = true
+        self.hidden = true
+        self.drawScale = 0.08
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "vanish_fly" then
+      -- Soar up and shrink out of sight.
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.44
+      local t = math.min(1, self.animT / dur)
+      oy = oy - t * 28 - math.sin(t * math.pi) * 6
+      self.drawScale = math.max(0.06, 1 - t * 0.95)
+      if self.animT >= dur then
+        self._fieldVanished = true
+        self.hidden = true
+        self.drawScale = 0.06
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "emerge_dig" then
+      -- Pop up from underground.
+      self.hidden = false
+      self._emerging = true
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.30
+      local t = math.min(1, self.animT / dur)
+      if t < 0.05 then
+        self.drawScale = 0.12
+        oy = oy + 10
+      else
+        local u = (t - 0.05) / 0.95
+        self.drawScale = 0.12 + 0.88 * u
+        oy = oy + (1 - u) * (1 - u) * 12 - math.sin(u * math.pi) * 4
+      end
+      if self.animT >= dur then
+        self.drawScale = 1
+        self._fieldVanished = nil
+        self._emerging = nil
+        self._vanishKind = nil
+        self.anim = "idle"
+        self.animT = 0
+      end
+    elseif anim == "emerge_fly" then
+      -- Drop back onto the field from above.
+      self.hidden = false
+      self._emerging = true
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.32
+      local t = math.min(1, self.animT / dur)
+      self.drawScale = 0.2 + 0.8 * t
+      oy = oy - (1 - t) * (1 - t) * 26
+      if self.animT >= dur then
+        self.drawScale = 1
+        self._fieldVanished = nil
+        self._emerging = nil
+        self._vanishKind = nil
         self.anim = "idle"
         self.animT = 0
       end

@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.21)
+# FIELD combat SPEC (v4.5.22)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -49,6 +49,9 @@ Pixels are presentation only; **pad cells are truth**.
     slab, but translucent stack overlays (`TextBox` / `ChoiceBox` for
     learn-move / YES-NO, etc.) must still paint via
     `Compat.fieldAllowsStackedBottomUI`. Opaque menus (Party/Bag) do not.
+14. **Two-turn vanish moves:** Dig / Fly charge turns burrow or soar out of
+    sight (`vanish_*` + dust/wind FX); the mon stays hidden while
+    semi-invulnerable, then emerges on the release strike.
 
 ## Coordinate model
 

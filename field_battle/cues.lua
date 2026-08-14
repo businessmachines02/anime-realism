@@ -3,10 +3,18 @@
 -- Physical attacks step in toward the foe (or jump over cover); specials
 -- cast in place with attacker→foe projectiles. Hits may knock the target
 -- back one cell. Self-hits (confusion / recoil / crash) stumble in place.
+-- Two-turn vanish moves (Dig / Fly) burrow or soar out of sight on the
+-- charge turn and emerge on the release strike.
 -- Cue dedupe prevents double-steps when multiple battle
 -- events fire for the same move beat.
 
 local Cues = {}
+
+-- Gen1 semi-invulnerable charge moves → field vanish flavor.
+Cues.VANISH_MOVES = {
+  DIG = "dig",
+  FLY = "fly",
+}
 
 local function now(session)
   if session and session._now ~= nil then
@@ -39,6 +47,37 @@ local function normCategory(cat)
     return "physical"
   end
   return nil
+end
+
+function Cues.vanishKind(moveId)
+  if not moveId then
+    return nil
+  end
+  return Cues.VANISH_MOVES[tostring(moveId):upper()]
+end
+
+local function battlerChargingVanish(battler)
+  if not battler then
+    return nil
+  end
+  if battler.invulnerable then
+    local charging = battler.charging
+    local id = type(charging) == "table" and charging.id or charging
+    return Cues.vanishKind(id) or "dig"
+  end
+  return nil
+end
+
+local function isChargeTurn(ent, moveId)
+  local kind = Cues.vanishKind(moveId)
+  if not kind then
+    return false, nil
+  end
+  local battler = ent and ent._battleBattler
+  if battler and (battler.invulnerable or battler.charging) then
+    return true, battlerChargingVanish(battler) or kind
+  end
+  return false, kind
 end
 
 --- Apply a cue kind to a side. opts.category = "physical"|"special"
@@ -114,7 +153,66 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     return true
   end
 
+  if kind == "vanish" then
+    local flavor = opts.vanish or Cues.vanishKind(opts.moveId) or "dig"
+    ent._vanishKind = flavor
+    ent._fieldVanished = nil
+    ent._emerging = nil
+    ent._pendingReleaseAttack = nil
+    ent._returnAt = nil
+    ent.hidden = false
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.vanish) == "function" then
+      Projectiles.vanish(session, side, flavor)
+    end
+    if type(ent.play) == "function" then
+      ent:play(flavor == "fly" and "vanish_fly" or "vanish_dig")
+    end
+    return true
+  end
+
+  if kind == "emerge" then
+    local flavor = opts.vanish or ent._vanishKind
+      or Cues.vanishKind(opts.moveId) or "dig"
+    ent._vanishKind = flavor
+    ent._emerging = true
+    ent.hidden = false
+    ent.drawScale = ent.drawScale or 1
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.emerge) == "function" then
+      Projectiles.emerge(session, side, flavor)
+    end
+    if type(ent.play) == "function" then
+      ent:play(flavor == "fly" and "emerge_fly" or "emerge_dig")
+    end
+    return true
+  end
+
   if kind == "attack" then
+    -- Dig / Fly charge turn: disappear instead of striking.
+    if not opts.releaseStrike then
+      local charging, flavor = isChargeTurn(ent, opts.moveId)
+      if charging then
+        return Cues.apply(session, side, "vanish", Grid, nudgeCamera, battle, {
+          vanish = flavor,
+          moveId = opts.moveId,
+          moveType = opts.moveType,
+        })
+      end
+      -- Release strike while still hidden: emerge, then strike shortly after.
+      if (ent._fieldVanished or ent.hidden) and Cues.vanishKind(opts.moveId) then
+        ent._pendingReleaseAttack = {
+          category = category,
+          moveType = opts.moveType,
+          moveId = opts.moveId,
+        }
+        ent._releaseAt = now(session) + 0.28
+        return Cues.apply(session, side, "emerge", Grid, nudgeCamera, battle, {
+          vanish = ent._vanishKind or Cues.vanishKind(opts.moveId),
+          moveId = opts.moveId,
+        })
+      end
+    end
     if type(nudgeCamera) == "function" and battle then
       local foeSide = (side == "player") and "enemy" or "player"
       nudgeCamera(battle, foeSide, 0.45)
@@ -270,6 +368,12 @@ function Cues.shouldSkipEvent(session, side, kind)
   if kind == "attack" and last == "attack" then
     return true
   end
+  if kind == "vanish" and last == "vanish" then
+    return true
+  end
+  if kind == "emerge" and last == "emerge" then
+    return true
+  end
   if kind == "hit" and last == "hit" then
     return true
   end
@@ -297,6 +401,7 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
     category = cue.category,
     moveType = cue.moveType,
     moveId = cue.moveId,
+    vanish = cue.vanish,
   })
 end
 
@@ -395,16 +500,96 @@ function Cues.tagFaint(battle, text)
   return true
 end
 
---- Finish delayed attack returns to home cell.
+--- Tag Dig/Fly charge lines ("dug a hole" / "flew up high") as vanish cues.
+function Cues.tagChargeVanish(battle, text)
+  if type(battle) ~= "table" or type(text) ~= "string" then
+    return false
+  end
+  local lower = flattenText(text)
+  local flavor = nil
+  if lower:find("dug a hole", 1, true) then
+    flavor = "dig"
+  elseif lower:find("flew up high", 1, true) then
+    flavor = "fly"
+  else
+    return false
+  end
+  local item = battle.queue and battle.queue[battle.nextInsert]
+  if type(item) ~= "table" then
+    return false
+  end
+  local side = tostring(text):find("Enemy ", 1, true) and "enemy" or "player"
+  item.arFieldCue = {
+    side = side,
+    kind = "vanish",
+    vanish = flavor,
+    moveId = flavor == "fly" and "FLY" or "DIG",
+  }
+  return true
+end
+
+--- Finish delayed attack returns to home cell + Dig/Fly release strikes.
 function Cues.tickReturns(session, Grid)
   if not (session and session.grid) then
     return
   end
   local t = now(session)
-  for _, ent in ipairs({ session.playerMon, session.enemyMon }) do
+  for _, side in ipairs({ "player", "enemy" }) do
+    local ent = (side == "player") and session.playerMon or session.enemyMon
     if ent and ent._returnAt and t >= ent._returnAt then
       ent._returnAt = nil
       Grid.returnHome(session.grid, ent)
+    end
+    if ent and ent._releaseAt and t >= ent._releaseAt then
+      ent._releaseAt = nil
+      local pending = ent._pendingReleaseAttack
+      ent._pendingReleaseAttack = nil
+      ent._fieldVanished = nil
+      ent._emerging = nil
+      ent.hidden = false
+      if pending then
+        Cues.apply(session, side, "attack", Grid, nil, session._battle, {
+          category = pending.category,
+          moveType = pending.moveType,
+          moveId = pending.moveId,
+          releaseStrike = true,
+        })
+      end
+    end
+  end
+end
+
+--- Keep Dig/Fly users disappeared while semi-invulnerable; emerge if the
+--- invuln flag cleared without a release cue (miss / cancel / faint).
+function Cues.syncSemiInvuln(session, Grid)
+  if not (session and session.live) then
+    return
+  end
+  for _, side in ipairs({ "player", "enemy" }) do
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    if not ent or ent._removed or ent._fainting then
+      -- fall through
+    else
+      local battler = ent._battleBattler
+      local flavor = battlerChargingVanish(battler)
+      if flavor then
+        ent._vanishKind = flavor
+        local anim = ent.anim or ""
+        if not ent._fieldVanished
+            and anim ~= "vanish_dig" and anim ~= "vanish_fly" then
+          Cues.apply(session, side, "vanish", Grid, nil, session._battle, {
+            vanish = flavor,
+          })
+        elseif ent._fieldVanished then
+          ent.hidden = true
+        end
+      elseif ent._fieldVanished and not ent._emerging
+          and not ent._pendingReleaseAttack and not ent._releaseAt then
+        -- Invulnerability ended without a queued release strike (miss/cancel).
+        Cues.apply(session, side, "emerge", Grid, nil, session._battle, {
+          vanish = ent._vanishKind or "dig",
+        })
+      end
     end
   end
 end

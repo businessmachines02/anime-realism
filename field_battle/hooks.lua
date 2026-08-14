@@ -397,6 +397,9 @@ function Hooks.install(FBV, mod)
                     if type(FBV.Cues.tagFaint) == "function" then
                         pcall(FBV.Cues.tagFaint, self, text)
                     end
+                    if type(FBV.Cues.tagChargeVanish) == "function" then
+                        pcall(FBV.Cues.tagChargeVanish, self, text)
+                    end
                 end
                 return a, b, c
             end
@@ -653,6 +656,13 @@ function Hooks.install(FBV, mod)
             local side = ev.user.isPlayer and "player" or "enemy"
             local move = ev.move
             if not move then
+                return
+            end
+            -- Dig/Fly emit move_used before the charge flag is set, so an
+            -- immediate react would wrongly lunge on the hide turn. Queue
+            -- arFieldCue (and charge-text tags) drive vanish / emerge instead.
+            if FBV.Cues and type(FBV.Cues.vanishKind) == "function"
+                and FBV.Cues.vanishKind(move.id) then
                 return
             end
             local status = (move.power or 0) <= 0 or move.category == "status"

@@ -907,6 +907,77 @@ function tests.self_damage_tags_field_cue()
   eq(Cues.tagFaint(battle, "A critical hit!"), false, "non-faint text is ignored")
 end
 
+function tests.dig_fly_vanish_and_emerge()
+  eq(Cues.vanishKind("DIG"), "dig", "DIG is a dig vanish")
+  eq(Cues.vanishKind("FLY"), "fly", "FLY is a fly vanish")
+  eq(Cues.vanishKind("SOLARBEAM"), nil, "SolarBeam does not vanish")
+
+  local grid = sampleGrid()
+  local playerMon = {
+    id = "p", padU = grid.home.player.u, padV = grid.home.player.v,
+    cellX = 10, cellY = 10, px = 160, py = 160, basePx = 160, basePy = 160,
+    play = function(self, kind) self.anim = kind end,
+    _battleBattler = { invulnerable = true, charging = { id = "DIG" } },
+  }
+  local enemyMon = {
+    id = "e", padU = grid.home.enemy.u, padV = grid.home.enemy.v,
+    cellX = 12, cellY = 10, px = 192, py = 160, basePx = 192, basePy = 160,
+    play = function(self, kind) self.anim = kind end,
+  }
+  Grid.occupy(grid, "p", playerMon.padU, playerMon.padV)
+  Grid.occupy(grid, "e", enemyMon.padU, enemyMon.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = playerMon,
+    enemyMon = enemyMon,
+    _deps = { Grid = Grid, Projectiles = Projectiles },
+    _now = 10,
+  }
+
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "physical", moveId = "DIG",
+  }), "charge-turn dig redirects")
+  eq(playerMon.anim, "vanish_dig", "dig charge plays vanish_dig")
+  eq(session._lastCueKind, "vanish", "last cue is vanish")
+
+  -- Simulate finished vanish.
+  playerMon._fieldVanished = true
+  playerMon.hidden = true
+  playerMon._battleBattler.invulnerable = nil
+  playerMon._battleBattler.charging = nil
+  playerMon.anim = "idle"
+
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "physical", moveId = "DIG",
+  }), "release dig emerges first")
+  eq(playerMon.anim, "emerge_dig", "release starts emerge_dig")
+  truthy(playerMon._pendingReleaseAttack, "release strike scheduled")
+  truthy(playerMon._releaseAt, "release timer set")
+
+  session._now = playerMon._releaseAt + 0.01
+  Cues.tickReturns(session, Grid)
+  eq(playerMon._pendingReleaseAttack, nil, "pending strike consumed")
+  eq(playerMon.hidden, false, "visible after release strike")
+  truthy(playerMon.anim == "attack" or playerMon.anim == "jump" or playerMon.anim == "cast",
+    "release strike plays an attack anim")
+
+  local battle = {
+    queue = {
+      { text = "PIKACHU\ndug a hole!" },
+    },
+    nextInsert = 1,
+  }
+  truthy(Cues.tagChargeVanish(battle, battle.queue[1].text), "tags dug-a-hole")
+  eq(battle.queue[1].arFieldCue.kind, "vanish", "charge text cue is vanish")
+  eq(battle.queue[1].arFieldCue.vanish, "dig", "charge text flavor is dig")
+
+  battle.queue[1] = { text = "Enemy PIDGEY\nflew up high!" }
+  truthy(Cues.tagChargeVanish(battle, battle.queue[1].text), "tags flew-up")
+  eq(battle.queue[1].arFieldCue.vanish, "fly", "fly charge flavor")
+  eq(battle.queue[1].arFieldCue.side, "enemy", "enemy charge side")
+end
+
 function tests.world_space_projectiles()
   local grid = sampleGrid()
   local player = {
