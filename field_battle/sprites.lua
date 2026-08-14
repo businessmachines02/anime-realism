@@ -515,6 +515,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   }
 
   function ent:pose()
+    -- Dramatic Shape ignores `hidden` and crashes on a nil sprite. Always
+    -- return a real sprite while this entity might still be on ow.entities.
+    -- Faint / recall / capture must Cast.detachScene before leaving the list.
+    if not self.sprite then
+      return nil
+    end
     return self.sprite, self.px, self.py, self.facing, self._walkFrame or 0, false
   end
 
@@ -525,9 +531,52 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   function ent:update()
   end
 
+  local function drawVanishTell(self, g, camX, camY)
+    local bx = (self.basePx or self.px or 0) - (camX or 0)
+    local by = (self.basePy or self.py or 0) - (camY or 0)
+    local fly = self._vanishKind == "fly" or self.anim == "aloft"
+        or self.anim == "vanish_fly" or self.anim == "emerge_fly"
+    if fly then
+      -- Ground shadow while the mon is up high.
+      local pulse = 0.85 + 0.15 * math.sin((self.bobT or 0) * 2.4)
+      g.setColor(0.05, 0.08, 0.12, 0.38 * pulse)
+      g.ellipse("fill", bx, by + 3, 8 * pulse, 3.2)
+      g.setColor(0.7, 0.82, 1.0, 0.2)
+      g.ellipse("line", bx, by + 3, 9 * pulse, 3.6)
+    else
+      -- Dirt hole while burrowed.
+      g.setColor(0.18, 0.1, 0.05, 0.9)
+      g.ellipse("fill", bx, by + 5, 9, 4.5)
+      g.setColor(0.42, 0.28, 0.14, 0.85)
+      g.ellipse("fill", bx, by + 4, 7, 3.2)
+      g.setColor(0.62, 0.46, 0.26, 0.55)
+      g.ellipse("line", bx, by + 4, 8, 3.6)
+      -- Loose crumbs.
+      local t = self.bobT or 0
+      for i = 1, 4 do
+        local a = t * 1.7 + i * 1.6
+        g.setColor(0.55, 0.38, 0.2, 0.55)
+        g.circle("fill",
+          bx + math.cos(a) * (5 + i % 2),
+          by + 5 + math.sin(a * 1.3) * 1.5,
+          1.1)
+      end
+    end
+  end
+
   function ent:draw(camX, camY)
-    if self.hidden or self._removed then
+    if self._removed then
       return
+    end
+    if self.hidden and not self._fieldVanished then
+      return
+    end
+    local g = love and love.graphics
+    if g and (self._fieldVanished or self.anim == "vanish_dig"
+        or self.anim == "vanish_fly" or self.anim == "buried"
+        or self.anim == "aloft" or self.anim == "emerge_dig"
+        or self.anim == "emerge_fly") then
+      drawVanishTell(self, g, camX, camY)
     end
     local function drawBody()
       if self.drawer then
@@ -541,9 +590,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     end
     local scale = self.drawScale or 1
     if scale ~= 1 and love and love.graphics then
-      local g = love.graphics
       local cx = (self.px or 0) - (camX or 0) + 8
       local cy = (self.py or 0) - (camY or 0) + 8
+      g = love.graphics
       g.push()
       g.translate(cx, cy)
       g.scale(scale, scale)
@@ -553,7 +602,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     else
       drawBody()
     end
-    local g = love and love.graphics
+    g = love and love.graphics
     if g and type(g.transformPoint) == "function" then
       local ok, sx, sy = pcall(g.transformPoint,
         (self.px or 0) - (camX or 0) + 8,
@@ -633,11 +682,21 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self.hidden = false
       self._fieldVanished = nil
       self._emerging = nil
+      self._arFieldDetached = nil
       self.drawScale = 1
+      self._vanishKind = (kind == "vanish_fly") and "fly" or "dig"
     elseif kind == "emerge_dig" or kind == "emerge_fly" then
       self.hidden = false
       self._emerging = true
-      self.drawScale = 0.15
+      self._arFieldDetached = nil
+      self.drawScale = (kind == "emerge_fly") and 0.22 or 0.18
+      self._vanishKind = (kind == "emerge_fly") and "fly" or "dig"
+    elseif kind == "buried" or kind == "aloft" then
+      self.hidden = false
+      self._fieldVanished = true
+      self._emerging = nil
+      self.drawScale = (kind == "aloft") and 0.26 or 0.2
+      self._vanishKind = (kind == "aloft") and "fly" or "dig"
     else
       self.drawScale = 1
     end
@@ -668,7 +727,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   end
 
   function ent:tick(dt, towardX, towardY)
-    if self.hidden or self._removed then
+    if self._removed then
+      return
+    end
+    -- Dig/Fly holds keep ticking so buried/aloft bob continues; other
+    -- hidden states (recall / faint / capture) stay frozen.
+    if self.hidden and not self._fieldVanished then
       return
     end
     dt = dt or (1 / 60)
@@ -774,6 +838,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._recallDone = true
         self.hidden = true
         self.drawScale = 0.04
+        -- Leave ow.entities immediately — a hidden nil-pose crashed voxel.
+        self._pendingDetach = true
         -- Faint→recall path still triggers the faint despawn.
         if self._fainting then
           self._faintDone = true
@@ -787,6 +853,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       if self.animT >= 0.42 then
         self._captureDone = true
         self.hidden = true
+        self._pendingDetach = true
       end
     elseif anim == "attack" then
       self.animT = (self.animT or 0) + dt
@@ -931,48 +998,69 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "vanish_dig" then
-      -- Sink into the ground; dust handled by Projectiles.vanish.
+      -- Dig down with a shake, then hold as a dirt-hole tell (still posed).
       self.animT = (self.animT or 0) + dt
-      local dur = 0.42
+      local dur = 0.55
       local t = math.min(1, self.animT / dur)
-      oy = oy + t * t * 18
-      self.drawScale = math.max(0.08, 1 - t * 0.92)
-      ox = ox + math.sin(t * math.pi * 5) * (1 - t) * 2
+      oy = oy + t * t * 20
+      self.drawScale = math.max(0.16, 1 - t * 0.84)
+      ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
+      self._walkFrame = (math.floor(t * 10) % 2)
       if self.animT >= dur then
         self._fieldVanished = true
-        self.hidden = true
-        self.drawScale = 0.08
-        self.anim = "idle"
+        self.hidden = false
+        self.drawScale = 0.2
+        self.anim = "buried"
         self.animT = 0
       end
     elseif anim == "vanish_fly" then
-      -- Soar up and shrink out of sight.
+      -- Climb and shrink into the sky, then hold aloft (still posed).
       self.animT = (self.animT or 0) + dt
-      local dur = 0.44
+      local dur = 0.58
       local t = math.min(1, self.animT / dur)
-      oy = oy - t * 28 - math.sin(t * math.pi) * 6
-      self.drawScale = math.max(0.06, 1 - t * 0.95)
+      oy = oy - t * 32 - math.sin(t * math.pi) * 8
+      ox = ox + math.sin(t * math.pi * 2) * 3 * (1 - t)
+      self.drawScale = math.max(0.18, 1 - t * 0.82)
+      self._walkFrame = (t < 0.85) and 1 or 0
       if self.animT >= dur then
         self._fieldVanished = true
-        self.hidden = true
-        self.drawScale = 0.06
-        self.anim = "idle"
+        self.hidden = false
+        self.drawScale = 0.26
+        self.anim = "aloft"
         self.animT = 0
       end
+    elseif anim == "buried" then
+      -- Semi-invulnerable Dig hold: rumble in the hole.
+      self._fieldVanished = true
+      self.hidden = false
+      self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
+      oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
+      ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
+      self._walkFrame = 0
+    elseif anim == "aloft" then
+      -- Semi-invulnerable Fly hold: circle high above the pad.
+      self._fieldVanished = true
+      self.hidden = false
+      self.drawScale = 0.24 + math.sin((self.bobT or 0) * 1.8) * 0.04
+      oy = oy - 34 + math.sin((self.bobT or 0) * 2.1) * 3.5
+      ox = ox + math.sin((self.bobT or 0) * 1.25) * 5
+      self._walkFrame = (math.floor((self.bobT or 0) * 4) % 2)
     elseif anim == "emerge_dig" then
-      -- Pop up from underground.
+      -- Burst up from the hole.
       self.hidden = false
       self._emerging = true
       self.animT = (self.animT or 0) + dt
-      local dur = 0.30
+      local dur = 0.38
       local t = math.min(1, self.animT / dur)
-      if t < 0.05 then
-        self.drawScale = 0.12
-        oy = oy + 10
+      if t < 0.12 then
+        self.drawScale = 0.16 + t * 2
+        oy = oy + 12 - t * 40
+        ox = ox + math.sin(t * 40) * 2
       else
-        local u = (t - 0.05) / 0.95
-        self.drawScale = 0.12 + 0.88 * u
-        oy = oy + (1 - u) * (1 - u) * 12 - math.sin(u * math.pi) * 4
+        local u = (t - 0.12) / 0.88
+        self.drawScale = 0.4 + 0.6 * u
+        oy = oy + (1 - u) * (1 - u) * 10 - math.sin(u * math.pi) * 6
+        ox = ox + math.sin(u * math.pi * 3) * (1 - u) * 2
       end
       if self.animT >= dur then
         self.drawScale = 1
@@ -983,14 +1071,16 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "emerge_fly" then
-      -- Drop back onto the field from above.
+      -- Dive back onto the field from above.
       self.hidden = false
       self._emerging = true
       self.animT = (self.animT or 0) + dt
-      local dur = 0.32
+      local dur = 0.40
       local t = math.min(1, self.animT / dur)
-      self.drawScale = 0.2 + 0.8 * t
-      oy = oy - (1 - t) * (1 - t) * 26
+      self.drawScale = 0.22 + 0.78 * t
+      oy = oy - (1 - t) * (1 - t) * 36 + math.sin(t * math.pi) * 2
+      ox = ox + math.sin(t * math.pi * 2) * (1 - t) * 4
+      self._walkFrame = (t < 0.9) and 1 or 0
       if self.animT >= dur then
         self.drawScale = 1
         self._fieldVanished = nil
@@ -1021,6 +1111,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._faintDone = true
         self.hidden = true
         self.drawScale = 0.05
+        self._pendingDetach = true
       end
     end
 

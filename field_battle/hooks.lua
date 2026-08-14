@@ -648,6 +648,30 @@ function Hooks.install(FBV, mod)
             return "physical"
         end
 
+        -- Zero BP is not always a status move: Night Shade / Seismic Toss /
+        -- Dragon Rage / etc. deal fixed damage via SPECIAL_DAMAGE_EFFECT.
+        local function isStatusMove(move)
+            if not move then
+                return true
+            end
+            if move.category == "status" then
+                return true
+            end
+            if (move.power or 0) > 0 then
+                return false
+            end
+            if move.fixedDamage then
+                return false
+            end
+            local effect = tostring(move.effect or ""):upper()
+            if effect == "SPECIAL_DAMAGE_EFFECT"
+                or effect == "SUPER_FANG_EFFECT"
+                or effect == "OHKO_EFFECT" then
+                return false
+            end
+            return true
+        end
+
         mod.events:on("battle.move_used", function(ev)
             local battle = ev and ev.battle
             if not (battle and isFieldBattle(battle) and ev.user) then
@@ -665,7 +689,7 @@ function Hooks.install(FBV, mod)
                 and FBV.Cues.vanishKind(move.id) then
                 return
             end
-            local status = (move.power or 0) <= 0 or move.category == "status"
+            local status = isStatusMove(move)
             local kind = status and "status" or "attack"
             local skip = false
             if type(FBV.shouldSkipEventReact) == "function" then

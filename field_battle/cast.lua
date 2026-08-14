@@ -187,17 +187,12 @@ function Cast.despawn(session, battle, Grid, side)
     if Grid then
         Grid.release(session.grid, ent.id)
     end
+    -- Detach before marking removed so voxel never samples a nil/removed pose.
+    Cast.detachScene(session, ent)
     ent.hidden = true
     ent._removed = true
+    ent._pendingDetach = nil
     ent.wanderTx, ent.wanderTy = nil, nil
-    local ow = battle.game and battle.game.overworld
-    if ow and type(ow.entities) == "table" then
-        for i = #ow.entities, 1, -1 do
-            if ow.entities[i] == ent then
-                table.remove(ow.entities, i)
-            end
-        end
-    end
     if side == "player" then
         session.playerMon = nil
     else
@@ -205,15 +200,62 @@ function Cast.despawn(session, battle, Grid, side)
     end
 end
 
+--- Pull a field battler out of ow.entities (recall / faint / capture exit).
+--- Must run before pose would be unsafe — Dramatic Shape crashes on nil sprite.
+function Cast.detachScene(session, ent)
+    if not ent or ent._arFieldDetached then
+        return false
+    end
+    local battle = session and session._battle
+    local ow = battle and battle.game and battle.game.overworld
+    if ow and type(ow.entities) == "table" then
+        for i = #ow.entities, 1, -1 do
+            if ow.entities[i] == ent then
+                table.remove(ow.entities, i)
+            end
+        end
+    end
+    ent._arFieldDetached = true
+    ent._pendingDetach = nil
+    ent.hidden = true
+    return true
+end
+
+--- Put a detached field battler back on the live entity list for draw/pose.
+function Cast.attachScene(session, ent)
+    if not ent then
+        return false
+    end
+    ent._arFieldDetached = nil
+    if not ent._removed then
+        ent.hidden = false
+    end
+    local battle = session and session._battle
+    local ow = battle and battle.game and battle.game.overworld
+    appendOw(ow, ent)
+    return true
+end
+
 --- Soft lerp toward pad targets + presentation bob/anim.
 --- Present clock: never gate on waitingUI / stack / current.auto.
 function Cast.tick(session, dt)
     local p, e = session.playerMon, session.enemyMon
+    -- Faint / recall / capture set _pendingDetach when the exit anim finishes.
+    -- Pull them off ow.entities before the next voxel pose pass.
+    local function flushDetach(ent)
+        if ent and ent._pendingDetach and not ent._arFieldDetached then
+            Cast.detachScene(session, ent)
+        end
+    end
+    flushDetach(p)
+    flushDetach(e)
     if p and type(p.tick) == "function" then
         p:tick(dt, e and e.basePx, e and e.basePy)
+        flushDetach(p)
     end
     if e and type(e.tick) == "function" then
         e:tick(dt, p and p.basePx, p and p.basePy)
+        flushDetach(e)
     end
     -- Also tick any FIELD battler still in the OW list (ref safety).
     local battle = session and session._battle
@@ -226,6 +268,7 @@ function Cast.tick(session, dt)
                 and type(ent.tick) == "function" then
                 local other = (ent._arFieldSide == "player") and e or p
                 ent:tick(dt, other and other.basePx, other and other.basePy)
+                flushDetach(ent)
             end
         end
     end

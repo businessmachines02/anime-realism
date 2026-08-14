@@ -807,6 +807,8 @@ function tests.cues_and_dedupe()
     playerMon = player,
     enemyMon = enemy,
     _now = 10,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
   }
 
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
@@ -816,7 +818,25 @@ function tests.cues_and_dedupe()
   eq(player._returnAt, 10.48, "return waits for attack presentation")
   truthy(Cues.shouldSkipEvent(session, "player", "attack"), "dedupe same cue")
 
-  session._now = 12
+  -- Night Shade is Gen1 physical (Ghost) + 0 BP, but must cast a travel shadow.
+  session._now = 12.5
+  session._lastCueAt = nil
+  player._attackStepped = nil
+  player._returnAt = nil
+  player.lastAnim = nil
+  Projectiles.clear(session)
+  Grid.setPad(grid, player, pHome.u, pHome.v)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "physical",
+    moveType = "GHOST",
+    moveId = "NIGHT_SHADE",
+  }), "night shade attack cue")
+  eq(player.lastAnim, "cast", "night shade casts in place")
+  truthy(not player._attackStepped, "night shade does not lunge")
+  eq(#(session.projectiles or {}), 1, "night shade spawns shadow projectile")
+  eq(session.projectiles[1].style, "shadow", "night shade shadow style from cue")
+
+  session._now = 14
   truthy(not Cues.shouldSkipEvent(session, "player", "attack"), "dedupe expires")
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil,
     { category = "special", push = false }), "hit cue")
@@ -916,7 +936,14 @@ function tests.dig_fly_vanish_and_emerge()
   local playerMon = {
     id = "p", padU = grid.home.player.u, padV = grid.home.player.v,
     cellX = 10, cellY = 10, px = 160, py = 160, basePx = 160, basePy = 160,
+    _arFieldBattler = true,
+    sprite = { id = "test" },
     play = function(self, kind) self.anim = kind end,
+    pose = function(self)
+      if self._removed then return nil end
+      if self.hidden and not self._fieldVanished then return nil end
+      return self.sprite, self.px, self.py, "down", 0, false
+    end,
     _battleBattler = { invulnerable = true, charging = { id = "DIG" } },
   }
   local enemyMon = {
@@ -926,12 +953,14 @@ function tests.dig_fly_vanish_and_emerge()
   }
   Grid.occupy(grid, "p", playerMon.padU, playerMon.padV)
   Grid.occupy(grid, "e", enemyMon.padU, enemyMon.padV)
+  local ow = { entities = { playerMon, enemyMon } }
   local session = {
     live = true,
     grid = grid,
     playerMon = playerMon,
     enemyMon = enemyMon,
-    _deps = { Grid = Grid, Projectiles = Projectiles },
+    _battle = { game = { overworld = ow } },
+    _deps = { Grid = Grid, Projectiles = Projectiles, Cast = Cast },
     _now = 10,
   }
 
@@ -941,12 +970,30 @@ function tests.dig_fly_vanish_and_emerge()
   eq(playerMon.anim, "vanish_dig", "dig charge plays vanish_dig")
   eq(session._lastCueKind, "vanish", "last cue is vanish")
 
-  -- Simulate finished vanish.
+  -- Finished dig hold: stay on ow.entities with a real pose (voxel-safe).
   playerMon._fieldVanished = true
-  playerMon.hidden = true
+  playerMon.hidden = false
+  playerMon.anim = "buried"
+  Cast.tick(session, 1 / 60)
+  truthy(not playerMon._arFieldDetached, "dig does not detach from scene")
+  local stillListed = false
+  for i = 1, #ow.entities do
+    if ow.entities[i] == playerMon then
+      stillListed = true
+    end
+  end
+  truthy(stillListed, "dig keeps sprite on ow.entities")
+  local posed = playerMon:pose()
+  truthy(posed, "pose returns sprite while buried")
+
+  local digFx = Projectiles.vanish(session, "player", "dig")
+  eq(digFx.style, "dig_burst", "dig vanish uses dirt burst")
+  local flyFx = Projectiles.vanish(session, "enemy", "fly")
+  eq(flyFx.style, "fly_gust", "fly vanish uses wind gust")
+
   playerMon._battleBattler.invulnerable = nil
   playerMon._battleBattler.charging = nil
-  playerMon.anim = "idle"
+  playerMon.anim = "buried"
 
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "physical", moveId = "DIG",
@@ -1067,6 +1114,15 @@ function tests.world_space_projectiles()
     moveType = "ELECTRIC", moveId = "THUNDERSHOCK",
   })
   eq(shock.glitz, "bolt", "thundershock uses lightning bolt glitz")
+  local nightShade = Projectiles.move(session, "player", {
+    moveType = "GHOST", moveId = "NIGHT_SHADE",
+  })
+  eq(nightShade.style, "shadow", "night shade uses slithering shadow")
+  eq(nightShade.glitz, "shade", "night shade uses shade glitz")
+  truthy((nightShade.duration or 0) >= 0.5, "night shade holds a longer ribbon")
+  truthy(Projectiles.isTravelFx({
+    moveType = "GHOST", moveId = "NIGHT_SHADE",
+  }), "night shade is a travel FX")
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })
@@ -1256,6 +1312,8 @@ function tests.switch_and_capture_choreography()
   Lifecycle.tick(battle, 0.55, deps)
   eq(session.playerMon.species, "SECOND_MON", "replacement species staged")
   truthy(session.playerMon._sendoutStarted, "replacement uses send-out animation")
+  truthy(old._arFieldDetached or old._recallDone,
+    "recalled mon left the live entity list")
 
   truthy(Lifecycle.capture(battle, { caught = true, shakes = 1 }),
     "capture choreography starts")

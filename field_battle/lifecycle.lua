@@ -849,9 +849,16 @@ local function tickSwitches(session, battle, deps, dt)
     for _, side in ipairs({ "player", "enemy" }) do
         local item = pending[side]
         if item then
+            local current = (side == "player") and session.playerMon or session.enemyMon
+            -- Wait out the recall shrink (and detach) before staging the next mon.
+            local recalling = current and (current.anim == "recall")
+                and not current._recallDone
             item.delay = (item.delay or 0) - dt
-            if item.delay <= 0 then
+            if not recalling and item.delay <= 0 then
                 pending[side] = nil
+                if current and not current._arFieldDetached then
+                    deps.Cast.detachScene(session, current)
+                end
                 local ent = deps.Cast.replace(session, battle, session._mod,
                     deps.Sprites, deps.Grid, side, item.battler)
                 if ent and type(ent.play) == "function" then
@@ -1287,6 +1294,10 @@ function Lifecycle.tick(battle, dt, deps)
         Lifecycle.tryRevealPlayerMon(battle)
     end
 
+    -- Advance cast anims / detach finished recalls before switch staging so
+    -- a hidden mon is off ow.entities before the next pose pass.
+    deps.Cast.tick(session, dt)
+
     tickSwitches(session, battle, deps, dt)
     if deps.Projectiles and type(deps.Projectiles.tick) == "function" then
         deps.Projectiles.tick(session, dt)
@@ -1418,8 +1429,6 @@ function Lifecycle.tick(battle, dt, deps)
             e:play("attack")
         end
     end
-
-    deps.Cast.tick(session, dt)
 
     session._xformAcc = (session._xformAcc or 0) + dt
     if battle.animPlaying or moving or session._xformAcc >= 0.12 then

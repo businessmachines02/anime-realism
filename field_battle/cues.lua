@@ -160,6 +160,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     ent._emerging = nil
     ent._pendingReleaseAttack = nil
     ent._returnAt = nil
+    ent._arFieldDetached = nil
     ent.hidden = false
     local Projectiles = session._deps and session._deps.Projectiles
     if Projectiles and type(Projectiles.vanish) == "function" then
@@ -176,6 +177,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       or Cues.vanishKind(opts.moveId) or "dig"
     ent._vanishKind = flavor
     ent._emerging = true
+    ent._arFieldDetached = nil
     ent.hidden = false
     ent.drawScale = ent.drawScale or 1
     local Projectiles = session._deps and session._deps.Projectiles
@@ -225,14 +227,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       pcall(Audio.playMove, battle or session._battle, opts.moveId,
         side == "player")
     end
-    if category == "special" then
+    -- Travel FX (beams, streams, Night Shade shadow, …) fly even when the
+    -- Gen1 type split marks the move physical — don't contact-lunge instead.
+    local travel = Projectiles and type(Projectiles.isTravelFx) == "function"
+        and Projectiles.isTravelFx(opts)
+    if category == "special" or travel then
       ent._returnAt = nil
       ent._attackStepped = nil
       if Projectiles and type(Projectiles.move) == "function" then
         local jump = type(Grid.pathObstructed) == "function"
             and Grid.pathObstructed(g, ent, foe)
         Projectiles.move(session, side, {
-          category = "special",
+          category = category or "special",
           jump = jump,
           moveType = opts.moveType,
           moveId = opts.moveId,
@@ -546,6 +552,7 @@ function Cues.tickReturns(session, Grid)
       ent._pendingReleaseAttack = nil
       ent._fieldVanished = nil
       ent._emerging = nil
+      ent._arFieldDetached = nil
       ent.hidden = false
       if pending then
         Cues.apply(session, side, "attack", Grid, nil, session._battle, {
@@ -559,8 +566,8 @@ function Cues.tickReturns(session, Grid)
   end
 end
 
---- Keep Dig/Fly users disappeared while semi-invulnerable; emerge if the
---- invuln flag cleared without a release cue (miss / cancel / faint).
+--- Keep Dig/Fly users in buried/aloft holds while semi-invulnerable; emerge
+--- if the invuln flag cleared without a release cue (miss / cancel / faint).
 function Cues.syncSemiInvuln(session, Grid)
   if not (session and session.live) then
     return
@@ -576,12 +583,24 @@ function Cues.syncSemiInvuln(session, Grid)
         ent._vanishKind = flavor
         local anim = ent.anim or ""
         if not ent._fieldVanished
-            and anim ~= "vanish_dig" and anim ~= "vanish_fly" then
+            and anim ~= "vanish_dig" and anim ~= "vanish_fly"
+            and anim ~= "buried" and anim ~= "aloft" then
           Cues.apply(session, side, "vanish", Grid, nil, session._battle, {
             vanish = flavor,
           })
         elseif ent._fieldVanished then
-          ent.hidden = true
+          -- Stay on the cast with a hold pose (dirt hole / sky circle).
+          ent.hidden = false
+          ent._arFieldDetached = nil
+          local hold = (flavor == "fly") and "aloft" or "buried"
+          if anim ~= hold and anim ~= "vanish_dig" and anim ~= "vanish_fly"
+              and anim ~= "emerge_dig" and anim ~= "emerge_fly" then
+            if type(ent.play) == "function" then
+              ent:play(hold)
+            else
+              ent.anim = hold
+            end
+          end
         end
       elseif ent._fieldVanished and not ent._emerging
           and not ent._pendingReleaseAttack and not ent._releaseAt then

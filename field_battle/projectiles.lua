@@ -76,7 +76,12 @@ local MOVE_FX = {
   SELFDESTRUCT = { style = "area", glitz = "burst", radius = 26, duration = 0.52 },
   SWIFT = { style = "multi", glitz = "star", duration = 0.38 },
   TRI_ATTACK = { style = "multi", glitz = "tri", duration = 0.40 },
-  NIGHT_SHADE = { style = "beam", glitz = "ghost" },
+  NIGHT_SHADE = {
+    style = "shadow",
+    glitz = "shade",
+    duration = 0.52,
+    color = { 0.18, 0.08, 0.26 },
+  },
   LICK = { style = "contact", glitz = "ghost" },
   DRAGON_RAGE = { style = "stream", glitz = "dragon" },
   HORN_DRILL = { style = "beam", glitz = "pierce" },
@@ -214,6 +219,31 @@ local function resolveFx(opts)
   }
 end
 
+-- Named travel FX (Night Shade shadow, Earthquake bloom, …) fly even when
+-- the Gen1 type split marks the move physical. Type defaults stay on the
+-- contact / special path so Tackle doesn't become a floating orb.
+local TRAVEL_STYLES = {
+  orb = true,
+  beam = true,
+  stream = true,
+  shadow = true,
+  drain = true,
+  multi = true,
+  spiral = true,
+  area = true,
+  wave = true,
+  bolt = true,
+}
+
+function Projectiles.isTravelFx(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  local named = MOVE_FX[moveId]
+  if not (named and named.style) then
+    return false
+  end
+  return TRAVEL_STYLES[named.style] == true
+end
+
 local function drawBall(g, x, y)
   g.setColor(0.08, 0.06, 0.07, 1)
   g.circle("fill", x, y, 4)
@@ -293,29 +323,62 @@ local function drawLightningBolt(g, ox, oy, x, y, age, c, opts)
   end
   if forks then
     for i = 2, #pts - 1, 2 do
-      local px, py = pts[i][1], pts[i][2]
       local side = (i % 4 < 2) and 1 or -1
       local fork = (opts.forkLen or 5) + (i % 3)
+      local px, py = pts[i][1], pts[i][2]
       local fx = px + nx * fork * side + math.sin((age or 0) * 44 + i) * 1.4
-      local fy = py + ny * fork * side + math.cos((age or 0) * 39 + i) * 1.4
-      g.setColor(cr, cg, cb, 0.55 * fade * flash)
-      g.setLineWidth(1.6)
-      g.line(px, py, fx, fy)
-      g.setColor(1, 1, 0.9, 0.7 * fade * flash)
-      g.setLineWidth(1)
-      g.line(px, py, fx, fy)
+      local fy = py + ny * fork * side + math.cos((age or 0) * 37 + i) * 1.2
+      strokePoly(g, { { px, py }, { fx, fy } }, 2.2, cr, cg, cb, 0.45 * fade)
+      strokePoly(g, { { px, py }, { fx, fy } }, 1.0, 1, 1, 0.9, 0.7 * fade * flash)
     end
   end
-  -- Tip sparks.
-  for i = 1, 4 do
-    local a = (age or 0) * 20 + i * 1.7
-    local r = 3 + (i % 2) * 2
-    g.setColor(1, 1, 0.7, 0.55 * fade * flash)
-    g.setLineWidth(1)
-    g.line(x, y, x + math.cos(a) * r, y + math.sin(a) * r)
+end
+
+--- Serpentine shadow body points from caster → tip (Night Shade).
+local function shadowRibbon(ox, oy, x, y, age, segs)
+  segs = segs or 12
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
   end
-  g.setColor(1, 1, 1, 0.85 * fade * flash)
-  g.circle("fill", x, y, 1.8)
+  local pts = {}
+  for i = 0, segs do
+    local u = i / segs
+    local amp = (3.2 + u * 3.5) * math.sin(u * math.pi)
+    local wobble = math.sin(u * math.pi * 3.2 + (age or 0) * 11) * amp
+        + math.sin(u * math.pi * 5.5 - (age or 0) * 7.5) * (amp * 0.45)
+    pts[#pts + 1] = {
+      ox + dx * u + nx * wobble,
+      oy + dy * u + ny * wobble * 0.55 - math.sin(u * math.pi) * 1.5,
+      u,
+    }
+  end
+  return pts
+end
+
+local function drawShadeSmoke(g, x, y, t, age, c)
+  -- Bursting smoke wisps at the impact point.
+  local life = math.max(0, math.min(1, t))
+  local fade = 1 - life
+  for i = 1, 10 do
+    local a = (age or 0) * 3.5 + i * 0.85
+    local dist = 2 + life * (9 + (i % 3) * 4)
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.7 - life * (4 + i % 4)
+    local r = 2.8 + life * (5 + (i % 3)) + math.sin(a * 2) * 0.8
+    local aFill = (0.7 - life * 0.45) * fade
+    g.setColor(0.45, 0.22, 0.62, aFill * 0.5)
+    g.circle("fill", px, py, r + 2.2)
+    g.setColor(c[1], c[2], c[3], aFill)
+    g.circle("fill", px, py, r)
+    g.setColor(0.7, 0.5, 0.82, aFill * 0.4)
+    g.circle("line", px, py, r * 0.85)
+  end
+  -- Soft dark bloom under the puff.
+  g.setColor(0.05, 0.02, 0.08, 0.45 * fade)
+  g.circle("fill", x, y + 1, 7 + life * 12)
 end
 
 local function drawMove(g, p, x, y)
@@ -564,6 +627,46 @@ local function drawEffect(g, p, x, y, ox, oy)
         end
       end
     end
+  elseif p.style == "shadow" then
+    -- Night Shade: slithering shadow ribbon → smoke burst on arrival.
+    -- x,y is the traveling tip (interpolated); ox,oy stays at the caster.
+    local age = p.age or 0
+    local tipX, tipY = x, y
+    local ribbon = shadowRibbon(ox, oy, tipX, tipY, age, 16)
+    for i = 1, #ribbon do
+      local pt = ribbon[i]
+      local u = pt[3] or ((i - 1) / math.max(1, #ribbon - 1))
+      local r = 2.2 + u * 4.4 + math.sin(age * 14 + i) * 0.7
+      local a = (0.35 + 0.6 * u) * (0.85 + 0.15 * math.sin(age * 9 + i))
+      -- Soft violet outer haze (readable on dark maps).
+      g.setColor(0.42, 0.18, 0.62, a * 0.45)
+      g.circle("fill", pt[1], pt[2], r + 3.2)
+      -- Dark core.
+      g.setColor(c[1], c[2], c[3], a)
+      g.circle("fill", pt[1], pt[2], r)
+      if i > 1 then
+        local prev = ribbon[i - 1]
+        g.setColor(0.28, 0.1, 0.4, a * 0.7)
+        g.setLineWidth(math.max(2.2, r * 1.05))
+        g.line(prev[1], prev[2], pt[1], pt[2])
+      end
+    end
+    -- Head of the shadow (denser oval + violet eye).
+    g.setColor(0.05, 0.02, 0.08, 0.85)
+    g.ellipse("fill", tipX, tipY, 7.5, 4.4)
+    g.setColor(c[1], c[2], c[3], 0.95)
+    g.ellipse("fill", tipX, tipY, 5.0, 2.9)
+    g.setColor(0.78, 0.35, 0.95, 0.55 + 0.35 * math.abs(math.sin(age * 12)))
+    g.circle("fill", tipX - 1.2, tipY - 0.6, 1.6)
+    g.setColor(1, 0.85, 1, 0.55)
+    g.circle("fill", tipX - 1.2, tipY - 0.6, 0.7)
+    -- Impact smoke as the tip arrives.
+    if t >= 0.68 then
+      local smokeT = (t - 0.68) / 0.32
+      drawShadeSmoke(g, tipX, tipY, smokeT, age, c)
+    end
+  elseif p.style == "shade_smoke" then
+    drawShadeSmoke(g, x, y, t, p.age, c)
   elseif p.style == "bolt" then
     -- Vertical thunder strike onto the target (Thunder).
     local top = y - 30 + t * 6
@@ -784,6 +887,44 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.25 * fade)
       g.circle("fill", px - 0.4, py - 0.6, 0.7)
     end
+  elseif p.style == "dig_burst" then
+    -- Dirt clods + dust ring as a mon burrows or erupts.
+    local fade = 1 - t
+    local age = p.age or 0
+    g.setColor(c[1], c[2], c[3], 0.35 * fade)
+    g.ellipse("fill", x, y + 3, 6 + t * 10, 3 + t * 4)
+    for i = 1, 8 do
+      local a = i * 0.85 + age * 2.2
+      local dist = 2 + t * (8 + (i % 3) * 3)
+      local px = x + math.cos(a) * dist
+      local py = y + 2 + math.sin(a) * dist * 0.45 - t * (2 + i % 4)
+      local r = 1.6 + (i % 3) * 0.7
+      g.setColor(c[1], c[2], c[3], 0.7 * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(0.55, 0.4, 0.22, 0.4 * fade)
+      g.circle("fill", px - 0.4, py - 0.5, r * 0.45)
+    end
+    g.setColor(0.35, 0.22, 0.1, 0.5 * fade)
+    g.ellipse("line", x, y + 3, 5 + t * 8, 2.5 + t * 3)
+  elseif p.style == "fly_gust" then
+    -- Wind ribbons climbing (or diving) with the flyer.
+    local fade = 1 - t
+    local age = p.age or 0
+    local rising = (oy or y) >= (y - 1)
+    for i = 1, 6 do
+      local u = i / 6
+      local along = rising and (-u * (12 + t * 14)) or (u * (10 + t * 12))
+      local sway = math.sin(age * 10 + i * 1.7) * (3 + u * 2)
+      local px = x + sway
+      local py = y + along
+      g.setColor(c[1], c[2], c[3], (0.55 - u * 0.25) * fade)
+      g.setLineWidth(1.6)
+      g.line(px - 2, py + 2, px + 2, py - 3)
+      g.setColor(1, 1, 1, 0.35 * fade * (1 - u))
+      g.circle("fill", px, py, 1.2)
+    end
+    g.setColor(c[1], c[2], c[3], 0.25 * fade)
+    g.ellipse("fill", x, y + 2, 7 + t * 4, 2.5)
   elseif p.style == "recall" then
     -- Anime red recall laser: irregular thunder forks trainer → mon.
     local fade = 1 - t * 0.25
@@ -1164,6 +1305,36 @@ function Projectiles.move(session, side, opts)
     })
   end
 
+  if fx.style == "shadow" then
+    local color = fx.color or { 0.18, 0.08, 0.26 }
+    local userDone = opts.onDone
+    return spawn(session, {
+      kind = "effect",
+      style = "shadow",
+      glitz = fx.glitz or "shade",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.52,
+      arc = 3,
+      color = color,
+      onDone = function()
+        -- Linger a smoke burst at the impact point after the ribbon lands.
+        local smoke = spawn(session, {
+          kind = "effect",
+          style = "shade_smoke",
+          glitz = "shade",
+          sx = ex, sy = ey, ex = ex, ey = ey,
+          duration = 0.38,
+          arc = 0,
+          color = color,
+          onDone = userDone,
+        })
+        if not smoke and type(userDone) == "function" then
+          pcall(userDone)
+        end
+      end,
+    })
+  end
+
   if fx.style == "stream" then
     return spawn(session, {
       kind = "effect",
@@ -1266,20 +1437,20 @@ function Projectiles.vanish(session, side, flavor)
   if flavor == "fly" then
     return spawn(session, {
       kind = "effect",
-      style = "puff",
-      sx = x, sy = y - 6, ex = x, ey = y - 18,
-      duration = 0.40,
+      style = "fly_gust",
+      sx = x, sy = y - 2, ex = x, ey = y - 22,
+      duration = 0.52,
       arc = 0,
       color = { 0.78, 0.88, 1.00 },
     })
   end
   return spawn(session, {
     kind = "effect",
-    style = "puff",
+    style = "dig_burst",
     sx = x, sy = y + 4, ex = x, ey = y + 4,
-    duration = 0.44,
+    duration = 0.50,
     arc = 0,
-    color = { 0.72, 0.58, 0.36 },
+    color = { 0.72, 0.55, 0.32 },
   })
 end
 
@@ -1291,20 +1462,20 @@ function Projectiles.emerge(session, side, flavor)
   if flavor == "fly" then
     return spawn(session, {
       kind = "effect",
-      style = "puff",
-      sx = x, sy = y - 10, ex = x, ey = y - 2,
-      duration = 0.28,
+      style = "fly_gust",
+      sx = x, sy = y - 18, ex = x, ey = y - 2,
+      duration = 0.36,
       arc = 0,
       color = { 0.82, 0.90, 1.00 },
     })
   end
   return spawn(session, {
     kind = "effect",
-    style = "puff",
+    style = "dig_burst",
     sx = x, sy = y + 3, ex = x, ey = y + 3,
-    duration = 0.32,
+    duration = 0.40,
     arc = 0,
-    color = { 0.78, 0.62, 0.38 },
+    color = { 0.78, 0.58, 0.34 },
   })
 end
 

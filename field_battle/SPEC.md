@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.22)
+# FIELD combat SPEC (v4.5.26)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -23,7 +23,7 @@ Pixels are presentation only; **pad cells are truth**.
 5. Callouts tag `arFieldCue`; FIELD plays pad steps when that row becomes `battle.current`. Physical vs special motion rules apply.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, wave, drain, status, heal,
-   and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
+   shadow (Night Shade), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
    PSN / SLP / confusion auras tint field sprites. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
    sink, and puff before despawn. Switch recalls (and trainer-side faints) fire a
@@ -34,8 +34,10 @@ Pixels are presentation only; **pad cells are truth**.
 8. **Present-clock continuity:** bob, foot-swap, cell lerp, attack/cast/hit anims, and delayed return-home keep advancing during any player prompt / overlay / `waitingUI`. Logic queue may wait; **sprites must not.**
 9. Move orbs and Poké Balls are temporary overworld entities. They use the same
    world camera as the cast, preserving alignment on flat and voxelized maps.
-10. Switching is ordered recall → replace occupancy/entity → send-out. Capture
-    resolves ball flight/shakes before shrinking a caught target away.
+10. Switching is ordered recall → detach from `ow.entities` → replace
+    occupancy/entity → send-out. Faint / capture exit anims also detach as
+    soon as they finish so voxel never samples a nil `pose()` sprite.
+    Capture resolves ball flight/shakes before shrinking a caught target away.
 11. **Spectator trainers** (`spectators.lua`): trainer NPCs within a 4-tile
     Chebyshev radius of the fight mid soft-walk to a free watching tile, face
     the duel, and may emit uncommon floating shoutouts. Engaged player/foe
@@ -49,9 +51,11 @@ Pixels are presentation only; **pad cells are truth**.
     slab, but translucent stack overlays (`TextBox` / `ChoiceBox` for
     learn-move / YES-NO, etc.) must still paint via
     `Compat.fieldAllowsStackedBottomUI`. Opaque menus (Party/Bag) do not.
-14. **Two-turn vanish moves:** Dig / Fly charge turns burrow or soar out of
-    sight (`vanish_*` + dust/wind FX); the mon stays hidden while
-    semi-invulnerable, then emerges on the release strike.
+14. **Two-turn vanish moves:** Dig / Fly charge turns burrow or soar with
+    dirt/wind FX, then hold a **buried** (dirt-hole tell) or **aloft**
+    (ground shadow + high bob) pose while semi-invulnerable. The battler
+    stays on `ow.entities` with a real `pose()` sprite so voxel never sees
+    nil. Release strike emerges, then hits.
 
 ## Coordinate model
 
