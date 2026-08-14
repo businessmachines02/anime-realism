@@ -963,8 +963,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       end
     elseif anim == "hit" then
       self.animT = (self.animT or 0) + dt
+      local heavy = self._heavyHit == true
       local flash = (math.floor(self.animT * 22) % 2 == 0) and 1 or -1
-      local knock = math.min(1, self.animT / 0.18)
+      local knock = math.min(1, self.animT / (heavy and 0.22 or 0.18))
       local tx = self.basePx - (towardX or self.basePx)
       local ty = self.basePy - (towardY or self.basePy)
       local len = math.sqrt(tx * tx + ty * ty)
@@ -973,11 +974,14 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       else
         tx, ty = 0, 1
       end
-      ox = ox + flash * 4 + tx * knock * 8
-      oy = oy + 2 + ty * knock * 5
-      if self.animT >= 0.42 then
+      local knockReach = heavy and 14 or 8
+      local knockLift = heavy and 7 or 5
+      ox = ox + flash * (heavy and 6 or 4) + tx * knock * knockReach
+      oy = oy + 2 + ty * knock * knockLift
+      if self.animT >= (heavy and 0.52 or 0.42) then
         self.anim = "idle"
         self.animT = 0
+        self._heavyHit = nil
       end
     elseif anim == "selfhit" then
       -- Stumble / bonk: dip and wobble in place (not knockback from the foe).

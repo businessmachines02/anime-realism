@@ -196,6 +196,46 @@ local FOE_STATUS_MOVES = {
   SUPERSONIC = true,
 }
 
+-- Strong hits: always shove the target back + typed impact FX (Gen1 roster + high BP).
+local POWER_MOVES = {
+  HYPER_BEAM = true,
+  EXPLOSION = true,
+  SELFDESTRUCT = true,
+  HYDRO_PUMP = true,
+  FIRE_BLAST = true,
+  BLIZZARD = true,
+  THUNDER = true,
+  SOLARBEAM = true,
+  SOLAR_BEAM = true,
+  EARTHQUAKE = true,
+  DOUBLE_EDGE = true,
+  SKULL_BASH = true,
+  DREAM_EATER = true,
+  THUNDERBOLT = true,
+  ICE_BEAM = true,
+  FLAMETHROWER = true,
+  SURF = true,
+  PSYCHIC = true,
+  PSYCHIC_M = true,
+  TAKE_DOWN = true,
+  BODY_SLAM = true,
+  MEGA_PUNCH = true,
+  MEGA_KICK = true,
+  STRENGTH = true,
+  SLAM = true,
+  HYPER_FANG = true,
+  SUBMISSION = true,
+  RAZOR_WIND = true,
+  SKY_ATTACK = true,
+  ROCK_SLIDE = true,
+  PETAL_DANCE = true,
+  FISSURE = true,
+  HORN_DRILL = true,
+  GUILLOTINE = true,
+}
+
+local POWER_BP_THRESHOLD = 100
+
 local function center(session, ent)
   if not ent then
     return nil, nil
@@ -283,6 +323,49 @@ function Projectiles.isTravelFx(opts)
     return false
   end
   return TRAVEL_STYLES[named.style] == true
+end
+
+function Projectiles.isPowerfulMove(opts)
+  opts = opts or {}
+  local moveId = tostring(opts.moveId or ""):upper():gsub("%s+", "_")
+  if POWER_MOVES[moveId] then
+    return true
+  end
+  local power = tonumber(opts.movePower or opts.power)
+  return power ~= nil and power >= POWER_BP_THRESHOLD
+end
+
+local function drawPowerBurst(g, x, y, t, age, c, opts)
+  opts = opts or {}
+  local impact = opts.impact == true
+  local fade = 1 - t * 0.35
+  local pulse = 0.55 + 0.45 * math.abs(math.sin((age or 0) * 14))
+  local radius = (impact and 10 or 7) + t * (impact and 12 or 8)
+  g.setColor(c[1], c[2], c[3], 0.22 * fade * pulse)
+  g.circle("fill", x, y, radius)
+  for i = 1, (impact and 10 or 6) do
+    local a = (age or 0) * (impact and 7 or 9) + i * (math.pi * 2 / 6)
+    local dist = t * (impact and 14 or 10) + (i % 3) * 2
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.55
+    g.setColor(c[1], c[2], c[3], (0.75 - t * 0.35) * fade)
+    g.circle("fill", px, py, impact and 2.2 or 1.6)
+    g.setColor(1, 1, 1, 0.55 * fade)
+    g.circle("fill", px - 0.4, py - 0.5, 0.7)
+  end
+  if impact then
+    -- Debris / shock lines on wall or cover.
+    for i = 1, 5 do
+      local a = i * 1.2 + (age or 0) * 5
+      g.setColor(0.82, 0.78, 0.72, 0.65 * fade)
+      g.setLineWidth(1.5)
+      g.line(x, y, x + math.cos(a) * (6 + t * 8), y + math.sin(a) * (4 + t * 5))
+    end
+    g.setColor(0.55, 0.48, 0.42, 0.35 * fade)
+    g.ellipse("fill", x, y + 2, 8 + t * 6, 3 + t * 2)
+  end
+  g.setColor(1, 1, 1, 0.45 * fade * pulse)
+  g.circle("fill", x, y, impact and 4 or 3)
 end
 
 local function drawBall(g, x, y)
@@ -1137,6 +1220,10 @@ local function drawEffect(g, p, x, y, ox, oy)
     end
     g.setColor(c[1], c[2], c[3], 0.25 * fade)
     g.ellipse("fill", x, y + 2, 7 + t * 4, 2.5)
+  elseif p.style == "power_hit" then
+    drawPowerBurst(g, x, y, t, p.age, c, { impact = false })
+  elseif p.style == "power_impact" then
+    drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
   elseif p.style == "recall" then
     -- Anime red recall laser: irregular thunder forks trainer → mon.
     local fade = 1 - t * 0.25
@@ -1734,6 +1821,43 @@ function Projectiles.emerge(session, side, flavor)
     duration = 0.40,
     arc = 0,
     color = { 0.78, 0.58, 0.34 },
+  })
+end
+
+function Projectiles.powerHit(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local moveType = tostring(opts.moveType or "NORMAL"):upper()
+  return spawn(session, {
+    kind = "effect",
+    style = "power_hit",
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.40,
+    arc = 0,
+    color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
+  })
+end
+
+function Projectiles.wallImpact(session, obstacle, opts)
+  if not (session and obstacle and session.grid) then
+    return nil
+  end
+  opts = opts or {}
+  local x, y = Coords.padCenterPx(session.grid, obstacle.u, obstacle.v)
+  y = y - 4
+  local moveType = tostring(opts.moveType or "NORMAL"):upper()
+  return spawn(session, {
+    kind = "effect",
+    style = "power_impact",
+    glitz = obstacle.kind or "wall",
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.46,
+    arc = 0,
+    color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
   })
 end
 

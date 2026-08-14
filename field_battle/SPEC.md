@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.28)
+# FIELD combat SPEC (v4.5.29)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -23,7 +23,7 @@ Pixels are presentation only; **pad cells are truth**.
 5. Callouts tag `arFieldCue`; FIELD plays pad steps when that row becomes `battle.current`. Physical vs special motion rules apply.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, aura, wave, drain, status, heal,
-   shadow (Night Shade), seed (Leech Seed), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
+   shadow (Night Shade), seed (Leech Seed), power burst (high-BP hits), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
    PSN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
    grassy sprout on `battler.leechSeeded` mons. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
@@ -211,7 +211,7 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
 | attack (physical) | `u` toward foe 1, then home | `attack` |
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
-| hit | knockback chance (phys > special) | `hit` |
+| hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst | `hit` (heavy knock when powerful) |
 | selfhit | stay | `selfhit` + bonk burst (confusion / recoil / crash) |
 | faint | stay | dust puff; trainer-owned → red recall laser + shrink; wild → sink |
 | recall | stay | red thunder-laser from trainer + shrink |
@@ -225,6 +225,11 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
   persist between turns instead of snapping back. Water-types may wander onto
   adjacent water and switch to their swim sheet while there.
 - Trainers on fixed edge pad cells; not tracked for combat steps.
+- **Powerful hits** (`Projectiles.isPowerfulMove`: named high-BP Gen1 roster or
+  move power ≥ 100): always push the target up to two pad cells away from the
+  attacker (physical or special). A typed `power_hit` burst plays on the mon; if
+  a cover prop, impassable cell, or pad edge lies within two cells behind the
+  push line, a `power_impact` burst spawns there too.
 
 ## Battle initiation (`Lifecycle.begin`)
 

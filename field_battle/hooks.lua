@@ -724,6 +724,7 @@ function Hooks.install(FBV, mod)
                     typeMult = ev.typeMult,
                     moveId = ev.move and ev.move.id,
                     moveType = ev.move and ev.move.type,
+                    movePower = ev.move and ev.move.power,
                 })
             end
         end)

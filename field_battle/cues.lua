@@ -281,6 +281,24 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     if Audio and type(Audio.playHit) == "function" then
       pcall(Audio.playHit, battle or session._battle, opts.typeMult)
     end
+    local Projectiles = session._deps and session._deps.Projectiles
+    local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
+        and Projectiles.isPowerfulMove(opts)
+    if powerful then
+      local obstacle = Grid.obstacleBehind(g, ent, foe, 2)
+      if Projectiles.powerHit then
+        Projectiles.powerHit(session, side, opts)
+      end
+      Grid.knockbackTiles(g, ent, foe, 2)
+      if obstacle and Projectiles.wallImpact then
+        Projectiles.wallImpact(session, obstacle, opts)
+      end
+      ent._heavyHit = true
+      if type(ent.play) == "function" then
+        ent:play("hit")
+      end
+      return true
+    end
     local cat = category or session._lastAttackCategory or "physical"
     -- Both can shove; physical more often / more reliably.
     local pushChance = (cat == "special") and 0.45 or 0.78

@@ -700,6 +700,62 @@ function tests.blocked_cells()
   truthy(not Grid.isFree(grid, 2, 0), "blocked cell is unavailable")
 end
 
+function tests.powerful_moves_push_and_impact()
+  truthy(Projectiles.isPowerfulMove({ moveId = "HYDRO_PUMP" }), "hydro pump is powerful")
+  truthy(Projectiles.isPowerfulMove({ moveId = "BODY_SLAM" }), "body slam is powerful")
+  truthy(Projectiles.isPowerfulMove({ movePower = 100 }), "100+ BP counts as powerful")
+  truthy(not Projectiles.isPowerfulMove({ moveId = "TACKLE", movePower = 35 }),
+    "weak move is not powerful")
+
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+    coverSlots = { { u = 6, v = 0, kind = "rock" } },
+  }, plan)
+  local player = { id = "player", padU = 2, padV = 0 }
+  local enemy = {
+    id = "enemy", padU = 4, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+
+  local su, sv = Grid.pushDir(grid, enemy, player)
+  eq(su, 1, "target shoves away from attacker on u")
+  eq(sv, 0, "no lateral push on this axis")
+
+  local obs = Grid.obstacleBehind(grid, enemy, player, 2)
+  truthy(obs, "cover within two tiles behind target")
+  eq(obs.kind, "prop", "cover reads as prop obstacle")
+  eq(obs.dist, 2, "rock sits two cells behind")
+
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 20,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  local startU = enemy.padU
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    moveId = "FIRE_BLAST",
+    moveType = "FIRE",
+    category = "special",
+  }), "powerful hit cue")
+  eq(enemy.lastAnim, "hit", "heavy hit animation")
+  truthy(enemy._heavyHit, "heavy hit flag set for sprite knockback")
+  eq(enemy.padU, startU + 1, "powerful hit pushes one tile before rock")
+  eq(#(session.projectiles or {}), 2, "power hit + wall impact FX")
+  local styles = {}
+  for i = 1, #(session.projectiles or {}) do
+    styles[session.projectiles[i].style] = true
+  end
+  truthy(styles.power_hit, "typed burst on the mon")
+  truthy(styles.power_impact, "impact burst at the obstacle")
+end
+
 function tests.physical_jumps_cover()
   local plan = Layout.plan(0, 0, 8, 0)
   local grid = Grid.build({

@@ -484,4 +484,71 @@ function Grid.idleWander(g, ent, side)
   return false
 end
 
+--- Unit pad step away from `fromEnt` (knockback / push direction).
+function Grid.pushDir(g, ent, fromEnt)
+  if not (g and ent) then
+    return 0, 0
+  end
+  local u, v = padOf(g, ent)
+  local du, dv = 0, 0
+  if fromEnt then
+    local fu, fv = padOf(g, fromEnt)
+    du, dv = u - fu, v - fv
+  else
+    du = -1
+  end
+  local su = du == 0 and 0 or (du > 0 and 1 or -1)
+  local sv = dv == 0 and 0 or (dv > 0 and 1 or -1)
+  if math.abs(du) >= math.abs(dv) then
+    sv = 0
+  else
+    su = 0
+  end
+  if su == 0 and sv == 0 then
+    su = -1
+  end
+  return su, sv
+end
+
+--- Wall, cover prop, or pad edge within `range` cells behind the target.
+function Grid.obstacleBehind(g, ent, fromEnt, range)
+  if not (g and ent) then
+    return nil
+  end
+  range = range or 2
+  local u, v = padOf(g, ent)
+  local su, sv = Grid.pushDir(g, ent, fromEnt)
+  for dist = 1, range do
+    local tu, tv = u + su * dist, v + sv * dist
+    if not Grid.inPad(g, tu, tv) then
+      return { u = tu, v = tv, dist = dist, kind = "edge" }
+    end
+    if Grid.isBlocked(g, tu, tv) then
+      return { u = tu, v = tv, dist = dist, kind = "prop" }
+    end
+    if not Grid.canTraverse(g, tu, tv, ent) then
+      return { u = tu, v = tv, dist = dist, kind = "wall" }
+    end
+  end
+  return nil
+end
+
+--- Push the target up to `maxTiles` pad cells away from the attacker.
+function Grid.knockbackTiles(g, ent, fromEnt, maxTiles)
+  if not (g and ent) then
+    return 0
+  end
+  maxTiles = maxTiles or 2
+  local su, sv = Grid.pushDir(g, ent, fromEnt)
+  local moved = 0
+  for _ = 1, maxTiles do
+    if Grid.step(g, ent, su, sv) then
+      moved = moved + 1
+    else
+      break
+    end
+  end
+  return moved
+end
+
 return Grid
