@@ -735,7 +735,14 @@ function Hooks.install(FBV, mod)
                 return
             end
             local side = ev.battler.isPlayer and "player" or "enemy"
-            pcall(FBV.react, battle, side, "faint")
+            local skip = false
+            if type(FBV.shouldSkipEventReact) == "function" then
+                local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "faint")
+                skip = okS and s
+            end
+            if not skip then
+                pcall(FBV.react, battle, side, "faint")
+            end
         end)
 
         mod.events:on("battle.ball_thrown", function(ev)

@@ -204,7 +204,9 @@ item.arFieldCue = {
 }
 ```
 
-One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fallback only (dedupe ~1.25s).
+One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` /
+`battle.fainted` are fallback only. Faint / recall stay one-shot on the battler
+so the fainted! dialogue cannot replay the red recall laser.
 
 | kind | pad motion | anim |
 |---|---|---|

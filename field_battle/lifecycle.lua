@@ -828,12 +828,20 @@ function Lifecycle.syncMons(battle, mod, deps)
             species = wanted,
             delay = 0.50,
         }
-        local Projectiles = deps.Projectiles
-        if Projectiles and type(Projectiles.recallBeam) == "function" then
-            pcall(Projectiles.recallBeam, session, side)
-        end
-        if type(current.play) == "function" then
-            current:play("recall")
+        -- Faint already fired the recall laser + shrink. Don't replay it
+        -- when the replacement species lands on battle.player/enemy.
+        local alreadyExiting = current._fainting or current._faintDone
+            or current._recallDone
+            or current.anim == "recall"
+            or current.anim == "faint"
+        if not alreadyExiting then
+            local Projectiles = deps.Projectiles
+            if Projectiles and type(Projectiles.recallBeam) == "function" then
+                pcall(Projectiles.recallBeam, session, side)
+            end
+            if type(current.play) == "function" then
+                current:play("recall")
+            end
         end
     end
 

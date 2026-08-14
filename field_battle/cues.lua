@@ -31,6 +31,17 @@ local function rr(...)
   return random(...)
 end
 
+local function isExitPlaying(ent)
+  if not ent then
+    return false
+  end
+  return ent._fainting == true
+      or ent._faintDone == true
+      or ent._recallDone == true
+      or ent.anim == "recall"
+      or ent.anim == "faint"
+end
+
 local function foeOf(session, side)
   if side == "player" then
     return session.enemyMon
@@ -337,6 +348,11 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
 
   if kind == "faint" then
+    -- Faint is one-shot: the engine event AND the "fainted!" dialogue cue
+    -- both try to play this. A second pass would fire another recall laser.
+    if isExitPlaying(ent) then
+      return true
+    end
     if type(nudgeCamera) == "function" and battle then
       nudgeCamera(battle, side, 0.28)
     end
@@ -349,9 +365,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     if Projectiles and type(Projectiles.recallBeam) == "function" then
       beamed = Projectiles.recallBeam(session, side) ~= nil
     end
-    if type(ent.play) == "function" and not ent._fainting then
+    ent._fainting = true
+    if type(ent.play) == "function" then
       if beamed then
-        ent._fainting = true
         ent:play("recall")
       else
         ent:play("faint")
@@ -361,6 +377,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
 
   if kind == "recall" then
+    if isExitPlaying(ent) then
+      return true
+    end
     local Projectiles = session._deps and session._deps.Projectiles
     if Projectiles and type(Projectiles.recallBeam) == "function" then
       Projectiles.recallBeam(session, side)
@@ -378,6 +397,15 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
 end
 
 function Cues.shouldSkipEvent(session, side, kind)
+  kind = tostring(kind or "")
+  -- Faint / recall stay one-shot even after the 1.25s beat window: the
+  -- "fainted!" dialogue often becomes current well after battle.fainted.
+  if session and (kind == "faint" or kind == "recall") then
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    if isExitPlaying(ent) then
+      return true
+    end
+  end
   if not (session and session.live and session._lastCueAt) then
     return false
   end
@@ -387,7 +415,6 @@ function Cues.shouldSkipEvent(session, side, kind)
   if session._lastCueSide ~= side then
     return false
   end
-  kind = tostring(kind or "")
   local last = session._lastCueKind
   if kind == "attack" and last == "attack" then
     return true
