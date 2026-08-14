@@ -167,6 +167,18 @@ return function(mod)
                 },
             },
             {
+                key = "field_sprites",
+                type = "choice",
+                label = "FIELD SPRITES",
+                default = "AUTO",
+                choices = {
+                    { "AUTO",    "AUTO" },
+                    { "GSC",     "GSC" },
+                    { "HGSS",    "HGSS" },
+                    { "POKEDEX", "POKEDEX" },
+                },
+            },
+            {
                 key = "callout_style",
                 type = "choice",
                 label = "CALLOUT STYLE",
@@ -3736,7 +3748,7 @@ return function(mod)
         end
 
         -- Field-battle sprite cue: lifecycle plays this when the row is current.
-        -- kind: dodge | cover | brace | attack | hit
+        -- kind: dodge | cover | brace | attack | hit | selfhit | faint
         -- category (optional): physical | special — drives pad step vs cast-in-place.
         tagFieldCue = function(item, side, kind, category, moveType, moveId)
             if type(item) ~= "table" or not side or not kind then

@@ -1,9 +1,9 @@
 -- Field battle — OW follower sprites as battlers + motion.
 --
--- Prefer PokePCFollowers / FOLLOWERS_EX exports.assetPath + Assets.image
--- (same loader as walking followers). FIELD always uses animated 2D
--- overworld art — never voxel mon meshes. Entity draw also owns the tiny
--- world-anchored HP bar above each battler.
+-- Sprite set is user-pickable (FIELD SPRITES): AUTO matches Wilds of Kanto
+-- if that mod is loaded, else GSC follower sheets. GSC / HGSS / POKEDEX
+-- pull from PokePCFollowers, FOLLOWERS_EX, or Wilds packs. FIELD always
+-- uses animated 2D overworld art — never voxel mon meshes.
 
 local Sprites = {}
 
@@ -59,13 +59,121 @@ local function findHandle(mod, id)
   return nil
 end
 
-function Sprites.resolveFollowerPath(mod, game, species)
-  if not species then
+local function fileExists(path)
+  if type(path) ~= "string" or path == "" then
+    return false
+  end
+  local f = io.open(path, "rb")
+  if f then
+    f:close()
+    return true
+  end
+  return false
+end
+
+local function handleRoot(handle)
+  local root = handle and (handle.path or handle.root)
+  if type(root) == "string" and root ~= "" then
+    return root
+  end
+  return nil
+end
+
+local function speciesDex(game, species)
+  if type(species) == "number" then
+    return species
+  end
+  local key = tostring(species or ""):upper()
+  if key == "" then
     return nil
   end
-  local key = tostring(species):upper()
+  local data = game and game.data and game.data.pokemon
+  local def = data and data[key]
+  local dex = def and tonumber(def.dex)
+  if dex and dex > 0 then
+    return dex
+  end
+  return nil
+end
 
-  -- 1) Official pack export (preferred).
+local function isShinyBattler(battler)
+  local mon = battler and battler.mon
+  if not mon then
+    return false
+  end
+  if mon.shiny == true or mon.isShiny == true then
+    return true
+  end
+  return false
+end
+
+local STYLE_ALIAS = {
+  AUTO = "AUTO",
+  GSC = "followers",
+  FOLLOWERS = "followers",
+  FOLLOWER = "followers",
+  FOLLOWERS_EX = "followers",
+  HGSS = "pokemmo",
+  POKEMMO = "pokemmo",
+  POKEDEX = "pokedex",
+  DEX = "pokedex",
+}
+
+function Sprites.normalizeSpriteStyle(value)
+  local raw = tostring(value or "AUTO"):upper()
+  raw = raw:gsub("%s+", "_"):gsub("[^A-Z0-9_]", "")
+  return STYLE_ALIAS[raw] or STYLE_ALIAS[tostring(value or ""):lower()] or "followers"
+end
+
+function Sprites.fieldSpriteStyle(mod)
+  local raw = "AUTO"
+  if mod and mod.options and type(mod.options.get) == "function" then
+    raw = tostring(mod.options:get("field_sprites") or "AUTO")
+  end
+  local chosen = tostring(raw):upper()
+  if chosen ~= "AUTO" and chosen ~= "" then
+    return Sprites.normalizeSpriteStyle(chosen)
+  end
+  local wilds = findHandle(mod, "overworld_wild_spawns")
+  if wilds then
+    local ex = wilds.exports
+    if ex and type(ex.spriteStyle) == "function" then
+      local ok, style = pcall(ex.spriteStyle)
+      if ok and type(style) == "string" and style ~= "" then
+        return Sprites.normalizeSpriteStyle(style)
+      end
+    end
+    if wilds.options and type(wilds.options.get) == "function" then
+      local ok, style = pcall(wilds.options.get, wilds.options, "sprite_style")
+      if ok and type(style) == "string" and style ~= "" then
+        return Sprites.normalizeSpriteStyle(style)
+      end
+    end
+  end
+  return "followers"
+end
+
+local function appSupport(rel)
+  local home = os.getenv and os.getenv("HOME")
+  if type(home) ~= "string" or home == "" then
+    return nil
+  end
+  return home .. "/Library/Application Support/pokemon-love2d/mods/" .. rel
+end
+
+local function sheetFromPath(path, frames, walker)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  if fileExists(path) then
+    return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
+  end
+  -- Assets.image can still resolve some pack-relative paths.
+  return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
+end
+
+local function pokePcPath(mod, game, species)
+  local key = tostring(species or ""):upper()
   local ids = { "PokePCFollowers_VoxelMerge", "FOLLOWERS_EX" }
   for i = 1, #ids do
     local handle = findHandle(mod, ids[i])
@@ -73,54 +181,162 @@ function Sprites.resolveFollowerPath(mod, game, species)
     if ex and type(ex.assetPath) == "function" then
       local ok, path = pcall(ex.assetPath, key)
       if ok and type(path) == "string" and path ~= "" then
-        local f = io.open(path, "rb")
-        if f then
-          f:close()
-          return path
-        end
-        -- Path may still be Assets-resolvable even if io.open fails.
         return path
       end
     end
-    local root = handle and (handle.path or handle.root)
-    if type(root) ~= "string" or root == "" then
-      root = nil
-    end
-    if root then
-      local data = game and game.data and game.data.pokemon
-      local def = data and data[key]
-      local dex = def and tonumber(def.dex)
-      if dex and dex > 0 then
-        local path = root .. "/assets/sprites/follower_"
-          .. string.format("%03d", dex) .. ".png"
-        local f = io.open(path, "rb")
-        if f then
-          f:close()
-          return path
-        end
+    local root = handleRoot(handle)
+    local dex = speciesDex(game, key)
+    if root and dex then
+      local path = root .. "/assets/sprites/follower_"
+        .. string.format("%03d", dex) .. ".png"
+      if fileExists(path) then
+        return path
       end
     end
   end
-
-  -- 2) Hard fallback for desktop App Support installs.
-  local data = game and game.data and game.data.pokemon
-  local def = data and data[key]
-  local dex = def and tonumber(def.dex)
-  if dex and dex > 0 then
-    local home = os.getenv and os.getenv("HOME")
-    if type(home) == "string" and home ~= "" then
-      local path = home
-        .. "/Library/Application Support/pokemon-love2d/mods/"
-        .. "PokePCFollowers_VoxelMerge/assets/sprites/follower_"
-        .. string.format("%03d", dex) .. ".png"
-      local f = io.open(path, "rb")
-      if f then
-        f:close()
-        return path
-      end
+  local dex = speciesDex(game, key)
+  if dex then
+    local path = appSupport("PokePCFollowers_VoxelMerge/assets/sprites/follower_"
+      .. string.format("%03d", dex) .. ".png")
+    if path and fileExists(path) then
+      return path
     end
   end
   return nil
+end
+
+local function wildsRoot(mod)
+  local handle = findHandle(mod, "overworld_wild_spawns")
+  local root = handleRoot(handle)
+  if root then
+    return root
+  end
+  local path = appSupport("overworld_wild_spawns")
+  if path and fileExists(path .. "/manifest.json") then
+    return path
+  end
+  return nil
+end
+
+local function wildsPackPath(mod, game, species, style, shiny)
+  local dex = speciesDex(game, species)
+  if not dex then
+    return nil
+  end
+  local root = wildsRoot(mod)
+  if not root then
+    return nil
+  end
+  local nnn = string.format("%03d", dex)
+  local variant = shiny and "shiny" or "normal"
+  local candidates
+  if style == "pokemmo" then
+    candidates = {
+      root .. "/assets/generated/true_size/hgss/" .. nnn .. "-" .. variant .. ".png",
+      root .. "/assets/generated/followsprites_runtime/" .. nnn .. "-" .. variant .. ".png",
+      root .. "/assets/generated/true_size/hgss/" .. nnn .. "-normal.png",
+      root .. "/assets/generated/followsprites_runtime/" .. nnn .. "-normal.png",
+    }
+  elseif style == "pokedex" then
+    candidates = {
+      root .. "/assets/generated/true_size/pokedex/" .. nnn .. "-" .. variant .. ".png",
+      root .. "/assets/generated/true_size/pokedex/" .. nnn .. "-normal.png",
+    }
+  else
+    candidates = {
+      root .. "/assets/enhanced_overworld/poke_followers/follower_"
+        .. nnn .. "_" .. variant .. ".png",
+      root .. "/assets/enhanced_overworld/poke_followers/follower_"
+        .. nnn .. "_normal.png",
+      root .. "/assets/generated/true_size/followers/" .. nnn .. "-" .. variant .. ".png",
+      root .. "/assets/generated/true_size/followers/" .. nnn .. "-normal.png",
+    }
+  end
+  for i = 1, #candidates do
+    if fileExists(candidates[i]) then
+      return candidates[i]
+    end
+  end
+  return nil
+end
+
+local function wildsExportSheet(mod, game, species, style, shiny)
+  local wilds = findHandle(mod, "overworld_wild_spawns")
+  local ex = wilds and wilds.exports
+  if not (ex and type(ex.resolveFollowerSprite) == "function") then
+    return nil
+  end
+  local opts = {
+    species = species,
+    shiny = shiny == true,
+    style = style,
+    game = game,
+    surface = "land",
+    role = "field_battle",
+  }
+  -- AUTO with Wilds present: omit style so Wilds uses its own Sprite Style.
+  if style == nil then
+    opts.style = nil
+  end
+  local ok, def = pcall(ex.resolveFollowerSprite, opts)
+  if ok and type(def) == "table" and type(def.image) == "string" and def.image ~= "" then
+    return {
+      image = def.image,
+      frames = tonumber(def.frames) or 6,
+      walker = def.walker ~= false,
+      trueColor = def.trueColor ~= false,
+      frameWidth = def.frameWidth,
+      frameHeight = def.frameHeight,
+      providerId = def.providerId,
+    }
+  end
+  return nil
+end
+
+function Sprites.resolveSheet(mod, game, species, battler)
+  if not species then
+    return nil
+  end
+  local explicit = "AUTO"
+  if mod and mod.options and type(mod.options.get) == "function" then
+    explicit = tostring(mod.options:get("field_sprites") or "AUTO"):upper()
+  end
+  local style = Sprites.fieldSpriteStyle(mod)
+  local shiny = isShinyBattler(battler)
+  local wildsStyle = (explicit == "AUTO") and nil or style
+
+  local sheet = wildsExportSheet(mod, game, species, wildsStyle, shiny)
+  if sheet then
+    return sheet
+  end
+
+  if style == "pokemmo" or style == "pokedex" then
+    local path = wildsPackPath(mod, game, species, style, shiny)
+    if path then
+      return sheetFromPath(path, style == "pokedex" and 1 or 6, style ~= "pokedex")
+    end
+  end
+
+  local gsc = pokePcPath(mod, game, species)
+  if gsc then
+    return sheetFromPath(gsc, 6, true)
+  end
+  local wildsGsc = wildsPackPath(mod, game, species, "followers", shiny)
+  if wildsGsc then
+    return sheetFromPath(wildsGsc, 6, true)
+  end
+  if style ~= "pokemmo" then
+    local hgss = wildsPackPath(mod, game, species, "pokemmo", shiny)
+    if hgss then
+      return sheetFromPath(hgss, 6, true)
+    end
+  end
+  return nil
+end
+
+function Sprites.resolveFollowerPath(mod, game, species)
+  local sheet = Sprites.resolveSheet(mod, game, species, nil)
+  return sheet and sheet.image or nil
 end
 
 function Sprites.castMode(mod)
@@ -406,26 +622,43 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     end
     -- Always advance bob — independent of battle queue / waitFrames / UI.
     -- Major status lightly flavors the idle pose (freeze stills, para jitters).
-    local status = self._battleBattler and self._battleBattler.mon
-        and self._battleBattler.mon.status
+    local battler = self._battleBattler
+    local status = battler and battler.mon and battler.mon.status
+    local confused = battler and tonumber(battler.confusedTurns)
+    if confused and confused <= 0 then
+      confused = nil
+    end
     local bobAmp = self.bobAmp or 3.2
     local bobSpeed = self.bobSpeed or 5.0
     if status == "FRZ" then
       bobAmp = bobAmp * 0.12
       bobSpeed = bobSpeed * 0.25
+    elseif status == "SLP" then
+      bobAmp = bobAmp * 0.35
+      bobSpeed = bobSpeed * 0.45
     elseif status == "PAR" then
       bobSpeed = bobSpeed * 1.35
     elseif status == "PSN" or status == "TOX" then
       bobAmp = bobAmp * 0.85
+    elseif confused then
+      bobSpeed = bobSpeed * 1.15
     end
     self.bobT = (self.bobT or 0) + dt * bobSpeed
     local bob = math.sin(self.bobT) * bobAmp
     local ox, oy = 0, bob
-    if status == "PAR" then
+    if self._fainting then
+      bob = bob * (1 - math.min(1, (self.animT or 0) / 0.18))
+      ox, oy = 0, bob
+    elseif status == "PAR" then
       local jitter = math.sin((self.bobT or 0) * 17) * 1.1
       ox = ox + jitter
     elseif status == "FRZ" then
       oy = oy + 1
+    elseif status == "SLP" then
+      oy = oy + 2
+    elseif confused then
+      ox = ox + math.sin((self.bobT or 0) * 3.4) * 1.6
+      oy = oy + math.sin((self.bobT or 0) * 5.1) * 0.8
     end
 
     -- Blend toward a cover prop when Reactive Defense has us hidden.
@@ -597,6 +830,17 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
       end
+    elseif anim == "selfhit" then
+      -- Stumble / bonk: dip and wobble in place (not knockback from the foe).
+      self.animT = (self.animT or 0) + dt
+      local t = math.min(1, self.animT / 0.46)
+      local dip = math.sin(math.min(1, t / 0.55) * math.pi) * 5
+      ox = ox + math.sin(t * math.pi * 6) * 3.4
+      oy = oy + dip + 1
+      if self.animT >= 0.46 then
+        self.anim = "idle"
+        self.animT = 0
+      end
     elseif anim == "cover" then
       self.animT = (self.animT or 0) + dt
       oy = oy - math.min(6, self.animT * 14)
@@ -605,12 +849,27 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "faint" then
+      -- Stagger, then sink and shrink into the ground (opposite of recall).
+      local dur = 0.80
       self.animT = (self.animT or 0) + dt
-      -- Dampen bob while sinking out.
-      oy = bob * (1 - math.min(1, self.animT / 0.35))
-        + math.min(16, self.animT * 28)
-      if self.animT >= 0.55 then
+      local t = math.min(1, self.animT / dur)
+      local wobble = 0
+      if t < 0.25 then
+        local u = t / 0.25
+        wobble = math.sin(u * math.pi * 5) * (1 - u) * 4
+      end
+      local fall = 0
+      if t > 0.16 then
+        local u = (t - 0.16) / 0.84
+        fall = u * u
+      end
+      ox = ox + wobble
+      oy = oy + fall * 20
+      self.drawScale = math.max(0.06, 1 - fall)
+      if self.animT >= dur then
         self._faintDone = true
+        self.hidden = true
+        self.drawScale = 0.05
       end
     end
 
@@ -664,7 +923,8 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
     end
   end
 
-  local path = Sprites.resolveFollowerPath(mod, game, species)
+  local sheet = Sprites.resolveSheet(mod, game, species, battler)
+  local path = sheet and sheet.image
   if path then
     -- Warm Assets cache (and confirm the sheet loads).
     local img = loadImage(path)
@@ -674,22 +934,28 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
         local def = {
           id = "ar_fbv_" .. tostring(side),
           image = path,
-          frames = 6,
-          walker = true,
-          trueColor = true,
+          frames = (sheet and tonumber(sheet.frames)) or 6,
+          walker = not (sheet and sheet.walker == false),
+          trueColor = not (sheet and sheet.trueColor == false),
+          frameWidth = sheet and sheet.frameWidth,
+          frameHeight = sheet and sheet.frameHeight,
         }
         local okSp, sprite = pcall(SpriteRenderer.new, def, def.id)
         if okSp and sprite then
           local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
           ent.sprite = sprite
-          local lift = (img:getWidth() >= 32 and img:getHeight() >= 192) and 24 or 8
+          local fh = tonumber(sheet and sheet.frameHeight)
+          local lift = (fh and fh >= 24 and 24)
+            or ((img:getWidth() >= 32 and img:getHeight() >= 192) and 24 or 8)
           return finalizeEntity(ent, battler, lift)
         end
       end
       -- Manual sheet blit if SpriteRenderer fails.
       local iw, ih = img:getDimensions()
       local fw, fh = 16, 16
-      if iw >= 32 and ih >= 192 then
+      if sheet and tonumber(sheet.frameWidth) and tonumber(sheet.frameHeight) then
+        fw, fh = tonumber(sheet.frameWidth), tonumber(sheet.frameHeight)
+      elseif iw >= 32 and ih >= 192 then
         fw, fh = 32, 32
       end
       local quads = {}

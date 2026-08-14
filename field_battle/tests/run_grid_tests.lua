@@ -470,6 +470,90 @@ function tests.cues_and_dedupe()
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil,
     { category = "special", push = false }), "hit cue")
   eq(enemy.lastAnim, "hit", "hit animation")
+
+  local playerU, playerV = player.padU, player.padV
+  local enemyU, enemyV = enemy.padU, enemy.padV
+  session._now = 14
+  truthy(Cues.apply(session, "player", "selfhit", Grid, nil, nil), "selfhit cue")
+  eq(player.lastAnim, "selfhit", "self-hit plays a stumble")
+  eq(player.padU, playerU, "self-hit does not change the user's pad")
+  eq(player.padV, playerV, "self-hit stays on the user's cell")
+  eq(enemy.padU, enemyU, "self-hit does not knock the foe")
+  eq(enemy.padV, enemyV, "self-hit leaves the other pad alone")
+  truthy(Cues.shouldSkipEvent(session, "player", "selfhit"), "dedupe self-hit")
+  truthy(not Cues.shouldSkipEvent(session, "player", "hit"),
+    "self-hit does not swallow a later hit")
+
+  session._now = 16
+  truthy(Cues.apply(session, "enemy", "faint", Grid, nil, nil), "faint cue")
+  eq(enemy.lastAnim, "faint", "faint plays collapse")
+  truthy(Cues.shouldSkipEvent(session, "enemy", "faint"), "dedupe faint")
+end
+
+function tests.self_damage_tags_field_cue()
+  local battle = {
+    nextInsert = 2,
+    queue = {
+      { text = "PIKACHU\nis confused!" },
+      { text = "It hurt itself in\nits confusion!" },
+    },
+  }
+  truthy(Cues.isSelfDamageText("It hurt itself in\nits confusion!"),
+    "confusion self-hit is self-damage")
+  truthy(Cues.tagSelfDamage(battle, battle.queue[2].text), "tags hurt-itself line")
+  eq(battle.queue[2].arFieldCue.kind, "selfhit", "cue kind is selfhit")
+  eq(battle.queue[2].arFieldCue.side, "player", "confused line names the player")
+
+  battle = {
+    nextInsert = 2,
+    queue = {
+      { text = "Enemy EKANS\nis confused!" },
+      { text = "It hurt itself in\nits confusion!" },
+    },
+  }
+  truthy(Cues.tagSelfDamage(battle, "hurt itself", "enemy"),
+    "statusInterrupt side hint tags the foe")
+  eq(battle.queue[2].arFieldCue.side, "enemy", "hint wins for nameless line")
+
+  battle = {
+    nextInsert = 1,
+    queue = {
+      { text = "CHARIZARD's\nhit with recoil!" },
+    },
+  }
+  truthy(Cues.tagSelfDamage(battle, battle.queue[1].text), "tags recoil")
+  eq(battle.queue[1].arFieldCue.side, "player", "recoil without Enemy is player")
+
+  battle = {
+    nextInsert = 1,
+    queue = {
+      { text = "Enemy RHYDON\nkept going and\ncrashed!" },
+    },
+  }
+  truthy(Cues.tagSelfDamage(battle, battle.queue[1].text), "tags crash")
+  eq(battle.queue[1].arFieldCue.side, "enemy", "Enemy prefix is the foe")
+  eq(Cues.isSelfDamageText("PIKACHU\nis confused!"), false,
+    "confused announcement is not a self-hit")
+
+  battle = {
+    nextInsert = 1,
+    queue = {
+      { text = "PIKACHU\nfainted!" },
+    },
+  }
+  truthy(Cues.tagFaint(battle, battle.queue[1].text), "tags player faint")
+  eq(battle.queue[1].arFieldCue.kind, "faint", "faint cue kind")
+  eq(battle.queue[1].arFieldCue.side, "player", "player faint has no Enemy prefix")
+
+  battle = {
+    nextInsert = 1,
+    queue = {
+      { text = "Enemy EKANS\nfainted!" },
+    },
+  }
+  truthy(Cues.tagFaint(battle, battle.queue[1].text), "tags foe faint")
+  eq(battle.queue[1].arFieldCue.side, "enemy", "Enemy faint uses foe side")
+  eq(Cues.tagFaint(battle, "A critical hit!"), false, "non-faint text is ignored")
 end
 
 function tests.world_space_projectiles()
@@ -517,6 +601,10 @@ function tests.world_space_projectiles()
   eq(Projectiles.status(session, "player", { moveType = "GRASS" }).style,
     "status", "status move gets orbit effect")
   eq(Projectiles.heal(session, "player").style, "heal", "healing effect available")
+  eq(Projectiles.selfHit(session, "player").style, "bonk",
+    "self-hit paints a bonk burst on the user")
+  eq(Projectiles.faint(session, "enemy").style, "puff",
+    "faint paints a dust puff on the fallen mon")
   Projectiles.clear(session)
 
   local flamethrower = Projectiles.move(session, "player", {
@@ -666,10 +754,11 @@ function tests.sprite_cast_and_animation()
   truthy(player.py ~= player.basePy, "idle pose bobs vertically")
 
   enemy:play("faint")
-  for _ = 1, 40 do
+  for _ = 1, 55 do
     Cast.tick(session, 1 / 60)
   end
   truthy(enemy._faintDone, "faint animation completes")
+  truthy(enemy.hidden, "fainted sprite hides after the collapse")
 end
 
 function tests.switch_and_capture_choreography()
@@ -891,13 +980,15 @@ function tests.parks_overworld_follower_during_field()
 end
 
 function tests.status_auras_follow_field_mons()
-  local calls = { sparks = 0, ice = 0, bubbles = 0 }
+  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0 }
   local prevLove = love
   love = {
     graphics = {
       setColor = function() end,
       setLineWidth = function() end,
       line = function() calls.sparks = calls.sparks + 1 end,
+      rectangle = function() calls.zs = calls.zs + 1 end,
+      arc = function() calls.swirl = calls.swirl + 1 end,
       circle = function(mode)
         if mode == "fill" then
           calls.ice = calls.ice + 1
@@ -922,17 +1013,26 @@ function tests.status_auras_follow_field_mons()
   truthy(calls.sparks > 0, "paralysis paints spark ticks")
   truthy(calls.ice > 0, "freeze paints ice shell")
 
-  calls.sparks, calls.ice, calls.bubbles = 0, 0, 0
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl = 0, 0, 0, 0, 0
   battle.player.mon.status = "PSN"
   battle.enemy.mon.status = "TOX"
   Projectiles.drawStatusAuras(session, battle, 0, 0)
   truthy(calls.bubbles > 0, "poison paints rising bubbles")
 
-  battle.player.mon.status = nil
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl = 0, 0, 0, 0, 0
+  battle.player.mon.status = "SLP"
   battle.enemy.mon.status = nil
-  calls.sparks, calls.ice, calls.bubbles = 0, 0, 0
+  battle.enemy.confusedTurns = 3
   Projectiles.drawStatusAuras(session, battle, 0, 0)
-  eq(calls.sparks + calls.ice + calls.bubbles, 0, "healthy mons have no status aura")
+  truthy(calls.zs > 0, "sleep paints rising Zs")
+  truthy(calls.swirl > 0, "confusion paints circling birds")
+
+  battle.player.mon.status = nil
+  battle.enemy.confusedTurns = nil
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl = 0, 0, 0, 0, 0
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl, 0,
+    "healthy mons have no status aura")
   love = prevLove
 end
 
@@ -982,6 +1082,126 @@ function tests.world_view_maps_to_ui_canvas()
   -- A point 40px right of world center lands 40px right of UI center.
   ux = select(1, Coords.worldViewToUi(200, 144, ren))
   eq(ux, 120, "world offset preserves screen delta when scales match")
+end
+
+function tests.field_sprite_style_aliases()
+  eq(Sprites.normalizeSpriteStyle("GSC"), "followers", "GSC → followers")
+  eq(Sprites.normalizeSpriteStyle("HGSS"), "pokemmo", "HGSS → pokemmo")
+  eq(Sprites.normalizeSpriteStyle("POKEDEX"), "pokedex", "POKEDEX")
+  eq(Sprites.normalizeSpriteStyle("followers"), "followers", "wilds followers")
+end
+
+function tests.field_sprite_style_auto_without_wilds()
+  local mod = {
+    options = {
+      get = function(_, key)
+        if key == "field_sprites" then
+          return "AUTO"
+        end
+      end,
+    },
+  }
+  eq(Sprites.fieldSpriteStyle(mod), "followers", "AUTO defaults to GSC followers")
+end
+
+function tests.field_sprite_style_auto_matches_wilds()
+  local mod = {
+    options = {
+      get = function(_, key)
+        if key == "field_sprites" then
+          return "AUTO"
+        end
+      end,
+    },
+    find = function(_, id)
+      if id == "overworld_wild_spawns" then
+        return {
+          exports = {
+            spriteStyle = function()
+              return "pokemmo"
+            end,
+          },
+        }
+      end
+    end,
+  }
+  eq(Sprites.fieldSpriteStyle(mod), "pokemmo", "AUTO follows Wilds Sprite Style")
+end
+
+function tests.field_sprite_style_explicit_hgss()
+  local mod = {
+    options = {
+      get = function(_, key)
+        if key == "field_sprites" then
+          return "HGSS"
+        end
+      end,
+    },
+    find = function()
+      return {
+        exports = {
+          spriteStyle = function()
+            return "followers"
+          end,
+        },
+      }
+    end,
+  }
+  eq(Sprites.fieldSpriteStyle(mod), "pokemmo", "explicit HGSS wins over Wilds")
+end
+
+function tests.resolve_sheet_uses_pokepc_export()
+  local mod = {
+    options = {
+      get = function()
+        return "GSC"
+      end,
+    },
+    find = function(_, id)
+      if id == "PokePCFollowers_VoxelMerge" then
+        return {
+          exports = {
+            assetPath = function(species)
+              return "/tmp/fake_follower_" .. tostring(species) .. ".png"
+            end,
+          },
+        }
+      end
+    end,
+  }
+  local sheet = Sprites.resolveSheet(mod, nil, "CHARMANDER")
+  truthy(sheet and sheet.image, "PokePC export supplies a sheet")
+  eq(sheet.image, "/tmp/fake_follower_CHARMANDER.png", "PokePC path")
+  eq(sheet.frames, 6, "GSC sheets walk")
+end
+
+function tests.resolve_sheet_prefers_wilds_export()
+  local mod = {
+    options = {
+      get = function()
+        return "HGSS"
+      end,
+    },
+    find = function(_, id)
+      if id == "overworld_wild_spawns" then
+        return {
+          exports = {
+            resolveFollowerSprite = function(opts)
+              return {
+                image = "/wilds/" .. tostring(opts.style) .. "/" .. tostring(opts.species) .. ".png",
+                frames = 6,
+                walker = true,
+                providerId = "pokemmo",
+              }
+            end,
+          },
+        }
+      end
+    end,
+  }
+  local sheet = Sprites.resolveSheet(mod, nil, "PIKACHU")
+  eq(sheet.image, "/wilds/pokemmo/PIKACHU.png", "Wilds resolver used for HGSS")
+  eq(sheet.providerId, "pokemmo", "provider id kept")
 end
 
 local count = 0

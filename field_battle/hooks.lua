@@ -380,6 +380,45 @@ function Hooks.install(FBV, mod)
             BattleState._arFbvUpdate20 = true
             BattleState._arFbvUpdate = true
         end
+
+        -- Confusion / recoil / crash lines → self-hit field cue.
+        local function wrapSelfHitSay(methodName)
+            local guard = "_arFbvSelfHit_" .. methodName
+            if type(BattleState[methodName]) ~= "function" or BattleState[guard] then
+                return
+            end
+            local orig = BattleState[methodName]
+            BattleState[methodName] = function(self, text, ...)
+                local a, b, c = orig(self, text, ...)
+                if isFieldBattle(self) and FBV.Cues then
+                    if type(FBV.Cues.tagSelfDamage) == "function" then
+                        pcall(FBV.Cues.tagSelfDamage, self, text)
+                    end
+                    if type(FBV.Cues.tagFaint) == "function" then
+                        pcall(FBV.Cues.tagFaint, self, text)
+                    end
+                end
+                return a, b, c
+            end
+            BattleState[guard] = true
+        end
+        wrapSelfHitSay("sayNext")
+        wrapSelfHitSay("sayNextAuto")
+
+        if type(BattleState.statusInterrupt) == "function"
+            and not BattleState._arFbvSelfHitInterrupt then
+            local origInterrupt = BattleState.statusInterrupt
+            function BattleState:statusInterrupt(user, ...)
+                local interrupted = origInterrupt(self, user, ...)
+                if interrupted and isFieldBattle(self) and user
+                    and FBV.Cues and type(FBV.Cues.tagSelfDamage) == "function" then
+                    pcall(FBV.Cues.tagSelfDamage, self, "hurt itself",
+                        user.isPlayer and "player" or "enemy")
+                end
+                return interrupted
+            end
+            BattleState._arFbvSelfHitInterrupt = true
+        end
     end
 
     -- ---- Overlay / visibility hooks ----

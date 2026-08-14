@@ -2,7 +2,8 @@
 --
 -- Physical attacks step in toward the foe (or jump over cover); specials
 -- cast in place with attacker→foe projectiles. Hits may knock the target
--- back one cell. Cue dedupe prevents double-steps when multiple battle
+-- back one cell. Self-hits (confusion / recoil / crash) stumble in place.
+-- Cue dedupe prevents double-steps when multiple battle
 -- events fire for the same move beat.
 
 local Cues = {}
@@ -193,8 +194,35 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     return true
   end
 
-  if kind == "faint" then
+  if kind == "selfhit" then
+    -- Confusion / recoil / crash: the user damages itself. Stumble in place
+    -- with a bonk burst — never knock away from the foe.
+    if type(nudgeCamera) == "function" and battle then
+      nudgeCamera(battle, side, 0.22)
+    end
+    local Audio = session._deps and session._deps.Audio
+    if Audio and type(Audio.playHit) == "function" then
+      pcall(Audio.playHit, battle or session._battle, opts.typeMult)
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.selfHit) == "function" then
+      Projectiles.selfHit(session, side)
+    end
     if type(ent.play) == "function" then
+      ent:play("selfhit")
+    end
+    return true
+  end
+
+  if kind == "faint" then
+    if type(nudgeCamera) == "function" and battle then
+      nudgeCamera(battle, side, 0.28)
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.faint) == "function" then
+      Projectiles.faint(session, side)
+    end
+    if type(ent.play) == "function" and not ent._fainting then
       ent:play("faint")
     end
     return true
@@ -224,7 +252,13 @@ function Cues.shouldSkipEvent(session, side, kind)
   if kind == "hit" and last == "hit" then
     return true
   end
+  if kind == "selfhit" and last == "selfhit" then
+    return true
+  end
   if kind == "status" and last == "status" then
+    return true
+  end
+  if kind == "faint" and last == "faint" then
     return true
   end
   return false
@@ -243,6 +277,101 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
     moveType = cue.moveType,
     moveId = cue.moveId,
   })
+end
+
+local function flattenText(text)
+  return tostring(text or ""):lower():gsub("\n", " "):gsub("%s+", " ")
+end
+
+function Cues.isSelfDamageText(text)
+  local lower = flattenText(text)
+  if lower:find("hurt itself", 1, true) then
+    return true
+  end
+  if lower:find("hit with recoil", 1, true) then
+    return true
+  end
+  if lower:find("kept going and", 1, true) and lower:find("crashed", 1, true) then
+    return true
+  end
+  return false
+end
+
+local function inferSelfDamageSide(battle, text)
+  local raw = tostring(text or "")
+  local lower = flattenText(raw)
+  if lower:find("hurt itself", 1, true) then
+    local q = battle and battle.queue
+    local idx = tonumber(battle and battle.nextInsert) or (q and #q) or 0
+    for i = idx - 1, math.max(1, idx - 4), -1 do
+      local prev = q and q[i]
+      local t = flattenText(prev and prev.text)
+      if t:find("is confused!", 1, true) then
+        if t:find("enemy ", 1, true) then
+          return "enemy"
+        end
+        return "player"
+      end
+    end
+    return nil
+  end
+  if raw:find("Enemy ", 1, true) then
+    return "enemy"
+  end
+  return "player"
+end
+
+--- Tag the latest (or nearby) queue row as a self-damage field cue.
+-- `sideHint` wins when the line has no name ("It hurt itself...").
+function Cues.tagSelfDamage(battle, text, sideHint)
+  if type(battle) ~= "table" then
+    return false
+  end
+  local q = battle.queue
+  if type(q) ~= "table" then
+    return false
+  end
+  local function rowMatches(row)
+    return row and type(row.text) == "string" and Cues.isSelfDamageText(row.text)
+  end
+  local item = q[battle.nextInsert]
+  if not rowMatches(item) then
+    item = nil
+    local start = tonumber(battle.nextInsert) or #q
+    for i = start, math.max(1, start - 4), -1 do
+      if rowMatches(q[i]) then
+        item = q[i]
+        break
+      end
+    end
+  end
+  if not item then
+    return false
+  end
+  local side = sideHint or inferSelfDamageSide(battle, item.text)
+  if side ~= "player" and side ~= "enemy" then
+    return false
+  end
+  item.arFieldCue = { side = side, kind = "selfhit" }
+  return true
+end
+
+--- Tag the latest queue row when a mon faints.
+function Cues.tagFaint(battle, text)
+  if type(battle) ~= "table" or type(text) ~= "string" then
+    return false
+  end
+  local lower = flattenText(text)
+  if not lower:find("fainted!", 1, true) then
+    return false
+  end
+  local item = battle.queue and battle.queue[battle.nextInsert]
+  if type(item) ~= "table" then
+    return false
+  end
+  local side = tostring(text):find("Enemy ", 1, true) and "enemy" or "player"
+  item.arFieldCue = { side = side, kind = "faint" }
+  return true
 end
 
 --- Finish delayed attack returns to home cell.

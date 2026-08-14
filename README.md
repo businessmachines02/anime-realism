@@ -131,8 +131,11 @@ remain on their normal presentation path.
 - Switches use recall/send-out scale animations. Capture throws and special-move
   projectiles are overworld entities, so they stay aligned with the active
   world camera.
-- `PokePCFollowers_VoxelMerge` or `FOLLOWERS_EX` supplies the preferred
-  overworld sheets. A visible placeholder is used if no follower art is found.
+- `PokePCFollowers_VoxelMerge`, `FOLLOWERS_EX`, or **Wilds of Kanto** supplies
+  overworld sheets. **FIELD SPRITES** picks the set: `AUTO` matches Wilds'
+  Sprite Style when that mod is loaded, otherwise GSC followers. `GSC` /
+  `HGSS` / `POKEDEX` force a pack. A visible placeholder is used if no art is
+  found.
 - Hybrid voxel mode is preserved: the voxelized map remains active while the
   Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
   suppresses classic/Stadium battle chrome and duplicate staged arenas; Stadium
@@ -155,6 +158,7 @@ remain on their normal presentation path.
 | **GENERIC LVL UP** | On | Generic level-up text (EXP-gain dialogue is always hidden) |
 | **ANIME MOVES** | On | Trainer-style move callouts for you & trainers (not wild) |
 | **BATTLE STAGE** | AUTO | `FIELD` enables wild/trainer overworld presentation; `AUTO`/`STADIUM` keep their existing presentation |
+| **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` = Poke Followers / Crystal Clear; `HGSS` = Wilds HGSS / PokeMMO; `POKEDEX` = Wilds Pokédex |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **CALLOUT STYLE** | AUTO | Flavor tone for callouts (`AUTO` / `BOLD` / `TRICKY` / `SHOWY`) |
 | **CALLOUT BUFFS** | On | Apply foe EVADE/DEF (and counter DEF drop) from callouts — quietly, no rose/fell spam |

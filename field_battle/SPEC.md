@@ -22,7 +22,9 @@ Pixels are presentation only; **pad cells are truth**.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, wave, drain, status, heal,
    and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
-   PSN auras tint field sprites. Move / hit SFX play from field cues
+   PSN / SLP / confusion auras tint field sprites. Confusion self-hits,
+   recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
+   sink, and puff before despawn. Move / hit SFX play from field cues
    (`audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
    the session so nothing doubles. Engine anim rows still advance for timing.
 7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind).
@@ -168,7 +170,7 @@ anim/lerp use the present clock.
 ```lua
 item.arFieldCue = {
   side = "player"|"enemy",
-  kind = "dodge"|"cover"|"brace"|"attack"|"status"|"hit",
+  kind = "dodge"|"cover"|"brace"|"attack"|"status"|"hit"|"selfhit"|"faint",
   category = "physical"|"special"|nil,  -- for attack / hit
   moveType = string|nil,
   moveId = string|nil,
@@ -186,6 +188,8 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
 | hit | knockback chance (phys > special) | `hit` |
+| selfhit | stay | `selfhit` + bonk burst (confusion / recoil / crash) |
+| faint | stay | stagger, sink/shrink + dust puff, then despawn |
 
 ## Grid rules
 
@@ -263,3 +267,9 @@ Props draw as **chunky 2.5D voxel cubes** — never a painted floor wash, never 
 - [x] No second `begin` remount mid-intro
 - [x] Present clock never gates on `waitingUI` / stack top / `current.auto`
 - [x] Compat gates OverworldBattle only (never force 3D-BTL off)
+
+## Sprite packs
+
+Option `field_sprites` (`AUTO` / `GSC` / `HGSS` / `POKEDEX`) selects battler
+art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is loaded,
+otherwise GSC follower sheets (`PokePCFollowers` / Wilds `poke_followers`).

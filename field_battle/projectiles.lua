@@ -5,7 +5,8 @@
 -- Kept off ow.entities: Dramatic Shape's voxel pass wedges on nil sprites.
 --
 -- Movepool: named Gen1 moves + type defaults pick style / glitz. Persistent
--- PAR / FRZ / PSN auras are drawn around live field sprites each frame.
+-- PAR / FRZ / PSN / SLP / confusion auras are drawn around live field
+-- sprites each frame.
 
 local Coords = require("coords")
 
@@ -145,6 +146,8 @@ local STATUS_AURA = {
   FRZ = { color = { 0.55, 0.90, 1.00 }, kind = "ice" },
   PSN = { color = { 0.70, 0.32, 0.82 }, kind = "bubbles" },
   TOX = { color = { 0.55, 0.16, 0.70 }, kind = "bubbles" },
+  SLP = { color = { 0.72, 0.78, 0.96 }, kind = "zs" },
+  CNF = { color = { 0.95, 0.78, 0.22 }, kind = "swirl" },
 }
 
 local function center(session, ent)
@@ -527,6 +530,24 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("line", x, y, 6 + t * 4)
   elseif p.style == "contact" then
     drawContact(g, p, x, y, t)
+  elseif p.style == "bonk" then
+    -- Self-hit: impact ring plus popping stars.
+    local r = 3 + math.sin(t * math.pi) * 8
+    g.setColor(c[1], c[2], c[3], 0.55 * (1 - t))
+    g.setLineWidth(2)
+    g.circle("line", x, y, r)
+    g.setColor(1, 1, 1, 0.85 * (1 - t))
+    g.circle("fill", x, y, 1.8)
+    for i = 1, 4 do
+      local a = i * math.pi * 0.5 + t * 2.2
+      local dist = 4 + t * 8
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist - t * 4
+      g.setColor(c[1], c[2], c[3], 0.9 * (1 - t))
+      g.setLineWidth(1)
+      g.line(px - 2.2, py, px + 2.2, py)
+      g.line(px, py - 2.2, px, py + 2.2)
+    end
   elseif p.style == "status" then
     for i = 1, 5 do
       local a = t * math.pi * 4 + i * math.pi * 0.4
@@ -540,6 +561,24 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(c[1], c[2], c[3], 1 - t)
       g.rectangle("fill", x + hx - 1, y + 7 - t * 18, 3, 7)
       g.rectangle("fill", x + hx - 3, y + 9 - t * 18, 7, 3)
+    end
+  elseif p.style == "puff" then
+    -- Faint dust: rising wisps + a settling ring.
+    local fade = 1 - t
+    g.setColor(c[1], c[2], c[3], 0.28 * fade)
+    g.circle("fill", x, y + 2, 5 + t * 7)
+    g.setColor(c[1], c[2], c[3], 0.7 * fade)
+    g.setLineWidth(1)
+    g.circle("line", x, y + 2, 4 + t * 9)
+    for i = 1, 5 do
+      local a = i * 1.256 + t * 1.4
+      local dist = 3 + t * 9
+      local px = x + math.cos(a) * dist
+      local py = y + 3 - t * 12 + math.sin(a * 2) * 1.5
+      g.setColor(c[1], c[2], c[3], 0.55 * fade)
+      g.circle("fill", px, py, 2.2 - t * 1.2)
+      g.setColor(1, 1, 1, 0.25 * fade)
+      g.circle("fill", px - 0.4, py - 0.6, 0.7)
     end
   end
 end
@@ -585,6 +624,43 @@ local function drawStatusAura(g, x, y, status, phase)
       g.circle("line", px, py, rad)
       g.setColor(1, 1, 1, 0.35 * (1 - drift))
       g.circle("fill", px - 0.5, py - 0.5, 0.6)
+    end
+  elseif aura.kind == "zs" then
+    -- Rising Z's over a sleeping mon.
+    for i = 1, 2 do
+      local drift = (phase * 0.35 + i * 0.5) % 1
+      local scale = 0.7 + i * 0.35
+      local px = x + 5 + i * 2 + math.sin(phase + i) * 1.2
+      local py = y - 4 - drift * 10
+      local a = 0.25 + 0.55 * (1 - drift)
+      g.setColor(c[1], c[2], c[3], a)
+      local w, h = 4 * scale, 5 * scale
+      g.rectangle("fill", px, py, w, 1.2)
+      g.rectangle("fill", px, py + h, w, 1.2)
+      if g.polygon then
+        g.polygon("fill",
+          px + w, py + 1.2,
+          px + w - 1, py + 1.2,
+          px + 1, py + h,
+          px, py + h)
+      end
+    end
+  elseif aura.kind == "swirl" then
+    -- Circling "birds" / stars around a confused mon.
+    for i = 1, 3 do
+      local a = phase * 4.2 + i * (math.pi * 2 / 3)
+      local r = 7.5
+      local px = x + math.cos(a) * r
+      local py = y - 6 + math.sin(a) * 3.2
+      local flash = 0.45 + 0.45 * math.abs(math.sin(phase * 6 + i))
+      g.setColor(c[1], c[2], c[3], flash)
+      if g.arc then
+        g.arc("line", px, py, 2.2, a - 0.9, a + 0.9)
+      else
+        g.circle("line", px, py, 2.2)
+      end
+      g.setColor(1, 0.95, 0.55, flash * 0.7)
+      g.circle("fill", px, py, 0.8)
     end
   end
 end
@@ -693,7 +769,12 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
     local ent = item.ent
     local mon = item.battler and item.battler.mon
     local status = mon and mon.status
-    if ent and not ent.hidden and not ent._removed and status and STATUS_AURA[status] then
+    local confused = item.battler and tonumber(item.battler.confusedTurns)
+    if confused and confused <= 0 then
+      confused = nil
+    end
+    if ent and not ent.hidden and not ent._removed and not ent._fainting
+        and ((status and STATUS_AURA[status]) or confused) then
       local wx, wy = center(session, ent)
       if wx then
         local x = wx - camX
@@ -701,7 +782,12 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
         if type(mapFn) == "function" then
           x, y = mapFn(x, y)
         end
-        drawStatusAura(g, x, y, status, phase)
+        if status and STATUS_AURA[status] then
+          drawStatusAura(g, x, y, status, phase)
+        end
+        if confused then
+          drawStatusAura(g, x, y, "CNF", phase)
+        end
       end
     end
   end
@@ -895,6 +981,34 @@ function Projectiles.heal(session, side)
     duration = 0.52,
     arc = 0,
     color = { 0.34, 0.92, 0.48 },
+  })
+end
+
+function Projectiles.selfHit(session, side)
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then return nil end
+  return spawn(session, {
+    kind = "effect",
+    style = "bonk",
+    sx = x, sy = y - 2, ex = x, ey = y - 2,
+    duration = 0.34,
+    arc = 0,
+    color = { 1.00, 0.62, 0.28 },
+  })
+end
+
+function Projectiles.faint(session, side)
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then return nil end
+  return spawn(session, {
+    kind = "effect",
+    style = "puff",
+    sx = x, sy = y + 2, ex = x, ey = y + 2,
+    duration = 0.52,
+    arc = 0,
+    color = { 0.82, 0.78, 0.70 },
   })
 end
 
