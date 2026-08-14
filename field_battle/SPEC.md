@@ -26,8 +26,8 @@ Pixels are presentation only; **pad cells are truth**.
    shadow (Night Shade), seed (Leech Seed), surf (tidal wall), razor (leaf blades),
    swift (flying stars), icebolt (Ice Beam), power burst (high-BP hits), and capture
    effects — named Gen1 moves pick glitz. Earthquake pops Dig-like dirt bursts on
-   random pad tiles. Persistent PAR / FRZ /
-   PSN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
+   random pad tiles.    Persistent PAR / FRZ /
+   PSN / BRN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
    grassy sprout on `battler.leechSeeded` mons. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
    sink, and puff before despawn. Switch recalls (and trainer-side faints) fire a

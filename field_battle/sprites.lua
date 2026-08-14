@@ -761,6 +761,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     -- Major status lightly flavors the idle pose (freeze stills, para jitters).
     local battler = self._battleBattler
     local status = battler and battler.mon and battler.mon.status
+    if type(status) == "string" then
+      status = status:upper()
+    end
     local confused = battler and tonumber(battler.confusedTurns)
     if confused and confused <= 0 then
       confused = nil
@@ -775,6 +778,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       bobSpeed = bobSpeed * 0.45
     elseif status == "PAR" then
       bobSpeed = bobSpeed * 1.35
+    elseif status == "BRN" then
+      bobSpeed = bobSpeed * 1.22
     elseif status == "PSN" or status == "TOX" then
       bobAmp = bobAmp * 0.85
     elseif confused then
@@ -789,6 +794,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     elseif status == "PAR" then
       local jitter = math.sin((self.bobT or 0) * 17) * 1.1
       ox = ox + jitter
+    elseif status == "BRN" then
+      ox = ox + math.sin((self.bobT or 0) * 13) * 0.45
+      oy = oy + math.abs(math.sin((self.bobT or 0) * 11)) * 0.7
     elseif status == "FRZ" then
       oy = oy + 1
     elseif status == "SLP" then

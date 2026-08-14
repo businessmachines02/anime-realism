@@ -5,7 +5,7 @@
 -- Kept off ow.entities: Dramatic Shape's voxel pass wedges on nil sprites.
 --
 -- Movepool: named Gen1 moves + type defaults pick style / glitz. Persistent
--- PAR / FRZ / PSN / SLP / confusion auras are drawn around live field
+-- PAR / FRZ / PSN / BRN / SLP / confusion auras are drawn around live field
 -- sprites each frame.
 
 local Coords = require("coords")
@@ -195,6 +195,7 @@ local STATUS_AURA = {
   FRZ = { color = { 0.55, 0.90, 1.00 }, kind = "ice" },
   PSN = { color = { 0.70, 0.32, 0.82 }, kind = "bubbles" },
   TOX = { color = { 0.55, 0.16, 0.70 }, kind = "bubbles" },
+  BRN = { color = { 1.00, 0.42, 0.10 }, kind = "flame" },
   SLP = { color = { 0.72, 0.78, 0.96 }, kind = "zs" },
   CNF = { color = { 0.95, 0.78, 0.22 }, kind = "swirl" },
   LEECH = { color = { 0.28, 0.72, 0.24 }, kind = "seed" },
@@ -1690,6 +1691,31 @@ local function drawStatusAura(g, x, y, status, phase)
       g.setColor(1, 1, 1, 0.35 * (1 - drift))
       g.circle("fill", px - 0.5, py - 0.5, 0.6)
     end
+  elseif aura.kind == "flame" then
+    -- Rising ember tongues around a burned mon (poison-bubbles analog).
+    for i = 1, 4 do
+      local drift = (phase * 0.72 + i * 0.28) % 1
+      local sway = math.sin(phase * 8 + i * 2.1) * 1.5
+      local px = x + math.sin(phase * 1.7 + i * 1.9) * 5.6 + sway
+      local py = y + 5 - drift * 16
+      local h = 3.4 + (i % 2) * 1.3
+      local w = 1.5 + (1 - drift) * 0.55
+      local a = 0.30 + 0.55 * (1 - drift)
+      g.setColor(c[1], c[2] * 0.42, 0.04, a * 0.55)
+      if g.polygon then
+        g.polygon("fill",
+          px, py - h,
+          px + w, py + 1,
+          px, py + 2.2,
+          px - w, py + 1)
+      else
+        g.circle("fill", px, py, w + 0.4)
+      end
+      g.setColor(1.00, 0.78, 0.22, a)
+      g.circle("fill", px, py + 0.3, 1.15)
+      g.setColor(1, 1, 1, a * 0.5)
+      g.circle("fill", px, py, 0.45)
+    end
   elseif aura.kind == "zs" then
     -- Rising Z's over a sleeping mon.
     for i = 1, 2 do
@@ -1841,6 +1867,9 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
     local ent = item.ent
     local mon = item.battler and item.battler.mon
     local status = mon and mon.status
+    if type(status) == "string" then
+      status = status:upper()
+    end
     local confused = item.battler and tonumber(item.battler.confusedTurns)
     if confused and confused <= 0 then
       confused = nil

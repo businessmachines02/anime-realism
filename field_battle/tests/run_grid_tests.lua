@@ -1762,7 +1762,7 @@ function tests.parks_overworld_follower_during_field()
 end
 
 function tests.status_auras_follow_field_mons()
-  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0, seed = 0 }
+  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0, seed = 0, flame = 0 }
   local prevLove = love
   love = {
     graphics = {
@@ -1787,7 +1787,10 @@ function tests.status_auras_follow_field_mons()
           calls.bubbles = calls.bubbles + 1
         end
       end,
-      polygon = function() calls.ice = calls.ice + 1 end,
+      polygon = function()
+        calls.ice = calls.ice + 1
+        calls.flame = calls.flame + 1
+      end,
     },
     timer = { getTime = function() return 1.25 end },
   }
@@ -1818,8 +1821,16 @@ function tests.status_auras_follow_field_mons()
   truthy(calls.zs > 0, "sleep paints rising Zs")
   truthy(calls.swirl > 0, "confusion paints circling birds")
 
-  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed =
-      0, 0, 0, 0, 0, 0
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame =
+      0, 0, 0, 0, 0, 0, 0
+  battle.player.mon.status = "BRN"
+  battle.enemy.confusedTurns = nil
+  battle.enemy.leechSeeded = nil
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.flame > 0, "burn paints rising ember tongues")
+
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame =
+      0, 0, 0, 0, 0, 0, 0
   battle.player.mon.status = nil
   battle.enemy.confusedTurns = nil
   battle.enemy.leechSeeded = true
@@ -1829,10 +1840,11 @@ function tests.status_auras_follow_field_mons()
   battle.player.mon.status = nil
   battle.enemy.confusedTurns = nil
   battle.enemy.leechSeeded = nil
-  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed =
-      0, 0, 0, 0, 0, 0
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame =
+      0, 0, 0, 0, 0, 0, 0
   Projectiles.drawStatusAuras(session, battle, 0, 0)
-  eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl + calls.seed, 0,
+  eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl
+      + calls.seed + calls.flame, 0,
     "healthy mons have no status aura")
   love = prevLove
 end
