@@ -167,7 +167,7 @@ function tests.read_only_walkable_envelope()
   for _, world in ipairs({ { 13, 12 }, { 12, 9 }, { 11, 8 }, { 15, 11 } }) do
     local u, v = Coords.worldToPad(envelope.pad, world[1], world[2])
     truthy(not envelope.walkable[Coords.key(u, v)],
-      "blocked terrain/entity excluded from envelope")
+      "blocked terrain/entity excluded from land envelope")
   end
 
   local arena = Arena.generate(nil, plan, 123, envelope)
@@ -175,7 +175,56 @@ function tests.read_only_walkable_envelope()
   eq(grid.sizeU, 8, "grid adopts surveyed width")
   eq(grid.sizeV, 5, "grid adopts surveyed height")
   local wu, wv = Coords.worldToPad(envelope.pad, 13, 12)
-  truthy(not Grid.isFree(grid, wu, wv), "movement rejects surveyed water")
+  truthy(envelope.water[Coords.key(wu, wv)], "water cells stay in the water mask")
+  truthy(grid.water[Coords.key(wu, wv)], "grid keeps surveyed water")
+  truthy(not Grid.isFree(grid, wu, wv), "anonymous movement rejects water")
+  truthy(not Grid.isFree(grid, wu, wv, "landmon", { canSwim = false }),
+    "non-Water mons stay off water")
+  truthy(Grid.isFree(grid, wu, wv, "squirtle", { canSwim = true }),
+    "Water-type mons may enter surveyed water")
+end
+
+function tests.water_types_may_step_onto_water()
+  local plan = Layout.plan(10, 10, 14, 10)
+  local map = {
+    inBounds = function() return true end,
+    isWaterCell = function(_, x, y)
+      return x == 12 and y == 10
+    end,
+    isWalkableCell = function(_, x, y)
+      return not (x == 12 and y == 10)
+    end,
+    isGrassCell = function() return false end,
+    warpAtCell = function() return nil end,
+  }
+  local envelope = Survey.build(map, plan, {})
+  local grid = Grid.build(Arena.generate(nil, plan, 1, envelope), plan)
+  local landU, landV = Coords.worldToPad(envelope.pad, 11, 10)
+  local waterU, waterV = Coords.worldToPad(envelope.pad, 12, 10)
+  truthy(Grid.isFree(grid, landU, landV), "land cell is free")
+  truthy(Grid.isWater(grid, waterU, waterV), "target is water")
+
+  local fire = {
+    id = "charmander", padU = landU, padV = landV, canSwim = false,
+  }
+  Grid.occupy(grid, fire.id, landU, landV)
+  truthy(not Grid.step(grid, fire, waterU - landU, waterV - landV),
+    "Fire mon cannot step onto water")
+
+  local waterMon = {
+    id = "squirtle", padU = landU, padV = landV, canSwim = true,
+  }
+  Grid.release(grid, fire.id)
+  Grid.occupy(grid, waterMon.id, landU, landV)
+  truthy(Grid.step(grid, waterMon, waterU - landU, waterV - landV),
+    "Water mon can step onto water")
+  eq(waterMon.padU, waterU, "water mon occupies water pad u")
+  eq(waterMon.padV, waterV, "water mon occupies water pad v")
+
+  truthy(Sprites.isWaterType({ curTypes = { "WATER" } }), "curTypes WATER")
+  truthy(Sprites.isWaterType({ curTypes = { "WATER", "FLYING" } }), "dual Water")
+  truthy(not Sprites.isWaterType({ curTypes = { "FIRE" } }), "Fire is not Water")
+  truthy(Sprites.isWaterType({ def = { types = { "WATER" } } }), "def.types WATER")
 end
 
 function tests.survey_relocates_mons_off_buildings()

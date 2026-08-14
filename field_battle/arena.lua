@@ -282,6 +282,7 @@ function Arena.generate(battle, plan, seed, envelope)
         gridRect = rect,
         pad = layout,
         walkable = envelope and envelope.walkable or nil,
+        water = envelope and envelope.water or nil,
         coverSlots = (#coverSlots > 0) and coverSlots or nil,
         overlay = (#overlay > 0) and overlay or nil,
         grass = grass,

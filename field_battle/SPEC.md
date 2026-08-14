@@ -13,9 +13,11 @@ Pixels are presentation only; **pad cells are truth**.
 
 1. Stay on the flat map — transparent `BattleState`, `bgMode == "world"`, `BG_WORLD_DIM = 0`, no wipe / white return. Overworld weather (`weather_fx`) keeps using the live sky on these world-backed fights.
 2. **The true overworld map is inviolable.** FIELD never writes map tiles. A
-   bounded, one-time, read-only walkability survey excludes water, warps,
-   blocked cells, and unrelated entities. The fight stays on the **live map**;
-   themed props are session overlays only. Free-roam **VOXEL** keeps drawing.
+   bounded, one-time, read-only walkability survey excludes warps, blocked
+   cells, and unrelated entities. Land walkables are open to every mon; surveyed
+   **water** cells are open only to Water-type mons (swim sprite while there).
+   The fight stays on the **live map**; themed props are session overlays only.
+   Free-roam **VOXEL** keeps drawing.
 3. **Pad cell is authoritative** in Live. `px/py` follow `padToPx(u,v)` plus presentation offsets only. Never derive occupancy from pixels.
 4. Player mon deferred until lead / send-out; stages onto player home pad cell.
 5. Callouts tag `arFieldCue`; FIELD plays pad steps when that row becomes `battle.current`. Physical vs special motion rules apply.
@@ -194,9 +196,11 @@ One-shot via `item._arFieldCueDone`. Engine `move_used` / `damage_dealt` are fal
 ## Grid rules
 
 - Survey envelope is normally 8×5 around the tight 4×3 opening formation.
-- Occupancy: one battler per walkable pad cell; surveyed and prop cells block.
+- Occupancy: one battler per legal pad cell; surveyed and prop cells block.
+  Water cells are legal only for Water-type battlers (`canSwim`).
 - Idle wander is stepwise and bounded within two cells of home; positions
-  persist between turns instead of snapping back.
+  persist between turns instead of snapping back. Water-types may wander onto
+  adjacent water and switch to their swim sheet while there.
 - Trainers on fixed edge pad cells; not tracked for combat steps.
 
 ## Battle initiation (`Lifecycle.begin`)

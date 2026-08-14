@@ -1112,7 +1112,7 @@ function Lifecycle.onTurnStarted(battle)
         end
         -- Free-tile positions persist across turns. Only repair a cell that fell
         -- outside the surveyed envelope (for example after a compatibility swap).
-        if ent.padU ~= nil and not Grid.inEnvelope(session.grid, ent.padU, ent.padV)
+        if ent.padU ~= nil and not Grid.inEnvelope(session.grid, ent.padU, ent.padV, ent)
             and ent.homePadU ~= nil then
             Grid.setPad(session.grid, ent, ent.homePadU, ent.homePadV)
             ent._wanderCD = 2.5

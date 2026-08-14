@@ -260,7 +260,7 @@ local function wildsPackPath(mod, game, species, style, shiny)
   return nil
 end
 
-local function wildsExportSheet(mod, game, species, style, shiny)
+local function wildsExportSheet(mod, game, species, style, shiny, surface)
   local wilds = findHandle(mod, "overworld_wild_spawns")
   local ex = wilds and wilds.exports
   if not (ex and type(ex.resolveFollowerSprite) == "function") then
@@ -271,7 +271,7 @@ local function wildsExportSheet(mod, game, species, style, shiny)
     shiny = shiny == true,
     style = style,
     game = game,
-    surface = "land",
+    surface = surface or "land",
     role = "field_battle",
   }
   -- AUTO with Wilds present: omit style so Wilds uses its own Sprite Style.
@@ -288,15 +288,69 @@ local function wildsExportSheet(mod, game, species, style, shiny)
       frameWidth = def.frameWidth,
       frameHeight = def.frameHeight,
       providerId = def.providerId,
+      surface = surface or "land",
     }
   end
   return nil
 end
 
-function Sprites.resolveSheet(mod, game, species, battler)
+function Sprites.isWaterType(battler, game, species)
+  local types = battler and battler.curTypes
+  if (not types or #types == 0) and battler and battler.def then
+    types = battler.def.types
+  end
+  if (not types or #types == 0) and battler and battler.mon then
+    local mon = battler.mon
+    if mon.type1 or mon.type2 then
+      types = { mon.type1, mon.type2 }
+    else
+      types = mon.types
+    end
+  end
+  if (not types or #types == 0) and game and species then
+    local data = game.data
+    local poke = data and (data.pokemon or data.species)
+    local def = poke and poke[species]
+    types = def and def.types
+  end
+  for i = 1, #(types or {}) do
+    if tostring(types[i] or ""):upper() == "WATER" then
+      return true
+    end
+  end
+  return false
+end
+
+local function swimPackPath(mod, game, species, shiny)
+  local dex = speciesDex(game, species)
+  if not dex then
+    return nil
+  end
+  local root = wildsRoot(mod)
+  if not root then
+    return nil
+  end
+  local nnn = string.format("%03d", dex)
+  local variant = shiny and "shiny" or "normal"
+  local candidates = {
+    root .. "/assets/generated/true_size/swimming/" .. nnn .. "-" .. variant .. ".png",
+    root .. "/assets/generated/true_size/swimming/" .. nnn .. "-normal.png",
+    root .. "/assets/generated/true_size/levitate/" .. nnn .. "-" .. variant .. ".png",
+    root .. "/assets/generated/true_size/levitate/" .. nnn .. "-normal.png",
+  }
+  for i = 1, #candidates do
+    if fileExists(candidates[i]) then
+      return candidates[i]
+    end
+  end
+  return nil
+end
+
+function Sprites.resolveSheet(mod, game, species, battler, surface)
   if not species then
     return nil
   end
+  surface = surface or "land"
   local explicit = "AUTO"
   if mod and mod.options and type(mod.options.get) == "function" then
     explicit = tostring(mod.options:get("field_sprites") or "AUTO"):upper()
@@ -305,9 +359,17 @@ function Sprites.resolveSheet(mod, game, species, battler)
   local shiny = isShinyBattler(battler)
   local wildsStyle = (explicit == "AUTO") and nil or style
 
-  local sheet = wildsExportSheet(mod, game, species, wildsStyle, shiny)
+  local sheet = wildsExportSheet(mod, game, species, wildsStyle, shiny, surface)
   if sheet then
     return sheet
+  end
+
+  if surface == "water" or surface == "surfing" then
+    local swimPath = swimPackPath(mod, game, species, shiny)
+    if swimPath then
+      return sheetFromPath(swimPath, 6, true)
+    end
+    -- No swim art: fall through to land sheet (mon may still stand in water).
   end
 
   if style == "pokemmo" or style == "pokedex" then
@@ -620,6 +682,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._walkFrame = (math.floor(self._walkT * 8) % 2)
       end
     end
+    -- Land ↔ swim sheet when a Water-type steps onto surveyed water.
+    Sprites.syncSurface(self)
     -- Always advance bob — independent of battle queue / waitFrames / UI.
     -- Major status lightly flavors the idle pose (freeze stills, para jitters).
     local battler = self._battleBattler
@@ -880,12 +944,136 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   return ent
 end
 
-local function finalizeEntity(ent, battler, barLift)
+local function finalizeEntity(ent, battler, barLift, mod, game, species)
   if ent then
     ent._battleBattler = battler
     ent._fieldBarLift = barLift or 8
+    ent._spriteMod = mod
+    ent._spriteGame = game
+    ent._spriteSpecies = species
+    ent._fieldSurface = "land"
+    ent.canSwim = Sprites.isWaterType(battler, game, species) and true or false
   end
   return ent
+end
+
+local function sheetToVisual(sheet, side)
+  if not (sheet and sheet.image) then
+    return nil
+  end
+  local img = loadImage(sheet.image)
+  if not img then
+    return nil
+  end
+  local okSR, SpriteRenderer = pcall(require, "src.render.SpriteRenderer")
+  if okSR and type(SpriteRenderer.new) == "function" then
+    local def = {
+      id = "ar_fbv_" .. tostring(side) .. "_" .. tostring(sheet.surface or "land"),
+      image = sheet.image,
+      frames = tonumber(sheet.frames) or 6,
+      walker = not (sheet.walker == false),
+      trueColor = not (sheet.trueColor == false),
+      frameWidth = sheet.frameWidth,
+      frameHeight = sheet.frameHeight,
+    }
+    local okSp, sprite = pcall(SpriteRenderer.new, def, def.id)
+    if okSp and sprite then
+      local fh = tonumber(sheet.frameHeight)
+      local lift = (fh and fh >= 24 and 24)
+        or ((img:getWidth() >= 32 and img:getHeight() >= 192) and 24 or 8)
+      return { sprite = sprite, drawer = nil, lift = lift }
+    end
+  end
+  local iw, ih = img:getDimensions()
+  local fw, fh = 16, 16
+  if tonumber(sheet.frameWidth) and tonumber(sheet.frameHeight) then
+    fw, fh = tonumber(sheet.frameWidth), tonumber(sheet.frameHeight)
+  elseif iw >= 32 and ih >= 192 then
+    fw, fh = 32, 32
+  end
+  local quads = {}
+  local n = math.max(1, math.floor(ih / fh))
+  for f = 0, n - 1 do
+    quads[f] = love.graphics.newQuad(0, f * fh, fw, fh, iw, ih)
+  end
+  local drawer = function(ent, camX, camY)
+    if ent.hidden or ent._removed then
+      return
+    end
+    local face = ent.facing or "down"
+    local walk = (ent._walkFrame or 0) == 1
+    local frame = walk and (WALK[face] or STAND[face] or 0) or (STAND[face] or 0)
+    if frame >= n then
+      frame = STAND[face] or 0
+    end
+    if frame >= n then
+      frame = 0
+    end
+    local x = ent.px - camX - (fw - 16) / 2
+    local y = ent.py - camY - 4 - (fh - 16)
+    local flip = face == "right"
+    love.graphics.setColor(1, 1, 1, 1)
+    if flip then
+      love.graphics.draw(img, quads[frame], x + fw, y, 0, -1, 1)
+    else
+      love.graphics.draw(img, quads[frame], x, y)
+    end
+  end
+  return { sprite = nil, drawer = drawer, lift = (fh >= 32) and 24 or 8 }
+end
+
+function Sprites.applySurface(ent, surface)
+  if not ent then
+    return false
+  end
+  surface = surface or "land"
+  if ent._fieldSurface == surface and (ent.sprite or ent.drawer) then
+    return false
+  end
+  local cache = ent._surfaceVisuals
+  if type(cache) ~= "table" then
+    cache = {}
+    ent._surfaceVisuals = cache
+  end
+  local visual = cache[surface]
+  if not visual then
+    local sheet = Sprites.resolveSheet(
+      ent._spriteMod, ent._spriteGame, ent._spriteSpecies,
+      ent._battleBattler, surface)
+    visual = sheetToVisual(sheet, ent.side or "player")
+    if not visual and surface ~= "land" then
+      -- Keep land art if swim sheet missing.
+      visual = cache.land
+    end
+    if visual then
+      cache[surface] = visual
+    end
+  end
+  if not visual then
+    return false
+  end
+  ent.sprite = visual.sprite
+  ent.drawer = visual.drawer
+  if visual.lift then
+    ent._fieldBarLift = visual.lift
+  end
+  ent._fieldSurface = surface
+  return true
+end
+
+function Sprites.syncSurface(ent)
+  if not ent or ent._removed or ent.hidden then
+    return
+  end
+  local g = ent._grid
+  local onWater = false
+  if g and type(g.water) == "table" and ent.padU ~= nil and Coords then
+    onWater = g.water[Coords.key(ent.padU, ent.padV)] == true
+  end
+  local want = (onWater and ent.canSwim) and "water" or "land"
+  if want ~= ent._fieldSurface then
+    Sprites.applySurface(ent, want)
+  end
 end
 
 local function picDrawer(img, scale)
@@ -919,78 +1107,20 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
       local iw = (img.getWidth and img:getWidth()) or 56
       local scale = (iw > 40) and 0.55 or 1
       return finalizeEntity(buildEntity(side, cellX, cellY, facing, species,
-        picDrawer(img, scale), "stadium", grid), battler, 12)
+        picDrawer(img, scale), "stadium", grid), battler, 12, mod, game, species)
     end
   end
 
-  local sheet = Sprites.resolveSheet(mod, game, species, battler)
-  local path = sheet and sheet.image
-  if path then
-    -- Warm Assets cache (and confirm the sheet loads).
-    local img = loadImage(path)
-    if img then
-      local okSR, SpriteRenderer = pcall(require, "src.render.SpriteRenderer")
-      if okSR and type(SpriteRenderer.new) == "function" then
-        local def = {
-          id = "ar_fbv_" .. tostring(side),
-          image = path,
-          frames = (sheet and tonumber(sheet.frames)) or 6,
-          walker = not (sheet and sheet.walker == false),
-          trueColor = not (sheet and sheet.trueColor == false),
-          frameWidth = sheet and sheet.frameWidth,
-          frameHeight = sheet and sheet.frameHeight,
-        }
-        local okSp, sprite = pcall(SpriteRenderer.new, def, def.id)
-        if okSp and sprite then
-          local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
-          ent.sprite = sprite
-          local fh = tonumber(sheet and sheet.frameHeight)
-          local lift = (fh and fh >= 24 and 24)
-            or ((img:getWidth() >= 32 and img:getHeight() >= 192) and 24 or 8)
-          return finalizeEntity(ent, battler, lift)
-        end
-      end
-      -- Manual sheet blit if SpriteRenderer fails.
-      local iw, ih = img:getDimensions()
-      local fw, fh = 16, 16
-      if sheet and tonumber(sheet.frameWidth) and tonumber(sheet.frameHeight) then
-        fw, fh = tonumber(sheet.frameWidth), tonumber(sheet.frameHeight)
-      elseif iw >= 32 and ih >= 192 then
-        fw, fh = 32, 32
-      end
-      local quads = {}
-      local n = math.max(1, math.floor(ih / fh))
-      for f = 0, n - 1 do
-        quads[f] = love.graphics.newQuad(0, f * fh, fw, fh, iw, ih)
-      end
-      local drawer = function(ent, camX, camY)
-        if ent.hidden or ent._removed then
-          return
-        end
-        local face = ent.facing or "down"
-        local walk = (ent._walkFrame or 0) == 1
-        local frame = walk and (WALK[face] or STAND[face] or 0) or (STAND[face] or 0)
-        if frame >= n then
-          frame = STAND[face] or 0
-        end
-        if frame >= n then
-          frame = 0
-        end
-        local x = ent.px - camX - (fw - 16) / 2
-        local y = ent.py - camY - 4 - (fh - 16)
-        local flip = face == "right"
-        love.graphics.setColor(1, 1, 1, 1)
-        if flip then
-          love.graphics.draw(img, quads[frame], x + fw, y, 0, -1, 1)
-        else
-          love.graphics.draw(img, quads[frame], x, y)
-        end
-      end
-      return finalizeEntity(
-        buildEntity(side, cellX, cellY, facing, species, drawer, "ow", grid),
-        battler, (fh >= 32) and 24 or 8)
-    end
-    print("[anime_realism] field_battle: Assets.image failed for " .. tostring(path))
+  local sheet = Sprites.resolveSheet(mod, game, species, battler, "land")
+  local visual = sheetToVisual(sheet, side)
+  if visual then
+    local ent = buildEntity(side, cellX, cellY, facing, species, visual.drawer, "ow", grid)
+    ent.sprite = visual.sprite
+    ent._surfaceVisuals = { land = visual }
+    return finalizeEntity(ent, battler, visual.lift, mod, game, species)
+  end
+  if sheet and sheet.image then
+    print("[anime_realism] field_battle: Assets.image failed for " .. tostring(sheet.image))
   else
     print("[anime_realism] field_battle: no follower path for " .. tostring(species))
   end
@@ -1005,7 +1135,7 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
           and tostring(npc._pokepcFollowerSpecies):upper() == tostring(species):upper() then
         local ent = buildEntity(side, cellX, cellY, facing, species, nil, "ow", grid)
         ent.sprite = npc.sprite
-        return finalizeEntity(ent, battler, 24)
+        return finalizeEntity(ent, battler, 24, mod, game, species)
       end
     end
   end
@@ -1026,7 +1156,7 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
   end
   return finalizeEntity(
     buildEntity(side, cellX, cellY, facing, species, drawer, "placeholder", grid),
-    battler, 8)
+    battler, 8, mod, game, species)
 end
 
 return Sprites

@@ -69,6 +69,7 @@ function Grid.build(arenaEdits, plan)
     props = {},
     home = {},
     walkable = arenaEdits and arenaEdits.walkable or nil,
+    water = arenaEdits and arenaEdits.water or nil,
     worldRect = rect,
     sx = sx,
     sy = sy,
@@ -156,9 +157,17 @@ function Grid.isBlocked(g, u, v)
   return g and g.blocked[key(u, v)] == true
 end
 
-function Grid.inEnvelope(g, u, v)
+function Grid.isWater(g, u, v)
+  return g and type(g.water) == "table" and g.water[key(u, v)] == true
+end
+
+--- True when this pad cell is legal for `ent` (or land-only when ent is nil).
+function Grid.canTraverse(g, u, v, ent)
   if not Grid.inPad(g, u, v) then
     return false
+  end
+  if Grid.isWater(g, u, v) then
+    return ent and ent.canSwim == true
   end
   if g and type(g.walkable) == "table" then
     return g.walkable[key(u, v)] == true
@@ -166,8 +175,12 @@ function Grid.inEnvelope(g, u, v)
   return true
 end
 
-function Grid.isFree(g, u, v, ignoreId)
-  if not Grid.inEnvelope(g, u, v) or Grid.isBlocked(g, u, v) then
+function Grid.inEnvelope(g, u, v, ent)
+  return Grid.canTraverse(g, u, v, ent)
+end
+
+function Grid.isFree(g, u, v, ignoreId, ent)
+  if not Grid.canTraverse(g, u, v, ent) or Grid.isBlocked(g, u, v) then
     return false
   end
   local who = g.occ[key(u, v)]
@@ -221,7 +234,7 @@ function Grid.step(g, ent, du, dv)
   local u, v = padOf(g, ent)
   u = u + (du or 0)
   v = v + (dv or 0)
-  if not Grid.isFree(g, u, v, ent.id) then
+  if not Grid.isFree(g, u, v, ent.id, ent) then
     return false
   end
   Grid.occupy(g, ent.id, u, v)
@@ -231,7 +244,7 @@ function Grid.step(g, ent, du, dv)
 end
 
 function Grid.setPad(g, ent, u, v)
-  if not (g and ent and Grid.isFree(g, u, v, ent.id)) then
+  if not (g and ent and Grid.isFree(g, u, v, ent.id, ent)) then
     return false
   end
   Grid.occupy(g, ent.id, u, v)
@@ -392,7 +405,7 @@ function Grid.seekCover(g, ent, foeEnt)
     local pu, pv = p.u, p.v
     for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
       local u, v = pu + d[1], pv + d[2]
-      if Grid.isFree(g, u, v, ent.id) then
+      if Grid.isFree(g, u, v, ent.id, ent) then
         local score = -math.abs(u - eu) - math.abs(v - ev)
         if fu then
           -- Prefer far on u from the foe, and prop between us and foe.

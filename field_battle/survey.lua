@@ -1,11 +1,12 @@
 -- Field battle — read-only walkability survey for bounded free-tile combat.
 --
 -- Queried once at staging from the live map (collision / water / warps /
--- blocking entities). Results become grid.blocked. The map itself is never
--- edited. EXTRA_U / HALF_V grow the fight envelope beyond the tight opening
--- so mons can expand out from adjacent start tiles during the battle.
+-- blocking entities). Land walkables become grid.walkable; water cells become
+-- grid.water (Water-type mons only). The map itself is never edited.
+-- EXTRA_U / HALF_V grow the fight envelope beyond the tight opening so mons
+-- can expand out from adjacent start tiles during the battle.
 --
--- Formation cells from Layout.plan are snapped onto surveyed walkable tiles;
+-- Formation cells from Layout.plan are snapped onto surveyed land tiles;
 -- illegal homes are never force-marked walkable (that parked mons under roofs).
 
 local Coords = require("coords")
@@ -59,19 +60,39 @@ function Survey.envelopeRect(plan, extraU, halfV)
   return { minX = minX, maxX = maxX, minY = minY, maxY = maxY }
 end
 
+local function cellInBounds(map, wx, wy)
+  local inBounds = callBool(map, "inBounds", wx, wy)
+  return inBounds ~= false
+end
+
+local function cellIsWarp(map, wx, wy)
+  return hasAt(map, "warpAtCell", wx, wy)
+      or callBool(map, "isWarpTileCell", wx, wy) == true
+end
+
+--- Surfable water inside the fight envelope (Water-type mons only).
+function Survey.cellWater(map, wx, wy)
+  if not map then
+    return false
+  end
+  if not cellInBounds(map, wx, wy) or cellIsWarp(map, wx, wy) then
+    return false
+  end
+  return callBool(map, "isWaterCell", wx, wy) == true
+end
+
+--- Land walkable (excludes water). Used for formation homes + non-Water mons.
 function Survey.cellAllowed(map, wx, wy)
   if not map then
     return true
   end
-  local inBounds = callBool(map, "inBounds", wx, wy)
-  if inBounds == false then
+  if not cellInBounds(map, wx, wy) then
     return false
   end
-  if callBool(map, "isWaterCell", wx, wy) == true then
+  if Survey.cellWater(map, wx, wy) then
     return false
   end
-  if hasAt(map, "warpAtCell", wx, wy)
-      or callBool(map, "isWarpTileCell", wx, wy) == true then
+  if cellIsWarp(map, wx, wy) then
     return false
   end
   local walkable = callBool(map, "isWalkableCell", wx, wy)
@@ -180,6 +201,7 @@ local function buildOnce(map, plan, opts, extraU, halfV)
   local rect = Survey.envelopeRect(plan, extraU, halfV)
   local layout = Coords.layoutPad(rect, plan and plan.sx or 1, plan and plan.sy or 0)
   local walkable = {}
+  local water = {}
   local occupiedWorld = {}
   for _, pool in ipairs(opts.entityPools or {}) do
     for i = 1, #(pool or {}) do
@@ -194,8 +216,12 @@ local function buildOnce(map, plan, opts, extraU, halfV)
     for v = 0, layout.sizeV - 1 do
       local wx, wy = Coords.padToWorld(layout, u, v)
       local worldKey = tostring(wx) .. ":" .. tostring(wy)
-      if not occupiedWorld[worldKey] and Survey.cellAllowed(map, wx, wy) then
-        walkable[Coords.key(u, v)] = true
+      if not occupiedWorld[worldKey] then
+        if Survey.cellWater(map, wx, wy) then
+          water[Coords.key(u, v)] = true
+        elseif Survey.cellAllowed(map, wx, wy) then
+          walkable[Coords.key(u, v)] = true
+        end
       end
     end
   end
@@ -244,6 +270,7 @@ local function buildOnce(map, plan, opts, extraU, halfV)
     gridRect = rect,
     pad = layout,
     walkable = walkable,
+    water = water,
     readOnly = true,
     walkCount = walkCount,
   }
