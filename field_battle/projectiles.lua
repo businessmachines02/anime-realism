@@ -37,7 +37,12 @@ local TYPE_COLORS = {
 local MOVE_FX = {
   HYPER_BEAM = { style = "beam", glitz = "thick", duration = 0.46 },
   SOLARBEAM = { style = "beam", glitz = "thick", duration = 0.44, color = { 0.72, 1.00, 0.42 } },
-  ICE_BEAM = { style = "beam", glitz = "frost" },
+  ICE_BEAM = {
+    style = "beam",
+    glitz = "icebolt",
+    duration = 0.36,
+    color = { 0.48, 0.86, 1.00 },
+  },
   AURORA_BEAM = { style = "beam", glitz = "frost" },
   PSYBEAM = { style = "beam", glitz = "psy" },
   THUNDERBOLT = { style = "beam", glitz = "bolt", duration = 0.36 },
@@ -101,7 +106,7 @@ local MOVE_FX = {
   ACID = { style = "stream", glitz = "blob" },
   SMOG = { style = "area", glitz = "blob", radius = 16 },
   TOXIC = { style = "status", glitz = "blob", duration = 0.55 },
-  EARTHQUAKE = { style = "area", glitz = "quake", radius = 22 },
+  EARTHQUAKE = { style = "area", glitz = "quake", radius = 22, duration = 0.62 },
   FISSURE = { style = "area", glitz = "quake", radius = 18 },
   ROCK_SLIDE = { style = "area", glitz = "rock", radius = 20 },
   ROCK_THROW = { style = "orb", glitz = "rock", arc = 16 },
@@ -456,9 +461,12 @@ local function drawLightningBolt(g, ox, oy, x, y, age, c, opts)
   local flash = 0.55 + 0.45 * math.abs(math.sin((age or 0) * 34))
   local pts, nx, ny = lightningPoints(ox, oy, x, y, age, opts.segs or 8, opts.amp or 5.5)
   local cr, cg, cb = c[1] or 1, c[2] or 0.88, c[3] or 0.18
+  local core = opts.coreColor or { 1, 1, 0.92 }
+  local forkCore = opts.forkCore or { 1, 1, 0.9 }
+  local mid = opts.midColor or { cr, cg * 0.95, cb * 0.55 }
   strokePoly(g, pts, opts.glow or 5.5, cr, cg, cb, 0.28 * fade * flash)
-  strokePoly(g, pts, opts.mid or 2.8, cr, cg * 0.95, cb * 0.55, 0.8 * fade)
-  strokePoly(g, pts, opts.core or 1.3, 1, 1, 0.92, 0.95 * fade * flash)
+  strokePoly(g, pts, opts.mid or 2.8, mid[1], mid[2], mid[3], 0.8 * fade)
+  strokePoly(g, pts, opts.core or 1.3, core[1], core[2], core[3], 0.95 * fade * flash)
   -- Forks / side branches.
   local forks = opts.forks
   if forks == nil then
@@ -472,9 +480,11 @@ local function drawLightningBolt(g, ox, oy, x, y, age, c, opts)
       local fx = px + nx * fork * side + math.sin((age or 0) * 44 + i) * 1.4
       local fy = py + ny * fork * side + math.cos((age or 0) * 37 + i) * 1.2
       strokePoly(g, { { px, py }, { fx, fy } }, 2.2, cr, cg, cb, 0.45 * fade)
-      strokePoly(g, { { px, py }, { fx, fy } }, 1.0, 1, 1, 0.9, 0.7 * fade * flash)
+      strokePoly(g, { { px, py }, { fx, fy } }, 1.0,
+        forkCore[1], forkCore[2], forkCore[3], 0.7 * fade * flash)
     end
   end
+  return pts, nx, ny
 end
 
 --- Serpentine shadow body points from caster → tip (Night Shade).
@@ -1189,15 +1199,19 @@ local function drawEffect(g, p, x, y, ox, oy)
 
   if p.style == "beam" then
     local thick = (glitz == "thick") and 7 or 5
-    if glitz == "bolt" then
+    if glitz == "bolt" or glitz == "icebolt" then
+      local ice = glitz == "icebolt"
       drawLightningBolt(g, ox, oy, x, y, p.age, c, {
         fade = 1 - t * 0.25,
         segs = 9,
-        amp = 6.2,
-        glow = 5.5,
-        mid = 2.8,
-        core = 1.35,
-        forkLen = 5.5,
+        amp = ice and 4.4 or 6.2,
+        glow = ice and 5.0 or 5.5,
+        mid = ice and 2.6 or 2.8,
+        core = ice and 1.5 or 1.35,
+        forkLen = ice and 4.8 or 5.5,
+        coreColor = ice and { 0.86, 0.97, 1.00 } or { 1, 1, 0.92 },
+        forkCore = ice and { 0.78, 0.94, 1.00 } or { 1, 1, 0.9 },
+        midColor = ice and { 0.55, 0.88, 1.00 } or nil,
       })
       -- Secondary delayed fork for a multi-bolt feel.
       local midAge = (p.age or 0) + 0.37
@@ -1207,12 +1221,36 @@ local function drawEffect(g, p, x, y, ox, oy)
         my + math.cos(midAge * 10) * 3, midAge, c, {
           fade = 0.55 * (1 - t),
           segs = 5,
-          amp = 4,
-          glow = 3.5,
+          amp = ice and 3.2 or 4,
+          glow = ice and 3.2 or 3.5,
           mid = 1.8,
-          core = 1,
+          core = ice and 1.15 or 1,
           forks = false,
+          coreColor = ice and { 0.86, 0.97, 1.00 } or { 1, 1, 0.92 },
+          midColor = ice and { 0.55, 0.88, 1.00 } or nil,
         })
+      if ice then
+        -- Crisp ice shards along the bolt.
+        for i = 1, 5 do
+          local u = i / 6
+          local px = ox + (x - ox) * u
+          local py = oy + (y - oy) * u
+          local rot = u * 1.4 + (p.age or 0) * 6
+          local scale = 0.7 + (i % 2) * 0.25
+          local ca, sa = math.cos(rot), math.sin(rot)
+          local function pt(lx, ly)
+            return px + (lx * ca - ly * sa) * scale,
+              py + (lx * sa + ly * ca) * scale
+          end
+          local fadeIce = (1 - t * 0.2)
+          g.setColor(c[1], c[2], c[3], 0.85 * fadeIce)
+          g.polygon("fill",
+            pt(0, -2.4), pt(0.9, 0), pt(0, 2.4), pt(-0.9, 0))
+          g.setColor(1, 1, 1, 0.7 * fadeIce)
+          g.polygon("fill",
+            pt(0, -1.1), pt(0.35, 0), pt(0, 0.5), pt(-0.2, -0.15))
+        end
+      end
     else
       g.setColor(c[1], c[2], c[3], 0.34)
       g.setLineWidth(thick)
@@ -1295,10 +1333,14 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.setLineWidth(2)
     g.circle("line", x, y, radius)
     if glitz == "quake" then
-      for i = 1, 3 do
-        local a = t * math.pi * 2 + i * 2.1
-        g.line(x + math.cos(a) * radius * 0.4, y + math.sin(a) * 2,
-          x + math.cos(a) * radius, y + math.sin(a) * 3)
+      g.setColor(0.42, 0.30, 0.14, 0.38 * (1 - t))
+      g.ellipse("fill", x, y + 3, radius, radius * 0.42)
+      for i = 1, 6 do
+        local a = t * math.pi * 2 + i * 1.05
+        g.setColor(c[1], c[2], c[3], 0.85 * (1 - t))
+        g.setLineWidth(2)
+        g.line(x + math.cos(a) * radius * 0.25, y + math.sin(a) * 1.5,
+          x + math.cos(a) * radius, y + math.sin(a) * 3.5)
       end
     elseif glitz == "burst" or glitz == "flash" then
       for i = 1, 6 do
@@ -1713,7 +1755,7 @@ local function spawn(session, spec)
     -- OverworldController queries grass/voxel placement for every entity.
     cellX = math.floor((spec.sx or 0) / 16),
     cellY = math.floor((spec.sy or 0) / 16),
-    age = 0,
+    age = -(spec.delay or 0),
     duration = spec.duration or 0.36,
     hold = spec.hold or 0,
     arc = spec.arc or 8,
@@ -1740,6 +1782,9 @@ local function spawn(session, spec)
   -- camX/camY: world camera. mapFn(wx, wy) → UI pixels when painting overlay.
   function p:draw(camX, camY, mapFn)
     if self._removed or not (love and love.graphics) then
+      return
+    end
+    if (self.age or 0) < 0 then
       return
     end
     local g = love.graphics
@@ -1828,6 +1873,87 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   end
 end
 
+local function rrRange(a, b)
+  local random = (love and love.math and love.math.random) or math.random
+  if b ~= nil then
+    return random(a, b)
+  end
+  if a ~= nil then
+    return random(a)
+  end
+  return random()
+end
+
+--- Random pad cells across the fight envelope (skip the user's tile).
+local function pickPadTiles(session, count, skip)
+  local g = session and session.grid
+  local su = g and g.sizeU or 0
+  local sv = g and g.sizeV or 0
+  local cells = {}
+  if su > 0 and sv > 0 then
+    for u = 0, su - 1 do
+      for v = 0, sv - 1 do
+        local k = tostring(u) .. "," .. tostring(v)
+        if not (skip and skip[k]) then
+          cells[#cells + 1] = { u = u, v = v }
+        end
+      end
+    end
+  end
+  local n = math.min(count, #cells)
+  local picked = {}
+  for _ = 1, n do
+    local idx = rrRange(1, #cells)
+    picked[#picked + 1] = table.remove(cells, idx)
+  end
+  return picked
+end
+
+--- Earthquake: Dig-like dirt bursts on random battlefield tiles.
+local function spawnEarthquakeDigs(session, from)
+  local dirt = { 0.72, 0.55, 0.32 }
+  local skip = {}
+  if from and from.padU ~= nil then
+    skip[tostring(from.padU) .. "," .. tostring(from.padV)] = true
+  end
+  local tiles = pickPadTiles(session, 8, skip)
+  if #tiles == 0 then
+    local tx, ty = center(session, from)
+    if not tx then
+      return
+    end
+    for i = 1, 6 do
+      local ox = (rrRange(0, 4) - 2) * 16
+      local oy = (rrRange(0, 2) - 1) * 16
+      spawn(session, {
+        kind = "effect",
+        style = "dig_burst",
+        sx = tx + ox, sy = ty + oy + 2,
+        ex = tx + ox, ey = ty + oy + 2,
+        duration = 0.40 + (i % 3) * 0.08,
+        delay = (i - 1) * 0.05,
+        arc = 0,
+        color = dirt,
+      })
+    end
+    return
+  end
+  for i = 1, #tiles do
+    local cell = tiles[i]
+    local px, py = Coords.padCenterPx(session.grid, cell.u, cell.v)
+    spawn(session, {
+      kind = "effect",
+      style = "dig_burst",
+      sx = px, sy = py + 2,
+      ex = px, ey = py + 2,
+      duration = 0.40 + (i % 3) * 0.08,
+      delay = (i - 1) * 0.04 + rrRange() * 0.08,
+      arc = 0,
+      color = dirt,
+    })
+  end
+end
+
 --- Paint on the 160×144 battle overlay (world→UI mapped).
 function Projectiles.drawUi(session, battle)
   if not (session and session.live) then
@@ -1912,7 +2038,7 @@ function Projectiles.move(session, side, opts)
 
   if fx.style == "area" or fx.style == "wave" or fx.style == "bolt"
       or fx.style == "spiral" or fx.style == "multi" then
-    return spawn(session, {
+    local p = spawn(session, {
       kind = "effect",
       style = fx.style,
       glitz = fx.glitz,
@@ -1923,6 +2049,10 @@ function Projectiles.move(session, side, opts)
       color = fx.color,
       onDone = opts.onDone,
     })
+    if fx.moveId == "EARTHQUAKE" then
+      spawnEarthquakeDigs(session, from)
+    end
+    return p
   end
 
   if fx.style == "drain" then
@@ -2330,7 +2460,7 @@ function Projectiles.tick(session, dt)
   for i = #list, 1, -1 do
     local p = list[i]
     p.age = (p.age or 0) + (dt or 0)
-    local t = math.min(1, p.age / math.max(0.01, p.duration))
+    local t = math.min(1, math.max(0, p.age) / math.max(0.01, p.duration))
     if p.pinTip then
       -- Recall laser: tip locked on the mon; origin stays at the trainer.
       if p.followSide then

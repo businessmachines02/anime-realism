@@ -1166,6 +1166,13 @@ function tests.world_space_projectiles()
   })
   eq(thunderbolt.style, "beam", "thunderbolt is a beam")
   eq(thunderbolt.glitz, "bolt", "thunderbolt uses lightning bolt glitz")
+  local iceBeam = Projectiles.move(session, "player", {
+    moveType = "ICE", moveId = "ICE_BEAM",
+  })
+  eq(iceBeam.style, "beam", "ice beam is a bolt-style beam")
+  eq(iceBeam.glitz, "icebolt", "ice beam uses ice bolt glitz")
+  eq(iceBeam.color[3], 1.00, "ice beam uses crisp ice blue")
+  truthy(iceBeam.sx < iceBeam.ex, "ice beam travels toward the foe")
   local shock = Projectiles.move(session, "enemy", {
     moveType = "ELECTRIC", moveId = "THUNDERSHOCK",
   })
@@ -1209,6 +1216,19 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "NORMAL", moveId = "SWIFT",
   }), "swift is a travel FX")
+  Projectiles.clear(session)
+  local quake = Projectiles.move(session, "player", {
+    moveType = "GROUND", moveId = "EARTHQUAKE",
+  })
+  eq(quake.style, "area", "earthquake keeps a world-space rumble")
+  eq(quake.glitz, "quake", "earthquake uses quake glitz")
+  local digs = 0
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "dig_burst" then
+      digs = digs + 1
+    end
+  end
+  truthy(digs >= 4, "earthquake pops dig bursts across the pad")
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })
