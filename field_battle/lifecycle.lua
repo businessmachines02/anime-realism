@@ -1341,6 +1341,10 @@ function Lifecycle.tick(battle, dt, deps)
             if not (ent and other) then
                 return
             end
+            -- Don't spin mid soft-step; re-aim once the lerp finishes.
+            if ent._stepTX then
+                return
+            end
             local dx, dy
             if grid and ent.padU ~= nil and other.padU ~= nil then
                 dx, dy = Coords.padDeltaToWorld(grid,
@@ -1355,11 +1359,39 @@ function Lifecycle.tick(battle, dt, deps)
                 ent.facing = dy >= 0 and "down" or "up"
             end
         end
+        local function faceCell(ent, wx, wy)
+            if not ent or ent._stepTX or wx == nil then
+                return
+            end
+            local dx = (wx or 0) - (ent.cellX or 0)
+            local dy = (wy or 0) - (ent.cellY or 0)
+            if math.abs(dx) >= math.abs(dy) then
+                ent.facing = dx >= 0 and "right" or "left"
+            else
+                ent.facing = dy >= 0 and "down" or "up"
+            end
+        end
         if p and e and (not p.anim or p.anim == "idle") then
             faceToward(p, e)
         end
         if e and p and (not e.anim or e.anim == "idle") then
             faceToward(e, p)
+        end
+        -- Engaged trainers watch the duel: prefer facing each other; in wild
+        -- fights the player faces the foe mon / fight mid.
+        if ow then
+            local playerTrainer = ow.player
+            local foeTrainer = session.foe
+            if playerTrainer and foeTrainer then
+                faceToward(playerTrainer, foeTrainer)
+                faceToward(foeTrainer, playerTrainer)
+            elseif playerTrainer then
+                if e and not e._removed then
+                    faceToward(playerTrainer, e)
+                else
+                    faceCell(playerTrainer, session.midX, session.midY)
+                end
+            end
         end
     end
 

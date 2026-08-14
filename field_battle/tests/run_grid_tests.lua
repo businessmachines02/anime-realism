@@ -470,6 +470,61 @@ function tests.nearby_trainers_spectate_and_restore()
   eq(bystander._arFieldSpectator, nil, "flag cleared")
 end
 
+function tests.engaged_trainers_face_each_other()
+  local grid, plan = sampleGrid()
+  local player = {
+    cellX = plan.pCellX, cellY = plan.pCellY,
+    px = plan.pCellX * 16, py = plan.pCellY * 16,
+    padU = grid.home.playerTrainer.u, padV = grid.home.playerTrainer.v,
+    facing = "up",
+  }
+  local foe = {
+    cellX = plan.eCellX, cellY = plan.eCellY,
+    px = plan.eCellX * 16, py = plan.eCellY * 16,
+    padU = grid.home.enemyTrainer.u, padV = grid.home.enemyTrainer.v,
+    facing = "up",
+  }
+  local battle = {
+    game = { overworld = { player = player, camera = { x = 0, y = 0 } } },
+    animPlaying = false,
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    plan = plan,
+    midX = plan.midX,
+    midY = plan.midY,
+    foe = foe,
+    playerMon = {
+      cellX = plan.pMonX, cellY = plan.pMonY,
+      padU = grid.home.player.u, padV = grid.home.player.v,
+      anim = "idle",
+    },
+    enemyMon = {
+      cellX = plan.eMonX, cellY = plan.eMonY,
+      padU = grid.home.enemy.u, padV = grid.home.enemy.v,
+      anim = "idle",
+    },
+    _deps = {
+      Grid = Grid,
+      Cast = { tick = function() end },
+      Cues = {
+        pumpCurrent = function() end,
+        tickReturns = function() end,
+      },
+      Anims = { cache = function() end },
+      Projectiles = { tick = function() end },
+    },
+  }
+  Lifecycle._testBind(battle, session)
+  -- Face-acc fires every 0.15s; drive past one interval.
+  Lifecycle.tick(battle, 0.20, session._deps)
+  eq(player.facing, plan.playerFace, "player trainer faces foe trainer")
+  eq(foe.facing, plan.foeFace, "foe trainer faces player trainer")
+  Lifecycle._testUnbind(battle)
+end
+
 function tests.occupancy_and_movement()
   local grid = sampleGrid()
   eq(grid.sizeU, 4, "tight pad width")
