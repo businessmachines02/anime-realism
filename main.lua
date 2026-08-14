@@ -196,19 +196,6 @@ return function(mod)
                 },
             },
             {
-                -- D-pad compass wash over the field (type tint still applies).
-                key = "react_pad_opacity",
-                type = "choice",
-                label = "REACT PAD ALPHA",
-                default = "75",
-                choices = {
-                    { "100%", "100" },
-                    { "75%",  "75" },
-                    { "50%",  "50" },
-                    { "25%",  "25" },
-                },
-            },
-            {
                 key = "speech_bubbles",
                 type = "toggle",
                 label = "SPEECH BUBBLE",
@@ -358,56 +345,6 @@ return function(mod)
                 return s
             end
             return "THREAT"
-        end
-
-        -- Soft type wash for the D-pad compass (matches field projectile hues).
-        local REACT_PAD_TYPE_COLORS = {
-            NORMAL = { 0.86, 0.86, 0.78 },
-            FIRE = { 1.00, 0.34, 0.12 },
-            WATER = { 0.20, 0.58, 1.00 },
-            ELECTRIC = { 1.00, 0.88, 0.18 },
-            GRASS = { 0.30, 0.82, 0.28 },
-            ICE = { 0.52, 0.90, 1.00 },
-            FIGHTING = { 0.78, 0.28, 0.22 },
-            POISON = { 0.66, 0.30, 0.78 },
-            GROUND = { 0.72, 0.52, 0.28 },
-            FLYING = { 0.62, 0.72, 0.96 },
-            PSYCHIC = { 0.92, 0.34, 0.82 },
-            BUG = { 0.66, 0.78, 0.20 },
-            ROCK = { 0.66, 0.56, 0.34 },
-            GHOST = { 0.52, 0.36, 0.72 },
-            DRAGON = { 0.45, 0.36, 0.88 },
-            DARK = { 0.40, 0.32, 0.28 },
-            STEEL = { 0.72, 0.74, 0.80 },
-            FAIRY = { 0.94, 0.58, 0.78 },
-        }
-
-        local function reactPadOpacity()
-            local n = tonumber(mod.options:get("react_pad_opacity") or "75")
-            if not n then
-                return 0.75
-            end
-            return math.max(0.15, math.min(1, n / 100))
-        end
-
-        local function resolveMoveType(move)
-            if not move then
-                return nil
-            end
-            local t = move.type or move.moveType
-            if type(t) == "table" then
-                t = t.id or t.name or t[1]
-            end
-            t = tostring(t or ""):upper()
-            if t == "" or t == "NIL" or t == "NONE" then
-                return nil
-            end
-            return t
-        end
-
-        local function reactPadTypeRgb(moveType)
-            local key = tostring(moveType or ""):upper()
-            return REACT_PAD_TYPE_COLORS[key] or { 0.90, 0.90, 0.90 }
         end
 
         local function calloutStyle()
@@ -822,6 +759,9 @@ return function(mod)
                 momentumByBattle[battle].enemyMode = "counter"
                 momentumByBattle[battle].enemyBoosted = false
             end
+            -- Battle-owned latches survive hot-reload weak-table resets.
+            battle._arSuppressReactDefer = nil
+            battle._arPickOfferedThisTurn = nil
         end
 
         local function clearBattleMomentum(battle)
@@ -3663,7 +3603,31 @@ return function(mod)
         local MoveEffects = require("src.battle.MoveEffects")
         local Menu = require("src.ui.Menu")
         local EffectRegistry = require("src.battle.EffectRegistry")
-        local origRunDamaging = EffectRegistry.runDamaging
+        -- Capture the engine function once. Hot-reload used to chain wraps so
+        -- finishCalloutPick → origRunDamaging re-entered an OLD wrap that still
+        -- queued REACT! (often with a stale HUD draw closure).
+        local function ensureVanillaRunDamaging()
+            local stored = EffectRegistry._arVanillaRunDamaging
+            -- Ignore a stored value that is actually our previous wrap.
+            if type(stored) == "function"
+                and stored ~= EffectRegistry._arReactRunDamaging then
+                return stored
+            end
+            local erName = "src.battle.EffectRegistry"
+            local live = EffectRegistry
+            package.loaded[erName] = nil
+            local freshOk, fresh = pcall(require, erName)
+            package.loaded[erName] = live
+            local vanilla = (freshOk and type(fresh) == "table" and fresh.runDamaging)
+                or live.runDamaging
+            -- If "fresh" somehow still returned our wrap, keep any prior vanilla.
+            if vanilla == live._arReactRunDamaging and type(stored) == "function" then
+                vanilla = stored
+            end
+            live._arVanillaRunDamaging = vanilla
+            return vanilla
+        end
+        local origRunDamaging = ensureVanillaRunDamaging()
 
         -- Callout pages need a beat so they aren't instant.
         S.CALLOUT_AUTO_DELAY = 55
@@ -6640,13 +6604,14 @@ return function(mod)
                 return
             end
             local state = momentumByBattle[battle]
-            if not state then
-                return
+            if state then
+                state.awaitingPick = nil
+                state.pendingDamage = nil
+                state.pendingFoeReaction = nil
+                state.suppressReactDefer = nil
             end
-            state.awaitingPick = nil
-            state.pendingDamage = nil
-            state.pendingFoeReaction = nil
-            state.suppressReactDefer = nil
+            battle._arSuppressReactDefer = nil
+            -- Keep _arPickOfferedThisTurn until turn_started (resetMomentum).
         end
 
         local function scrubReactPickRows(battle)
@@ -6655,7 +6620,9 @@ return function(mod)
             end
             for i = #battle.queue, 1, -1 do
                 local row = battle.queue[i]
-                if type(row) == "table" and row.ui and row.arReactPick then
+                -- Strip every queued UI row when resolving a react — older hot-reload
+                -- wraps sometimes inserted untagged { ui = ... } REACT menus.
+                if type(row) == "table" and row.ui then
                     table.remove(battle.queue, i)
                 end
             end
@@ -6812,6 +6779,11 @@ return function(mod)
             if playerStatusLocked(battle) then
                 return false
             end
+            -- Battle-owned latches: survive hot-reload weak momentum tables and
+            -- older chained runDamaging wraps that still call shouldOffer.
+            if battle._arPickOfferedThisTurn or battle._arSuppressReactDefer then
+                return false
+            end
             local state = momentumState(battle)
             -- One REACT! per turn. finishCalloutPick → origRunDamaging used to
             -- re-offer under ALWAYS (especially after TAKE COVER soaks the hit).
@@ -6891,6 +6863,9 @@ return function(mod)
             -- cannot queue another REACT! for this same hit.
             state.pickOfferedThisTurn = true
             state.suppressReactDefer = true
+            -- Also on the battle object so hot-reload / chained wraps see it.
+            battle._arPickOfferedThisTurn = true
+            battle._arSuppressReactDefer = true
             state.awaitingPick = nil
             -- Invalidate any leftover REACT ui rows still sitting in the queue.
             state.reactEpoch = (state.reactEpoch or 0) + 1
@@ -7088,8 +7063,6 @@ return function(mod)
                 cancelable = opts.cancelable == true,
                 onPick = opts.onPick,
                 onCancel = opts.onCancel,
-                -- Incoming foe move type tints the D-pad wash (REACT / BRACE).
-                moveType = resolveMoveType({ type = opts.moveType }) or opts.moveType,
                 -- Instant D-pad picks must not fire on the same press that opened
                 -- this modal (or a leftover held direction from the prior menu).
                 _padArmed = not usePad,
@@ -7235,18 +7208,15 @@ return function(mod)
                 local g = love.graphics
 
                 if self.usePad then
-                    -- Simple D-pad compass (white panel, crisp labels) with a
-                    -- light type-colored border accent from the incoming move.
+                    -- Spatial D-pad compass (same language as the FIELD move diamond).
+                    -- Compact bottom panel keeps mons / HP / weather readable above.
                     local function shortLabel(choice)
                         local name = tostring(choice and choice.label or "")
-                        if name == "TAKE COVER" or name == "STAY COVER" then
+                        if name == "TAKE COVER" then
                             return "COVER"
                         end
-                        if name == "ENTRENCH" then
-                            return "LOCK"
-                        end
-                        if name == "COMMIT" then
-                            return "GO"
+                        if name == "STAY COVER" then
+                            return "STAY"
                         end
                         if name == "PHYSICAL" then
                             return "PHYS"
@@ -7254,78 +7224,81 @@ return function(mod)
                         if name == "SPECIAL" then
                             return "SPEC"
                         end
-                        if name == "STATUS" then
-                            return "STAT"
-                        end
-                        if name == "BREAK" then
-                            return "OUT"
-                        end
-                        if name == "HOLD" then
-                            return "HOLD"
-                        end
-                        if name == "EMERGE" then
-                            return "OUT"
-                        end
-                        if name == "STAY" then
-                            return "STAY"
-                        end
-                        if #name > 5 then
-                            return name:sub(1, 5)
-                        end
                         return name
                     end
-                    local preferred = self.choices[self.index]
-                    local hasDown = choiceForDir("down") ~= nil
-                    local hasA = choiceForDir("a") ~= nil
-                    local slots = {
-                        up = { x = 52, y = 92, w = 56, h = 14 },
-                        left = { x = 4, y = 108, w = 56, h = 14 },
-                        right = { x = 100, y = 108, w = 56, h = 14 },
-                        down = { x = 52, y = 124, w = 56, h = 14 },
-                        a = { x = 52, y = 124, w = 56, h = 14 },
-                    }
-                    if hasDown and hasA then
-                        slots.a = { x = 116, y = 92, w = 40, h = 14 }
+                    local function textW(label)
+                        if type(Font.width) == "function" then
+                            return Font.width(label)
+                        end
+                        return #Font.split(label) * 8
                     end
-
-                    local rgb = reactPadTypeRgb(self.moveType)
-                    local alpha = reactPadOpacity()
-                    -- Mostly white so labels stay readable; type only tints a little.
-                    g.setColor(0.97 + rgb[1] * 0.03, 0.97 + rgb[2] * 0.03,
-                        0.97 + rgb[3] * 0.03, alpha)
+                    local preferred = self.choices[self.index]
+                    local slots = {
+                        up = { x = 56, y = 92, w = 48, h = 12 },
+                        left = { x = 8, y = 108, w = 52, h = 12 },
+                        right = { x = 100, y = 108, w = 52, h = 12 },
+                        down = { x = 56, y = 124, w = 48, h = 12 },
+                        a = { x = 56, y = 136, w = 48, h = 11 },
+                    }
+                    -- Cream panel across the lower third only.
+                    g.setColor(0.96, 0.92, 0.82, 0.96)
                     g.rectangle("fill", 0, 78, 160, 66)
-                    g.setColor(rgb[1], rgb[2], rgb[3], 1)
+                    g.setColor(0.10, 0.07, 0.06, 1)
                     g.rectangle("line", 0.5, 78.5, 159, 65)
-                    g.setColor(0, 0, 0, 1)
                     g.rectangle("line", 1.5, 79.5, 157, 63)
-                    Font.draw(self.title or "REACT!", 6, 80)
-                    -- Thin type accent under the title.
-                    g.setColor(rgb[1], rgb[2], rgb[3], 1)
-                    g.rectangle("fill", 6, 90, 40, 2)
-
+                    -- Title + tiny subtitle on one header row.
+                    local title = self.title or "REACT!"
+                    g.setColor(0.08, 0.06, 0.05, 1)
+                    Font.draw(title, 6, 80)
+                    if self.subtitle then
+                        local sub = tostring(self.subtitle)
+                        if #sub > 10 then
+                            sub = sub:sub(1, 9) .. "."
+                        end
+                        g.setColor(0.40, 0.34, 0.28, 1)
+                        local subX = 160 - 6 - math.floor(textW(sub) * 0.75)
+                        g.push()
+                        g.translate(math.max(70, subX), 81)
+                        g.scale(0.75, 0.75)
+                        Font.draw(sub, 0, 0)
+                        g.pop()
+                    end
                     for _, dir in ipairs({ "up", "left", "right", "down", "a" }) do
                         local choice = choiceForDir(dir)
                         local slot = slots[dir]
                         if choice and slot then
                             local selected = preferred == choice
                             local label = shortLabel(choice)
+                            if choice.disabled then
+                                label = "(" .. label .. ")"
+                            end
                             if selected then
-                                g.setColor(0, 0, 0, 1)
-                                g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
-                                g.setColor(rgb[1], rgb[2], rgb[3], 1)
-                                g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
-                                    slot.w - 1, slot.h - 1)
+                                g.setColor(0.16, 0.30, 0.55, 1)
+                            else
+                                g.setColor(0.99, 0.96, 0.88, 1)
+                            end
+                            g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
+                            g.setColor(0.10, 0.08, 0.06, 1)
+                            g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
+                                slot.w - 1, slot.h - 1)
+                            local glyphX = slot.x + 7
+                            local glyphY = slot.y + 6
+                            if dir == "a" then
+                                drawAKey(glyphX, glyphY, not choice.disabled)
+                            else
+                                drawPadArrow(dir, glyphX, glyphY, not choice.disabled)
+                            end
+                            local scale = (#label > 6) and 0.72 or 0.85
+                            if selected then
                                 g.setColor(1, 1, 1, 1)
                             else
-                                g.setColor(1, 1, 1, 1)
-                                g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
-                                g.setColor(0, 0, 0, 1)
-                                g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
-                                    slot.w - 1, slot.h - 1)
+                                g.setColor(0.08, 0.06, 0.05, 1)
                             end
-                            local tw = (#Font.split(label)) * 8
-                            local tx = slot.x + math.max(2, math.floor((slot.w - tw) * 0.5))
-                            Font.draw(label, tx, slot.y + 3)
+                            g.push()
+                            g.translate(slot.x + 14, slot.y + 2)
+                            g.scale(scale, scale)
+                            Font.draw(label, 0, 0)
+                            g.pop()
                         end
                     end
                     g.setColor(1, 1, 1, 1)
@@ -7382,22 +7355,12 @@ return function(mod)
                 finishCalloutPick(battle, me, moveName, "commit", nil)
                 return
             end
-            local incomingType = nil
-            do
-                local st = momentumState(battle)
-                local move = st.pendingDamage and st.pendingDamage.ctx
-                    and st.pendingDamage.ctx.move
-                incomingType = resolveMoveType(move)
-            end
             local function openReactMenu()
                 local pendingMove = nil
                 do
                     local st = momentumState(battle)
                     pendingMove = st.pendingDamage and st.pendingDamage.ctx
                         and st.pendingDamage.ctx.move
-                end
-                if not incomingType then
-                    incomingType = resolveMoveType(pendingMove)
                 end
                 local actions = ReactiveDefense.menuActions(battle, pendingMove)
                 local choices = {}
@@ -7423,7 +7386,6 @@ return function(mod)
                     subtitle = me,
                     index = index,
                     pad = true,
-                    moveType = incomingType,
                     choices = choices,
                     cancelable = false,
                     onPick = function(choice)
@@ -7710,6 +7672,9 @@ return function(mod)
             if not user or user.isPlayer or not target or not target.isPlayer then
                 return false
             end
+            if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn then
+                return false
+            end
             if not shouldOfferCalloutPick(battle, move) then
                 return false
             end
@@ -7784,6 +7749,7 @@ return function(mod)
                 state.awaitingPick = "react"
                 state.pendingDamage = { ctx = ctx, record = record }
                 state.pickOfferedThisTurn = true
+                battle._arPickOfferedThisTurn = true
                 -- Pin the engine's attack anim so finishCalloutPick resumes after it
                 -- (not before endOfTurn). Without this, REACT! landed after the swing.
                 do
@@ -7852,6 +7818,7 @@ return function(mod)
             -- Same-turn COUNTER! waits for dodge-whiff text in wrapBattleSay.
             return result
         end
+        EffectRegistry._arReactRunDamaging = EffectRegistry.runDamaging
 
         local function silentStageDelta(who, stat, delta)
             if not who or not who.stages or not stat or not delta or delta == 0 then
