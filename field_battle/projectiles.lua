@@ -107,7 +107,12 @@ local MOVE_FX = {
   ROCK_THROW = { style = "orb", glitz = "rock", arc = 16 },
   EXPLOSION = { style = "area", glitz = "burst", radius = 28, duration = 0.55 },
   SELFDESTRUCT = { style = "area", glitz = "burst", radius = 26, duration = 0.52 },
-  SWIFT = { style = "multi", glitz = "star", duration = 0.38 },
+  SWIFT = {
+    style = "swift",
+    glitz = "star",
+    duration = 0.52,
+    color = { 1.00, 0.92, 0.42 },
+  },
   TRI_ATTACK = { style = "multi", glitz = "tri", duration = 0.40 },
   NIGHT_SHADE = {
     style = "shadow",
@@ -327,6 +332,7 @@ local TRAVEL_STYLES = {
   bolt = true,
   surf = true,
   razor = true,
+  swift = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -897,6 +903,87 @@ local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Four-point sparkle star (classic Swift).
+local function drawStar(g, px, py, rot, scale, c, alpha)
+  scale = scale or 1
+  alpha = alpha or 1
+  local ca, sa = math.cos(rot), math.sin(rot)
+  local function pt(lx, ly)
+    return px + (lx * ca - ly * sa) * scale,
+      py + (lx * sa + ly * ca) * scale
+  end
+  local x1, y1 = pt(0, -3.2)
+  local x2, y2 = pt(0.85, 0)
+  local x3, y3 = pt(0, 3.2)
+  local x4, y4 = pt(-0.85, 0)
+  local x5, y5 = pt(-3.2, 0)
+  local x6, y6 = pt(0, 0.85)
+  local x7, y7 = pt(3.2, 0)
+  local x8, y8 = pt(0, -0.85)
+  g.setColor(c[1], c[2], c[3], alpha)
+  g.polygon("fill", x1, y1, x2, y2, x3, y3, x4, y4)
+  g.polygon("fill", x5, y5, x6, y6, x7, y7, x8, y8)
+  g.setColor(1, 1, 1, alpha * 0.9)
+  g.circle("fill", px, py, 0.65 * scale)
+end
+
+--- Swift: a swarm of little stars that peel off the caster and fly into the foe.
+local function drawSwiftStars(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local fade = 1
+  if t > 0.84 then
+    fade = 1 - (t - 0.84) / 0.16
+  end
+  local n = 9
+  for i = 1, n do
+    local delay = (i - 1) * 0.055
+    local u = (t - delay) / math.max(0.42, 0.78 - delay * 0.4)
+    if u > 0 and u < 1.12 then
+      local along = math.min(1, u)
+      local side = ((i % 2) * 2 - 1)
+      local spread = (1.8 + (i % 4) * 1.4) * math.sin(along * math.pi)
+      local weave = math.sin(along * math.pi * 2.2 + i * 0.9) * 1.6
+      local px = ox + dx * along + nx * (spread * side + weave)
+      local py = oy + dy * along + ny * (spread * side * 0.45)
+          - math.sin(along * math.pi) * (2.2 + (i % 3))
+      local twinkle = 0.72 + 0.28 * math.abs(math.sin((age or 0) * 18 + i * 2.1))
+      local aStar = fade * (u < 1 and 0.95 or (1.12 - u) / 0.12) * twinkle
+      local scale = (0.55 + (i % 3) * 0.14) * (0.85 + twinkle * 0.25)
+      local rot = (age or 0) * (7 + i * 0.6) + i * 0.8
+      -- Sparkle crumbs behind each star.
+      if along > 0.06 and along < 0.95 then
+        for k = 1, 3 do
+          local back = k * 0.045
+          local bx = ox + dx * math.max(0, along - back)
+              + nx * (spread * side + weave) * 0.7
+          local by = oy + dy * math.max(0, along - back)
+              + ny * (spread * side * 0.45) * 0.7
+          g.setColor(c[1], c[2], c[3], (0.4 - k * 0.1) * aStar)
+          g.circle("fill", bx, by, 0.7 - k * 0.12)
+        end
+      end
+      drawStar(g, px, py, rot, scale, c, aStar)
+    end
+  end
+  -- Little pings as the swarm arrives.
+  if t > 0.62 then
+    local burst = (t - 0.62) / 0.38
+    for i = 1, 6 do
+      local a = i * 1.047 + (age or 0) * 5
+      local dist = burst * (5 + i * 1.2)
+      drawStar(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.5 - burst * 1.5,
+        a, 0.42, c, (0.7 - burst * 0.5) * fade)
+    end
+  end
+end
+
 local function drawMove(g, p, x, y)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "orb"
@@ -1241,6 +1328,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     drawSurfTide(g, x, y, ox, oy, t, p.age, c, p.radius)
   elseif p.style == "razor" then
     drawRazorVolley(g, x, y, ox, oy, t, p.age, c)
+  elseif p.style == "swift" then
+    drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "spiral" then
     if glitz == "psy" then
       drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
@@ -1914,6 +2003,19 @@ function Projectiles.move(session, side, opts)
       sx = sx, sy = sy, ex = ex, ey = ey,
       duration = fx.duration or 0.58,
       arc = 5,
+      color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "swift" then
+    return spawn(session, {
+      kind = "effect",
+      style = "swift",
+      glitz = fx.glitz or "star",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.52,
+      arc = 6,
       color = fx.color,
       onDone = opts.onDone,
     })

@@ -1199,6 +1199,16 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "GRASS", moveId = "RAZOR_LEAF",
   }), "razor leaf is a travel FX")
+  local swift = Projectiles.move(session, "player", {
+    moveType = "NORMAL", moveId = "SWIFT",
+  })
+  eq(swift.style, "swift", "swift uses flying star animation")
+  eq(swift.glitz, "star", "swift uses star glitz")
+  truthy(swift.sx < swift.ex, "swift travels toward the foe")
+  truthy((swift.duration or 0) >= 0.5, "swift holds a longer volley")
+  truthy(Projectiles.isTravelFx({
+    moveType = "NORMAL", moveId = "SWIFT",
+  }), "swift is a travel FX")
   local psychic = Projectiles.move(session, "player", {
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   })

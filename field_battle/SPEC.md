@@ -24,7 +24,7 @@ Pixels are presentation only; **pad cells are truth**.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, aura, wave, drain, status, heal,
    shadow (Night Shade), seed (Leech Seed), surf (tidal wall), razor (leaf blades),
-   power burst (high-BP hits), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
+   swift (flying stars), power burst (high-BP hits), and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
    PSN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
    grassy sprout on `battler.leechSeeded` mons. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
