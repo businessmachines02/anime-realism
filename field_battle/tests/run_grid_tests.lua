@@ -519,6 +519,25 @@ function tests.world_space_projectiles()
   eq(Projectiles.heal(session, "player").style, "heal", "healing effect available")
   Projectiles.clear(session)
 
+  local flamethrower = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "FLAMETHROWER",
+  })
+  eq(flamethrower.style, "stream", "named fire move uses stream glitz")
+  eq(flamethrower.glitz, "flame", "flamethrower paints flame trail")
+  local psychic = Projectiles.move(session, "player", {
+    moveType = "PSYCHIC", moveId = "PSYCHIC",
+  })
+  eq(psychic.style, "spiral", "psychic uses spiral ring")
+  local slash = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "SLASH",
+  })
+  eq(slash.glitz, "slash", "slash contact keeps cut glitz")
+  local bite = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "BITE",
+  })
+  eq(bite.glitz, "bite", "bite contact uses jaw glitz")
+  Projectiles.clear(session)
+
   local resolved = false
   Projectiles.ball(session, {
     shakes = 2,
@@ -869,6 +888,52 @@ function tests.parks_overworld_follower_during_field()
   eq(overworld.entities[2], follower, "follower returns at its original index")
   eq(follower.hidden, false, "restored follower is visible")
   eq(follower._arFieldParked, nil, "park marker is cleared")
+end
+
+function tests.status_auras_follow_field_mons()
+  local calls = { sparks = 0, ice = 0, bubbles = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() calls.sparks = calls.sparks + 1 end,
+      circle = function(mode)
+        if mode == "fill" then
+          calls.ice = calls.ice + 1
+        else
+          calls.bubbles = calls.bubbles + 1
+        end
+      end,
+      polygon = function() calls.ice = calls.ice + 1 end,
+    },
+    timer = { getTime = function() return 1.25 end },
+  }
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32 },
+    enemyMon = { px = 80, py = 32 },
+  }
+  local battle = {
+    player = { mon = { status = "PAR" } },
+    enemy = { mon = { status = "FRZ" } },
+  }
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.sparks > 0, "paralysis paints spark ticks")
+  truthy(calls.ice > 0, "freeze paints ice shell")
+
+  calls.sparks, calls.ice, calls.bubbles = 0, 0, 0
+  battle.player.mon.status = "PSN"
+  battle.enemy.mon.status = "TOX"
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.bubbles > 0, "poison paints rising bubbles")
+
+  battle.player.mon.status = nil
+  battle.enemy.mon.status = nil
+  calls.sparks, calls.ice, calls.bubbles = 0, 0, 0
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  eq(calls.sparks + calls.ice + calls.bubbles, 0, "healthy mons have no status aura")
+  love = prevLove
 end
 
 function tests.field_overlay_draws_projectiles()

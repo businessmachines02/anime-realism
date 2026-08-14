@@ -141,7 +141,10 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent._attackJump = jump and true or nil
       ent._attackStepped = Grid.attackStep(g, ent, foe) == true
       if Projectiles and type(Projectiles.contact) == "function" then
-        Projectiles.contact(session, side, opts)
+        Projectiles.contact(session, side, {
+          moveType = opts.moveType,
+          moveId = opts.moveId,
+        })
       end
       if ent._attackStepped then
         ent._returnAt = now(session) + (jump and 0.56 or 0.48)

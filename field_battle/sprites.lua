@@ -405,9 +405,28 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       end
     end
     -- Always advance bob — independent of battle queue / waitFrames / UI.
-    self.bobT = (self.bobT or 0) + dt * (self.bobSpeed or 5.0)
-    local bob = math.sin(self.bobT) * (self.bobAmp or 3.2)
+    -- Major status lightly flavors the idle pose (freeze stills, para jitters).
+    local status = self._battleBattler and self._battleBattler.mon
+        and self._battleBattler.mon.status
+    local bobAmp = self.bobAmp or 3.2
+    local bobSpeed = self.bobSpeed or 5.0
+    if status == "FRZ" then
+      bobAmp = bobAmp * 0.12
+      bobSpeed = bobSpeed * 0.25
+    elseif status == "PAR" then
+      bobSpeed = bobSpeed * 1.35
+    elseif status == "PSN" or status == "TOX" then
+      bobAmp = bobAmp * 0.85
+    end
+    self.bobT = (self.bobT or 0) + dt * bobSpeed
+    local bob = math.sin(self.bobT) * bobAmp
     local ox, oy = 0, bob
+    if status == "PAR" then
+      local jitter = math.sin((self.bobT or 0) * 17) * 1.1
+      ox = ox + jitter
+    elseif status == "FRZ" then
+      oy = oy + 1
+    end
 
     -- Blend toward a cover prop when Reactive Defense has us hidden.
     local blend = self.coverBlend or 0
