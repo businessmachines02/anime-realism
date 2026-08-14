@@ -45,6 +45,9 @@ function Hooks.install(FBV, mod)
     if Compat and type(Compat.suppressDramaticShape) == "function" then
         pcall(Compat.suppressDramaticShape, FBV, mod)
     end
+    if FBV and FBV.Audio and type(FBV.Audio.installEngineMute) == "function" then
+        pcall(FBV.Audio.installEngineMute)
+    end
     FBV.suppressForeignStages = function()
         if Compat and type(Compat.suppressDramaticShape) == "function" then
             Compat.suppressDramaticShape(FBV, mod)
@@ -638,7 +641,12 @@ function Hooks.install(FBV, mod)
             end
             if not skip then
                 local cat = moveCategory(ev.move)
-                pcall(FBV.react, battle, side, "hit", { category = cat })
+                pcall(FBV.react, battle, side, "hit", {
+                    category = cat,
+                    typeMult = ev.typeMult,
+                    moveId = ev.move and ev.move.id,
+                    moveType = ev.move and ev.move.type,
+                })
             end
         end)
 

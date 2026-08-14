@@ -196,6 +196,19 @@ return function(mod)
                 },
             },
             {
+                -- D-pad compass wash over the field (type tint still applies).
+                key = "react_pad_opacity",
+                type = "choice",
+                label = "REACT PAD ALPHA",
+                default = "75",
+                choices = {
+                    { "100%", "100" },
+                    { "75%",  "75" },
+                    { "50%",  "50" },
+                    { "25%",  "25" },
+                },
+            },
+            {
                 key = "speech_bubbles",
                 type = "toggle",
                 label = "SPEECH BUBBLE",
@@ -345,6 +358,56 @@ return function(mod)
                 return s
             end
             return "THREAT"
+        end
+
+        -- Soft type wash for the D-pad compass (matches field projectile hues).
+        local REACT_PAD_TYPE_COLORS = {
+            NORMAL = { 0.86, 0.86, 0.78 },
+            FIRE = { 1.00, 0.34, 0.12 },
+            WATER = { 0.20, 0.58, 1.00 },
+            ELECTRIC = { 1.00, 0.88, 0.18 },
+            GRASS = { 0.30, 0.82, 0.28 },
+            ICE = { 0.52, 0.90, 1.00 },
+            FIGHTING = { 0.78, 0.28, 0.22 },
+            POISON = { 0.66, 0.30, 0.78 },
+            GROUND = { 0.72, 0.52, 0.28 },
+            FLYING = { 0.62, 0.72, 0.96 },
+            PSYCHIC = { 0.92, 0.34, 0.82 },
+            BUG = { 0.66, 0.78, 0.20 },
+            ROCK = { 0.66, 0.56, 0.34 },
+            GHOST = { 0.52, 0.36, 0.72 },
+            DRAGON = { 0.45, 0.36, 0.88 },
+            DARK = { 0.40, 0.32, 0.28 },
+            STEEL = { 0.72, 0.74, 0.80 },
+            FAIRY = { 0.94, 0.58, 0.78 },
+        }
+
+        local function reactPadOpacity()
+            local n = tonumber(mod.options:get("react_pad_opacity") or "75")
+            if not n then
+                return 0.75
+            end
+            return math.max(0.15, math.min(1, n / 100))
+        end
+
+        local function resolveMoveType(move)
+            if not move then
+                return nil
+            end
+            local t = move.type or move.moveType
+            if type(t) == "table" then
+                t = t.id or t.name or t[1]
+            end
+            t = tostring(t or ""):upper()
+            if t == "" or t == "NIL" or t == "NONE" then
+                return nil
+            end
+            return t
+        end
+
+        local function reactPadTypeRgb(moveType)
+            local key = tostring(moveType or ""):upper()
+            return REACT_PAD_TYPE_COLORS[key] or { 0.90, 0.90, 0.90 }
         end
 
         local function calloutStyle()
@@ -6586,6 +6649,18 @@ return function(mod)
             state.suppressReactDefer = nil
         end
 
+        local function scrubReactPickRows(battle)
+            if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+                return
+            end
+            for i = #battle.queue, 1, -1 do
+                local row = battle.queue[i]
+                if type(row) == "table" and row.ui and row.arReactPick then
+                    table.remove(battle.queue, i)
+                end
+            end
+        end
+
         -- Foe dodge/brace stashed while COUNTER/HOLD is pending (so that menu
         -- isn't shown after "couldn't dodge!" as if they were related).
         local function flushPendingFoeReaction(battle)
@@ -6812,23 +6887,19 @@ return function(mod)
 
         local function finishCalloutPick(battle, me, moveName, action, braceCall)
             local state = momentumState(battle)
+            -- Latch BEFORE resolving so a nested runDamaging / sticky pad press
+            -- cannot queue another REACT! for this same hit.
+            state.pickOfferedThisTurn = true
+            state.suppressReactDefer = true
             state.awaitingPick = nil
+            -- Invalidate any leftover REACT ui rows still sitting in the queue.
+            state.reactEpoch = (state.reactEpoch or 0) + 1
             local pending = state.pendingDamage
             state.pendingDamage = nil
             state.enemyActedThisTurn = true
-            -- Don't let origRunDamaging queue another REACT! for this same hit
-            -- (ALWAYS pick mode used to re-offer after we cleared awaitingPick).
-            state.suppressReactDefer = true
 
             -- Drop any leftover REACT! ui rows so the menu can't pop twice.
-            if type(battle.queue) == "table" then
-                for i = #battle.queue, 1, -1 do
-                    local row = battle.queue[i]
-                    if type(row) == "table" and row.ui and row.arReactPick then
-                        table.remove(battle.queue, i)
-                    end
-                end
-            end
+            scrubReactPickRows(battle)
 
             if action == "entrench_break" and ReactiveDefense then
                 local ok = ReactiveDefense.earlyExitEntrench(battle, true)
@@ -6913,13 +6984,13 @@ return function(mod)
                     end
                 end)
                 if not okDmg then
-                    state.suppressReactDefer = nil
+                    -- Keep suppressReactDefer latched for the rest of the turn;
+                    -- turn_started / clearCalloutPickState clear it.
                     error(errDmg, 0)
                 end
             end
-            state.suppressReactDefer = nil
-            -- Keep pickOfferedThisTurn set so ALWAYS can't re-open REACT! this turn
-            -- after TAKE COVER / BRACE resolve through origRunDamaging.
+            -- Keep suppressReactDefer true until turn_started so sticky D-pad /
+            -- multi-hit follow-ups cannot re-open REACT! this turn.
             state.pickOfferedThisTurn = true
             publishChipState(battle)
         end
@@ -7017,6 +7088,12 @@ return function(mod)
                 cancelable = opts.cancelable == true,
                 onPick = opts.onPick,
                 onCancel = opts.onCancel,
+                -- Incoming foe move type tints the D-pad wash (REACT / BRACE).
+                moveType = resolveMoveType({ type = opts.moveType }) or opts.moveType,
+                -- Instant D-pad picks must not fire on the same press that opened
+                -- this modal (or a leftover held direction from the prior menu).
+                _padArmed = not usePad,
+                _resolved = false,
             }
 
             local function hintFor(choice)
@@ -7044,10 +7121,21 @@ return function(mod)
                 return nil
             end
 
+            local function anyPadDown(input)
+                local down = input.isDown or input.down
+                if type(down) ~= "function" then
+                    return false
+                end
+                return down(input, "up") or down(input, "down")
+                    or down(input, "left") or down(input, "right")
+                    or down(input, "a")
+            end
+
             local function confirm(choice)
-                if not choice then
+                if self._resolved or not choice then
                     return
                 end
+                self._resolved = true
                 Sound.play(self.game.data, "Press_AB")
                 self.game.stack:pop()
                 if self.onPick then
@@ -7091,11 +7179,12 @@ return function(mod)
             function self:update(dt)
                 local input = self.game.input
                 local n = #self.choices
-                if n < 1 then
+                if n < 1 or self._resolved then
                     return
                 end
                 if self.cancelable
                     and (input:wasPressed("b") or input:wasPressed("start")) then
+                    self._resolved = true
                     Sound.play(self.game.data, "Press_AB")
                     self.game.stack:pop()
                     if self.onCancel then
@@ -7104,6 +7193,14 @@ return function(mod)
                     return
                 end
                 if self.usePad then
+                    -- Wait until every direction/A is released once so a held
+                    -- press from opening / the previous modal cannot auto-pick.
+                    if not self._padArmed then
+                        if not anyPadDown(input) then
+                            self._padArmed = true
+                        end
+                        return
+                    end
                     local dir = nil
                     if input:wasPressed("up") then
                         dir = "up"
@@ -7135,66 +7232,110 @@ return function(mod)
                 if n < 1 then
                     return
                 end
+                local g = love.graphics
+
+                if self.usePad then
+                    -- Simple D-pad compass (white panel, crisp labels) with a
+                    -- light type-colored border accent from the incoming move.
+                    local function shortLabel(choice)
+                        local name = tostring(choice and choice.label or "")
+                        if name == "TAKE COVER" or name == "STAY COVER" then
+                            return "COVER"
+                        end
+                        if name == "ENTRENCH" then
+                            return "LOCK"
+                        end
+                        if name == "COMMIT" then
+                            return "GO"
+                        end
+                        if name == "PHYSICAL" then
+                            return "PHYS"
+                        end
+                        if name == "SPECIAL" then
+                            return "SPEC"
+                        end
+                        if name == "STATUS" then
+                            return "STAT"
+                        end
+                        if name == "BREAK" then
+                            return "OUT"
+                        end
+                        if name == "HOLD" then
+                            return "HOLD"
+                        end
+                        if name == "EMERGE" then
+                            return "OUT"
+                        end
+                        if name == "STAY" then
+                            return "STAY"
+                        end
+                        if #name > 5 then
+                            return name:sub(1, 5)
+                        end
+                        return name
+                    end
+                    local preferred = self.choices[self.index]
+                    local hasDown = choiceForDir("down") ~= nil
+                    local hasA = choiceForDir("a") ~= nil
+                    local slots = {
+                        up = { x = 52, y = 92, w = 56, h = 14 },
+                        left = { x = 4, y = 108, w = 56, h = 14 },
+                        right = { x = 100, y = 108, w = 56, h = 14 },
+                        down = { x = 52, y = 124, w = 56, h = 14 },
+                        a = { x = 52, y = 124, w = 56, h = 14 },
+                    }
+                    if hasDown and hasA then
+                        slots.a = { x = 116, y = 92, w = 40, h = 14 }
+                    end
+
+                    local rgb = reactPadTypeRgb(self.moveType)
+                    local alpha = reactPadOpacity()
+                    -- Mostly white so labels stay readable; type only tints a little.
+                    g.setColor(0.97 + rgb[1] * 0.03, 0.97 + rgb[2] * 0.03,
+                        0.97 + rgb[3] * 0.03, alpha)
+                    g.rectangle("fill", 0, 78, 160, 66)
+                    g.setColor(rgb[1], rgb[2], rgb[3], 1)
+                    g.rectangle("line", 0.5, 78.5, 159, 65)
+                    g.setColor(0, 0, 0, 1)
+                    g.rectangle("line", 1.5, 79.5, 157, 63)
+                    Font.draw(self.title or "REACT!", 6, 80)
+                    -- Thin type accent under the title.
+                    g.setColor(rgb[1], rgb[2], rgb[3], 1)
+                    g.rectangle("fill", 6, 90, 40, 2)
+
+                    for _, dir in ipairs({ "up", "left", "right", "down", "a" }) do
+                        local choice = choiceForDir(dir)
+                        local slot = slots[dir]
+                        if choice and slot then
+                            local selected = preferred == choice
+                            local label = shortLabel(choice)
+                            if selected then
+                                g.setColor(0, 0, 0, 1)
+                                g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
+                                g.setColor(rgb[1], rgb[2], rgb[3], 1)
+                                g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
+                                    slot.w - 1, slot.h - 1)
+                                g.setColor(1, 1, 1, 1)
+                            else
+                                g.setColor(1, 1, 1, 1)
+                                g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
+                                g.setColor(0, 0, 0, 1)
+                                g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
+                                    slot.w - 1, slot.h - 1)
+                            end
+                            local tw = (#Font.split(label)) * 8
+                            local tx = slot.x + math.max(2, math.floor((slot.w - tw) * 0.5))
+                            Font.draw(label, tx, slot.y + 3)
+                        end
+                    end
+                    g.setColor(1, 1, 1, 1)
+                    return
+                end
+
                 local widest = #Font.split(self.title)
                 if self.subtitle then
                     widest = math.max(widest, #Font.split(self.subtitle))
                 end
-
-                if self.usePad then
-                    local order = { "up", "left", "right", "down", "a" }
-                    local rows = {}
-                    for i = 1, #order do
-                        local dir = order[i]
-                        local c = choiceForDir(dir)
-                        if c then
-                            rows[#rows + 1] = { dir = dir, choice = c }
-                            local name = tostring(c.label or "")
-                            widest = math.max(widest, #Font.split(name) + 3)
-                        end
-                    end
-                    local tw = math.min(16, math.max(10, widest + 2))
-                    -- Compact: title (+ optional subtitle) then 1 tile per option.
-                    local head = self.subtitle and 2 or 1
-                    local th = head + #rows + 2
-                    local tx = 1
-                    local ty = math.max(1, 13 - th)
-                    if ty + th > 13 then
-                        th = 13 - ty
-                    end
-                    Font.drawBox(tx, ty, tw, th)
-                    love.graphics.setColor(0, 0, 0, 1)
-                    Font.draw(self.title, (tx + 1) * 8, (ty + 1) * 8)
-                    local row = ty + 2
-                    if self.subtitle then
-                        Font.draw(self.subtitle, (tx + 1) * 8, row * 8)
-                        row = row + 1
-                    end
-                    for i = 1, #rows do
-                        local r = rows[i]
-                        local c = r.choice
-                        local y = row * 8
-                        local ax = tx * 8 + 9
-                        local ay = y + 3
-                        if r.dir == "a" then
-                            drawAKey(ax, ay, not c.disabled)
-                        else
-                            drawPadArrow(r.dir, ax, ay, not c.disabled)
-                        end
-                        love.graphics.setColor(0, 0, 0, 1)
-                        local name = tostring(c.label or "")
-                        if c.disabled then
-                            name = "(" .. name .. ")"
-                        end
-                        Font.draw(name, (tx + 3) * 8, y)
-                        row = row + 1
-                        if row >= ty + th - 1 then
-                            break
-                        end
-                    end
-                    love.graphics.setColor(1, 1, 1, 1)
-                    return
-                end
-
                 for i = 1, n do
                     local label = tostring(self.choices[i].label or "")
                     widest = math.max(widest, #Font.split(label) + 2)
@@ -7241,36 +7382,22 @@ return function(mod)
                 finishCalloutPick(battle, me, moveName, "commit", nil)
                 return
             end
-            local openReactMenu, openBraceMenu
-            openBraceMenu = function()
-                return newCalloutPickModal(battle.game, {
-                    title = "BRACE!",
-                    subtitle = me,
-                    pad = true,
-                    choices = {
-                        { label = "PHYSICAL", hint = "Call physical", call = "physical", dir = "up" },
-                        { label = "SPECIAL",  hint = "Call special",  call = "special",  dir = "left" },
-                        { label = "STATUS",   hint = "Call status",   call = "status",   dir = "right" },
-                    },
-                    cancelable = true,
-                    onPick = function(choice)
-                        finishCalloutPick(battle, me, moveName, "brace", choice and choice.call)
-                    end,
-                    onCancel = function()
-                        if battle.game and battle.game.stack then
-                            battle.game.stack:push(openReactMenu())
-                        else
-                            finishCalloutPick(battle, me, moveName, "commit", nil)
-                        end
-                    end,
-                })
+            local incomingType = nil
+            do
+                local st = momentumState(battle)
+                local move = st.pendingDamage and st.pendingDamage.ctx
+                    and st.pendingDamage.ctx.move
+                incomingType = resolveMoveType(move)
             end
-            openReactMenu = function()
+            local function openReactMenu()
                 local pendingMove = nil
                 do
                     local st = momentumState(battle)
                     pendingMove = st.pendingDamage and st.pendingDamage.ctx
                         and st.pendingDamage.ctx.move
+                end
+                if not incomingType then
+                    incomingType = resolveMoveType(pendingMove)
                 end
                 local actions = ReactiveDefense.menuActions(battle, pendingMove)
                 local choices = {}
@@ -7296,25 +7423,47 @@ return function(mod)
                     subtitle = me,
                     index = index,
                     pad = true,
+                    moveType = incomingType,
                     choices = choices,
                     cancelable = false,
                     onPick = function(choice)
                         local id = choice and choice.id or "commit"
+                        -- Brace used to open a second D-pad (PHYS/SPEC/STAT) that
+                        -- felt like REACT! repeating — auto-match the incoming hit.
                         if id == "brace" then
-                            if battle.game and battle.game.stack then
-                                battle.game.stack:push(openBraceMenu())
-                            else
-                                finishCalloutPick(battle, me, moveName, "brace", "physical")
+                            local call = foeMoveIsSpecial(pendingMove) and "special"
+                                or "physical"
+                            if pendingMove and pendingMove.category == "status" then
+                                call = "status"
                             end
+                            finishCalloutPick(battle, me, moveName, "brace", call)
                             return
                         end
                         finishCalloutPick(battle, me, moveName, id, nil)
                     end,
                 })
             end
+            scrubReactPickRows(battle)
+            local reactEpoch = (momentumState(battle).reactEpoch or 0) + 1
+            momentumState(battle).reactEpoch = reactEpoch
             insertBeforeAnim(battle, {
                 arReactPick = true,
+                arReactEpoch = reactEpoch,
                 ui = function()
+                    local st = momentumState(battle)
+                    -- Stale / duplicate rows after a pick already resolved.
+                    if not st.pendingDamage or st.suppressReactDefer
+                        or (st.reactEpoch or 0) ~= reactEpoch then
+                        return {
+                            game = battle.game,
+                            update = function(self)
+                                if self.game and self.game.stack then
+                                    self.game.stack:pop()
+                                end
+                            end,
+                            draw = function() end,
+                        }
+                    end
                     return openReactMenu()
                 end,
             })
@@ -9070,9 +9219,10 @@ return function(mod)
                 battle.game.stack:push(newCalloutPickModal(battle.game, {
                     title = "ENTRENCH!",
                     subtitle = playerMonName(battle),
+                    pad = true,
                     choices = {
-                        { label = "HOLD",  hint = "Stay locked", line = "" },
-                        { label = "BREAK", hint = "Leave early", line = "" },
+                        { label = "HOLD",  hint = "Stay locked", line = "", dir = "down" },
+                        { label = "BREAK", hint = "Leave early", line = "", dir = "up" },
                     },
                     cancelable = true,
                     onPick = function(choice)

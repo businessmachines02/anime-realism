@@ -702,7 +702,7 @@ function RD.menuActions(battle, move)
   add("cover", side.cover and "STAY COVER" or "TAKE COVER",
     side.cover and "Hold position" or "Durability pool", "cover")
   if not unreactable then
-    add("brace", "BRACE", "Call the category", "brace")
+    add("brace", "BRACE", "Match the hit", "brace")
   end
   add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
   add("commit", "COMMIT", "Take the hit", "commit")

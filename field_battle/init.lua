@@ -48,6 +48,7 @@ return function(env)
   local Cast = loadFile("cast.lua")
   local Cues = loadFile("cues.lua")
   local Projectiles = loadFile("projectiles.lua")
+  local Audio = loadFile("audio.lua")
   local Anims = loadFile("anims.lua")
   local Lifecycle = loadFile("lifecycle.lua")
   local Compat = loadFile("compat.lua")
@@ -67,6 +68,7 @@ return function(env)
     Cast = Cast,
     Cues = Cues,
     Projectiles = Projectiles,
+    Audio = Audio,
     Anims = Anims,
     Lifecycle = Lifecycle,
     Compat = Compat,
@@ -87,6 +89,7 @@ return function(env)
     Cast = Cast,
     Cues = Cues,
     Projectiles = Projectiles,
+    Audio = Audio,
     Anims = Anims,
     Lifecycle = Lifecycle,
     Compat = Compat,

@@ -99,6 +99,11 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
 
   if kind == "status" then
     local Projectiles = session._deps and session._deps.Projectiles
+    local Audio = session._deps and session._deps.Audio
+    if Audio and type(Audio.playMove) == "function" then
+      pcall(Audio.playMove, battle or session._battle, opts.moveId,
+        side == "player")
+    end
     if Projectiles and type(Projectiles.status) == "function" then
       Projectiles.status(session, side, opts)
     end
@@ -116,6 +121,11 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     -- Physical: close distance on the pad, then return home.
     -- Special: hold cell; still play an in-place cast anim.
     local Projectiles = session._deps and session._deps.Projectiles
+    local Audio = session._deps and session._deps.Audio
+    if Audio and type(Audio.playMove) == "function" then
+      pcall(Audio.playMove, battle or session._battle, opts.moveId,
+        side == "player")
+    end
     if category == "special" then
       ent._returnAt = nil
       ent._attackStepped = nil
@@ -161,6 +171,10 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   if kind == "hit" then
     if type(nudgeCamera) == "function" and battle then
       nudgeCamera(battle, side, 0.35)
+    end
+    local Audio = session._deps and session._deps.Audio
+    if Audio and type(Audio.playHit) == "function" then
+      pcall(Audio.playHit, battle or session._battle, opts.typeMult)
     end
     local cat = category or session._lastAttackCategory or "physical"
     -- Both can shove; physical more often / more reliably.

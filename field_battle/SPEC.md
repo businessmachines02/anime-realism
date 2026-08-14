@@ -22,8 +22,9 @@ Pixels are presentation only; **pad cells are truth**.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, wave, drain, status, heal,
    and capture effects — named Gen1 moves pick glitz. Persistent PAR / FRZ /
-   PSN auras tint field sprites. Engine move timing and sound cues remain
-   authoritative.
+   PSN auras tint field sprites. Move / hit SFX play from field cues
+   (`audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
+   the session so nothing doubles. Engine anim rows still advance for timing.
 7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind).
 8. **Present-clock continuity:** bob, foot-swap, cell lerp, attack/cast/hit anims, and delayed return-home keep advancing during any player prompt / overlay / `waitingUI`. Logic queue may wait; **sprites must not.**
 9. Move orbs and Poké Balls are temporary overworld entities. They use the same

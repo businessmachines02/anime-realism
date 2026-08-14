@@ -728,6 +728,11 @@ function Lifecycle.begin(battle, mod, deps)
         battle.introSlide = 0
     end
 
+    if deps and deps.Audio and type(deps.Audio.enterField) == "function" then
+        pcall(deps.Audio.enterField)
+        session._arFieldAudio = true
+    end
+
     return true
 end
 
@@ -1382,6 +1387,11 @@ function Lifecycle.finish(battle, deps)
     end
     if deps and deps.Projectiles and type(deps.Projectiles.clear) == "function" then
         deps.Projectiles.clear(session)
+    end
+    if session._arFieldAudio and deps and deps.Audio
+        and type(deps.Audio.leaveField) == "function" then
+        pcall(deps.Audio.leaveField)
+        session._arFieldAudio = nil
     end
 
     local game = battle.game

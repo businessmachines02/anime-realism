@@ -24,6 +24,7 @@ return function(env)
         "callout_style",
         "callout_buffs",
         "callout_pick",
+        "react_pad_opacity",
         "speech_bubbles",
         "trainer_banter",
         "momentum_chips",
