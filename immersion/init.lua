@@ -16,16 +16,8 @@ return function(env)
     title = "Immersion (HP / EXP)",
   }
 
-  Immersion.OPTION_KEYS = {
-    "hide_battle_hud",
-    "hide_xp_bar",
-    "low_hp_warn",
-    "low_hp_threshold",
-    "mute_low_hp_alarm",
-    "generic_level_up",
-    "underdog_exp",
-    "effort_faint",
-  }
+  -- Immersion is always on (no menu toggles). Keys below are the baked-in feel.
+  Immersion.OPTION_KEYS = {}
 
   function Immersion.ownsOption(key)
     for i = 1, #Immersion.OPTION_KEYS do

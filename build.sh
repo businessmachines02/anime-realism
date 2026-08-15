@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build an installable Gen1Recomp mod zip (paths preserved for packages).
+# Build an installable Gen1Recomp mod zip (package folders preserved).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,28 +11,18 @@ MAIN="$ROOT/main.lua"
 need=(
   "$MANIFEST"
   "$MAIN"
+  "$ROOT/LICENSE"
   "$ROOT/lib/modload.lua"
   "$ROOT/immersion/init.lua"
   "$ROOT/battle/init.lua"
   "$ROOT/battle/reactive_defense.lua"
   "$ROOT/field_battle/init.lua"
-  "$ROOT/field_battle/layout.lua"
-  "$ROOT/field_battle/sprites.lua"
-  "$ROOT/field_battle/lifecycle.lua"
-  "$ROOT/field_battle/coords.lua"
-  "$ROOT/field_battle/themes.lua"
-  "$ROOT/field_battle/grid.lua"
-  "$ROOT/field_battle/cast.lua"
-  "$ROOT/field_battle/cues.lua"
-  "$ROOT/field_battle/projectiles.lua"
-  "$ROOT/field_battle/anims.lua"
-  "$ROOT/field_battle/compat.lua"
-  "$ROOT/field_battle/arena.lua"
-  "$ROOT/field_battle/survey.lua"
-  "$ROOT/field_battle/debug.lua"
-  "$ROOT/field_battle/ui.lua"
+  "$ROOT/field_battle/audio.lua"
+  "$ROOT/field_battle/spectators.lua"
+  "$ROOT/field_battle/wildlife.lua"
+  "$ROOT/field_battle/callouts.lua"
   "$ROOT/field_battle/hooks.lua"
-  "$ROOT/field_battle/intercept.lua"
+  "$ROOT/field_battle/sprites.lua"
 )
 
 for f in "${need[@]}"; do
@@ -47,31 +37,16 @@ VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vers
 OUT="${ID}-${VERSION}.zip"
 
 rm -f "$OUT"
-zip -q "$OUT" \
-  main.lua manifest.json \
-  lib/modload.lua \
-  immersion/init.lua \
-  battle/init.lua \
-  battle/reactive_defense.lua \
-  field_battle/init.lua \
-  field_battle/layout.lua \
-  field_battle/sprites.lua \
-  field_battle/lifecycle.lua \
-  field_battle/coords.lua \
-  field_battle/themes.lua \
-  field_battle/grid.lua \
-  field_battle/cast.lua \
-  field_battle/cues.lua \
-  field_battle/projectiles.lua \
-  field_battle/anims.lua \
-  field_battle/compat.lua \
-  field_battle/arena.lua \
-  field_battle/survey.lua \
-  field_battle/debug.lua \
-  field_battle/ui.lua \
-  field_battle/hooks.lua \
-  field_battle/intercept.lua \
-  field_battle/SPEC.md
+zip -q -r "$OUT" \
+  main.lua manifest.json LICENSE \
+  lib \
+  immersion \
+  battle \
+  field_battle \
+  -x "field_battle/tests/*" \
+  -x "field_battle/tests/**" \
+  -x "*.DS_Store" \
+  -x "**/.DS_Store"
 
 echo "Built $ROOT/$OUT"
 unzip -l "$OUT"

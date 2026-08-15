@@ -14,15 +14,12 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 
 - **Always on:** Levels and HP numbers/classic bars are hidden in battle, party,
   summary, and related UI. FIELD uses slim proportional bars without numbers.
-- **Party list:** Instead of HP, low-health Pokémon show short heal hints (e.g. `WEAK-HEAL SOON!`). Fainted mons get a fainted hint.
-- **Battle level-ups (optional):** Replaces “grew to level N” with generic growth flavor. Stat gains and move learning still work. Raw EXP-gain dialogue is hidden.
-- **Anime move calls (optional):** Turns “PIKACHU used THUNDERBOLT!” into trainer-style callouts for you and opposing trainers. Long names wrap to fit the 18-column box. Wild battles keep the vanilla line.
-- **Reactive Defense (optional):** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Menu option **REACTIVE DEF**; pick frequency via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain. Optional **SPEECH BUBBLE** replaces the classic battle text box with chat bubbles (you left / foe right / narrator center).
-- **Underdog EXP (optional):** A clearly weaker Pokémon that helps KO a stronger foe gets capped bonus EXP.
-- **Effort faint (optional):** If a Pokémon fights well then faints, it still earns Gen 1 stat exp (plus a tiny EXP crumb) — vanilla would give it nothing.
-- **Field Battles (optional):** Wild and trainer single battles can stay on the live map, with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
+  Generic level-up flavor, anime move callouts, speech bubbles, trainer banter,
+  status/focus chips, underdog EXP, and effort-faint consolations are part of
+  the same feel (not extra toggles).
+- **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
+- **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
 - **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
-- **Optional battle HUD / XP bar hide**, low-HP warnings, mute HP alarm.
 
 ## Mechanics
 
@@ -150,26 +147,11 @@ remain on their normal presentation path.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| **HIDE BATTLE HUD** | On | Hide the battle status HUD entirely |
-| **HIDE XP BAR** | On | Hide the battle XP bar |
-| **LOW HP WARN** | On | Show weak/tired messages in battle |
-| **LOW HP AT** | 20% | Threshold for warnings (`20%` or `40%`) |
-| **MUTE HP ALARM** | On | Silence the low-HP alarm |
-| **GENERIC LVL UP** | On | Generic level-up text (EXP-gain dialogue is always hidden) |
-| **ANIME MOVES** | On | Trainer-style move callouts for you & trainers (not wild) |
-| **BATTLE STAGE** | AUTO | `FIELD` enables wild/trainer overworld presentation; `AUTO`/`STADIUM` keep their existing presentation |
-| **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` = Poke Followers / Crystal Clear; `HGSS` = Wilds HGSS / PokeMMO; `POKEDEX` = Wilds Pokédex |
+| **BATTLE STAGE** | FIELD | `FIELD` keeps wild/trainer singles on the live map; `AUTO` leaves other presentation mods alone |
+| **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
-| **CALLOUT STYLE** | AUTO | Flavor tone for callouts (`AUTO` / `BOLD` / `TRICKY` / `SHOWY`) |
-| **CALLOUT BUFFS** | On | Apply foe EVADE/DEF (and counter DEF drop) from callouts — quietly, no rose/fell spam |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
-| **SPEECH BUBBLE** | On | Hides the classic battle text box (and Gen 3 / Dramatic Shape dialogue panels) during dialogue. Bubbles sit along the bottom (you left / foe right / narrator center) with tails aimed up at the field; layered shadow, accent bar, blink continue cue; typed a bit slower; **A/B** to continue (engine auto lines still auto-advance). FIGHT / move menus still use the normal bottom UI. |
-| **TRAINER BANTER** | On | Large persona pools (kid / cocky / evil / gym / rival / spooky / nerd / chill / generic) for send-outs plus context idle lines (ahead / behind / low HP / long fight); rivals banter most often. While a banter line plays, the trainer sprite slides in from the right (flat battles). With **3D-BTL** staged fights, the foe trainer briefly takes the enemy billboard (same intro seam) and the camera eases toward that side, then both restore when the line clears |
-| **STATUS CHIPS** | On | Tiny top-left (you) / top-right (foe) narrative chips; update only after callouts/state settle (no menu previews, no stage numbers) — e.g. “SCYTHER is hiding in brush”, “BLASTOISE is holding the trench!”, “ready to counter!” |
-| **FOCUS CHIP** | On | Slim top-left Focus meter (`F` + bar); sits above your status chip; hides under a player speech bubble |
-| **UNDERDOG EXP** | On | Capped bonus EXP when a much weaker mon helps score the KO |
-| **EFFORT FAINT** | On | Stat-exp consolation when a mon fights well then faints |
-| **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event). Full sequence appends to `anime_realism_dev.log` in the Gen1Recomp save directory |
+| **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
 ## Install
 
@@ -192,7 +174,7 @@ Three packages under one mod:
 | `battle/` | Traditional battle systems (Reactive Defense, callouts, bubbles, banter, chips) |
 | `field_battle/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
 
-`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs.
+`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field_battle/SPEC.md`](field_battle/SPEC.md).
 
 ## Compatibility
 
@@ -204,6 +186,15 @@ Works with the stock battle UI. Optional companions:
 - **Quality of Life** (`quality_of_life`) — XP bar suppression
 - **Gen 3 Inspired UI** (`gen3_battle_ui`)
 
+## License
+
+Original code and writing in this repository are licensed under
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
+(`LICENSE`). You may copy, modify, and redistribute it — including as a
+derived mod — if you credit **Anime Realism** / **businessmachines02** and
+link to [this repository](https://github.com/businessmachines02/anime-realism).
+Keep `LICENSE`, and note your changes.
+
 ## Files
 
 - `manifest.json` — mod metadata
@@ -212,4 +203,5 @@ Works with the stock battle UI. Optional companions:
 - `immersion/` — immersion package
 - `battle/` — battle systems (`reactive_defense.lua` lives here)
 - `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
+- `LICENSE` — CC BY 4.0 (attribution required)
 - `build.sh` — builds `anime_realism-<version>.zip`

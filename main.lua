@@ -97,65 +97,13 @@ return function(mod)
 
         mod.options:define({
             {
-                key = "hide_battle_hud",
-                type = "toggle",
-                label = "HIDE BATTLE HUD",
-                default = true,
-            },
-            {
-                key = "hide_xp_bar",
-                type = "toggle",
-                label = "HIDE XP BAR",
-                default = true,
-            },
-            {
-                key = "low_hp_warn",
-                type = "toggle",
-                label = "LOW HP WARN",
-                default = true,
-            },
-            {
-                key = "low_hp_threshold",
-                type = "choice",
-                label = "LOW HP AT",
-                default = "20",
-                choices = {
-                    { "20%", "20" },
-                    { "40%", "40" },
-                },
-            },
-            {
-                key = "mute_low_hp_alarm",
-                type = "toggle",
-                label = "MUTE HP ALARM",
-                default = true,
-            },
-            {
-                key = "generic_level_up",
-                type = "toggle",
-                label = "GENERIC LVL UP",
-                default = true,
-            },
-            {
-                key = "anime_move_calls",
-                type = "toggle",
-                label = "ANIME MOVES",
-                default = true,
-            },
-            {
-                key = "momentum_counter",
-                type = "toggle",
-                label = "REACTIVE DEF",
-                default = true,
-            },
-            {
                 key = "battle_stage",
                 type = "choice",
                 label = "BATTLE STAGE",
-                default = "AUTO",
+                default = "FIELD",
                 choices = {
-                    { "AUTO",  "AUTO" },
                     { "FIELD", "FIELD" },
+                    { "AUTO",  "AUTO" },
                 },
             },
             {
@@ -171,21 +119,9 @@ return function(mod)
                 },
             },
             {
-                key = "callout_style",
-                type = "choice",
-                label = "CALLOUT STYLE",
-                default = "AUTO",
-                choices = {
-                    { "AUTO",   "AUTO" },
-                    { "BOLD",   "BOLD" },
-                    { "TRICKY", "TRICKY" },
-                    { "SHOWY",  "SHOWY" },
-                },
-            },
-            {
-                key = "callout_buffs",
+                key = "momentum_counter",
                 type = "toggle",
-                label = "CALLOUT BUFFS",
+                label = "REACTIVE DEF",
                 default = true,
             },
             {
@@ -198,42 +134,6 @@ return function(mod)
                     { "THREAT", "THREAT" },
                     { "OFF",    "OFF" },
                 },
-            },
-            {
-                key = "speech_bubbles",
-                type = "toggle",
-                label = "SPEECH BUBBLE",
-                default = true,
-            },
-            {
-                key = "trainer_banter",
-                type = "toggle",
-                label = "TRAINER S.BANTER",
-                default = true,
-            },
-            {
-                key = "momentum_chips",
-                type = "toggle",
-                label = "STATUS CHIPS",
-                default = true,
-            },
-            {
-                key = "focus_chip",
-                type = "toggle",
-                label = "FOCUS CHIP",
-                default = true,
-            },
-            {
-                key = "underdog_exp",
-                type = "toggle",
-                label = "UNDERDOG EXP",
-                default = true,
-            },
-            {
-                key = "effort_faint",
-                type = "toggle",
-                label = "EFFORT FAINT",
-                default = true,
             },
             {
                 key = "dev_overlay",

@@ -3,6 +3,15 @@
 -- Focus-meter reactions: Commit / Dodge / Take Cover / Brace / Entrench.
 -- Pure logic module; main.lua owns menus, queue splicing, and engine hooks.
 
+
+-- We intentionally want to hide focus points from the player to create a sense of immersion.  
+-- I don't like the idea of quantifying things too much during a battle, so the goal is to craft hte battle system 
+-- in a way that feels closer to what we would have fantasized as kids playing this game. 
+-- some pokes are just naturally better in certain geographical areas. 
+
+-- We do keep this turn-based, with greater variability during the "episode/battle-turn". 
+-- What would have been an "i move, you move" situation, is now a "i move, you react, you move, i react situation" with the player having a bit more decision making during the overall episode.
+
 local RD = {}
 
 local byBattle = setmetatable({}, { __mode = "k" })

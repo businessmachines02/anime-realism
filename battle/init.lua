@@ -19,17 +19,9 @@ return function(env)
     }
 
     Battle.OPTION_KEYS = {
-        "anime_move_calls",
         "momentum_counter",
-        "callout_style",
-        "callout_buffs",
         "callout_pick",
-        "speech_bubbles",
-        "trainer_banter",
-        "momentum_chips",
-        "focus_chip",
         "dev_overlay",
-        "battle_stage", -- stage preference is shared; FIELD viewer is field_battle/
     }
 
     local ReactiveDefense

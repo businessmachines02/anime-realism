@@ -128,7 +128,7 @@ return function(env)
     Debug = Debug,
     UI = UI,
     Intercept = Intercept,
-    OPTION_KEYS = { "battle_stage", "field_sprites", "field_cast" },
+    OPTION_KEYS = { "battle_stage", "field_sprites" },
   }
 
   function FBV.session(battle)
