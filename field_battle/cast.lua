@@ -181,10 +181,20 @@ function Cast.stagePlayer(session, battle, mod, Sprites, Grid)
 end
 
 function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
+    print("[anime_realism] field_battle: replace", side, battler, session.playerMon, session.enemyMon)
     local game = battle.game
     local ow = game and game.overworld
     local plan = session.plan
-    local old = (side == "player") and session.playerMon or session.enemyMon
+
+    -- Special case: If replacing the player mon, but there is no old mon (e.g., after faint),
+    -- we should NOT try to remove the enemyMon from entities (ow.entities)!
+    local old
+    if side == "player" then
+        old = session.playerMon
+    else
+        old = session.enemyMon
+    end
+
     local cx = old and old.cellX
     local cy = old and old.cellY
     local padU = old and old.padU
@@ -196,19 +206,22 @@ function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
     local face = old and old.facing
         or ((side == "player") and plan.playerFace or plan.foeFace)
     local ignoreId = old and old.id
+
+    -- Only release Grid/ow.entity if there actually was an old mon
     if old and Grid then
         Grid.release(session.grid, old.id)
     end
     if old and ow then
+        -- Only remove OLD mon from ow.entities if it's the old one, not (for player's replace) the enemy!
         for i = #ow.entities, 1, -1 do
             if ow.entities[i] == old then
                 table.remove(ow.entities, i)
             end
         end
     end
+
     local species = battler and battler.mon and battler.mon.species
-    local ent = Sprites.makeMon(mod, game, species, cx, cy, face, side, battler,
-        session.grid)
+    local ent = Sprites.makeMon(mod, game, species, cx, cy, face, side, battler, session.grid)
     if ent then
         bindHome(ent, plan, side, session.grid)
         if padU ~= nil then
@@ -234,6 +247,7 @@ function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
         occupyPad(Grid, session, ent, ignoreId)
         appendOw(ow, ent)
     end
+
     if side == "player" then
         session.playerMon = ent
         session.awaitPlayerMon = false
@@ -248,7 +262,9 @@ function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
     return ent
 end
 
+-- Called when a mon has fainted and is being removed from the field.
 function Cast.despawn(session, battle, Grid, side)
+    print("[anime_realism] field_battle: despawn", side, session.playerMon, session.enemyMon)
     local ent = (side == "player") and session.playerMon or session.enemyMon
     if not ent then
         return
