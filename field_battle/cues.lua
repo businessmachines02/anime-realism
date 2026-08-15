@@ -125,10 +125,14 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
 
   if kind == "cover" or kind == "hide" then
-    local hasCover = (session.grid and session.grid.props and #session.grid.props > 0)
-        or (session.coverSlots and #session.coverSlots > 0)
-    if hasCover then
-      Grid.seekCover(g, ent, foe)
+    local tucked = false
+    if type(Grid.seekCover) == "function" then
+      tucked = Grid.seekCover(g, ent, foe) == true
+    end
+    if not tucked and type(Grid.seekWallCover) == "function" then
+      tucked = Grid.seekWallCover(g, ent, foe) == true
+    end
+    if tucked then
       if type(ent.play) == "function" then
         ent:play("cover")
       end

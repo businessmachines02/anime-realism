@@ -396,7 +396,7 @@ function RD.enterCover(battle, isPlayer)
     return false
   end
   side.cover = true
-  side.coverMax = RD.coverMaxDurability(battler)
+  side.coverMax = RD.coverMaxDurability(battler) -- HERE
   side.coverDurability = side.coverMax
   side.emergeExposed = false
   side.reactedThisTurn = true
@@ -660,6 +660,7 @@ end
 --- Apply an incoming damage amount against cover durability.
 -- Returns remaining HP damage to apply to the mon, and updates side state.
 function RD.applyCoverHit(battle, isPlayer, rawDamage, durMult)
+
   local side = RD.sideState(battle, isPlayer)
   if not side.cover then
     return rawDamage, false
@@ -667,6 +668,7 @@ function RD.applyCoverHit(battle, isPlayer, rawDamage, durMult)
   durMult = durMult or 1
   local hit = math.max(0, (rawDamage or 0) * durMult)
   local dur = side.coverDurability or 0
+  print("Hit: " .. tostring(hit) .. " and dur: " .. tostring(dur))
   if hit <= dur then
     side.coverDurability = dur - hit
     return 0, false

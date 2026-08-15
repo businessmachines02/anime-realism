@@ -531,14 +531,28 @@ function Arena.overlayEntity(slot)
         local x = (self.px or 0) - (camX or 0)
         local y = (self.py or 0) - (camY or 0)
         local g = love and love.graphics
+        local grow = self.coverGrow or 0
+        if grow < 0 then
+            grow = 0
+        elseif grow > 1 then
+            grow = 1
+        end
+        local s = 0.72 + grow * 0.50
         if g then
             g.push()
-            g.translate(x + 8, y + 10)
-            g.scale(0.72, 0.72)
+            g.translate(x + 8, y + 10 - grow * 3)
+            g.scale(s, s)
             g.translate(-(x + 8), -(y + 10))
+            Arena.drawCover(self.kind, x, y)
+            if grow > 0.35 then
+                local ox = (self._coverTowardX or 0) * grow * 5
+                local oy = (self._coverTowardY or 1) * grow * 3
+                Arena.drawCover(self.kind, x + ox, y + oy)
+            end
+            g.pop()
+        else
+            Arena.drawCover(self.kind, x, y)
         end
-        Arena.drawCover(self.kind, x, y)
-        if g then g.pop() end
     end
 
     return ent

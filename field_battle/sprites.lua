@@ -795,6 +795,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     elseif confused then
       bobSpeed = bobSpeed * 1.15
     end
+    local coverHold = self.coverBlend or 0
+    if coverHold > 0.12 then
+      local k = math.min(1, coverHold)
+      bobAmp = bobAmp * (1 - 0.72 * k)
+      bobSpeed = bobSpeed * (1 - 0.35 * k)
+    end
     self.bobT = (self.bobT or 0) + dt * bobSpeed
     local bob = math.sin(self.bobT) * bobAmp
     local ox, oy = 0, bob
@@ -821,8 +827,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     if blend > 0 and self.coverTx and self.coverTy then
       local dx = (self.coverTx or self.basePx) - self.basePx
       local dy = (self.coverTy or self.basePy) - self.basePy
-      ox = ox + dx * blend
-      oy = oy + dy * blend - blend * 2
+      ox = ox + dx * blend * 0.55
+      oy = oy + dy * blend * 0.55 + blend * 1.5
     end
 
     local anim = self.anim or "idle"
@@ -1134,6 +1140,30 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.hidden = true
         self.drawScale = 0.05
         self._pendingDetach = true
+      end
+    end
+
+    local coverTuck = self.coverBlend or 0
+    if coverTuck > 0.12 and not self._fainting and not self._fieldVanished then
+      local animNow = self.anim or "idle"
+      if animNow ~= "recall" and animNow ~= "sendout" and animNow ~= "capture"
+          and animNow ~= "vanish_dig" and animNow ~= "vanish_fly"
+          and animNow ~= "buried" and animNow ~= "aloft" then
+        local k = math.min(1, coverTuck)
+        local surface = self._coverSurface or "open"
+        if surface == "water" then
+          self.drawScale = (self.drawScale or 1) * (1 - 0.46 * k)
+          oy = oy + 7.5 * k
+        elseif surface == "grass" then
+          self.drawScale = (self.drawScale or 1) * (1 - 0.20 * k)
+          oy = oy + 3.2 * k
+        elseif surface == "cave" then
+          self.drawScale = (self.drawScale or 1) * (1 - 0.14 * k)
+          oy = oy + 1.6 * k
+        else
+          self.drawScale = (self.drawScale or 1) * (1 - 0.16 * k)
+          oy = oy + 1.8 * k
+        end
       end
     end
 

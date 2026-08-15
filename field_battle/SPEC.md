@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.29)
+# FIELD combat SPEC (v4.5.34)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -28,7 +28,11 @@ Pixels are presentation only; **pad cells are truth**.
    effects — named Gen1 moves pick glitz. Earthquake pops Dig-like dirt bursts on
    random pad tiles.    Persistent PAR / FRZ /
    PSN / BRN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
-   grassy sprout on `battler.leechSeeded` mons. Confusion self-hits,
+   grassy sprout on `battler.leechSeeded` mons. **Cover** plants the mon: idle
+   wander pauses, bob damps, and they ease toward the nearest pad prop (which
+   scales up) or a nearby **wall / corner**. Tile underfoot paints the crouch:
+   grass blades, cave pebbles, or a water **dive** (sink + foam). No fake crate
+   is glued to the sprite. Confusion self-hits,
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
    sink, and puff before despawn. Switch recalls (and trainer-side faints) fire a
    red thunder-laser into the ball. Move / hit SFX play from field cues
@@ -228,7 +232,7 @@ replacement mon.
 | kind | pad motion | anim |
 |---|---|---|
 | dodge | `±v` | `dodge` |
-| cover | nearest free prop-adjacent, far on `u` | `cover` / dodge fallback |
+| cover | nearest free prop-adjacent, else wall/corner, far on `u` | `cover` / dodge fallback |
 | brace | stay | `brace` |
 | attack (physical) | `u` toward foe 1, then home | `attack` |
 | attack (special) | stay | `cast` (in-place) |
@@ -244,7 +248,9 @@ replacement mon.
 - Occupancy: one battler per legal pad cell; surveyed and prop cells block.
   Water cells are legal only for Water-type battlers (`canSwim`).
 - Idle wander is stepwise and bounded within two cells of home; positions
-  persist between turns instead of snapping back. Water-types may wander onto
+  persist between turns instead of snapping back. **Cover holds still:** wander
+  does not step while `_coverHeld` / `coverBlend`. Cover steps to a prop or a
+  wall-hugging / corner cell (`Grid.seekWallCover`). Water-types may wander onto
   adjacent water and switch to their swim sheet while there.
 - Trainers on fixed edge pad cells; not tracked for combat steps.
 - **Powerful hits** (`Projectiles.isPowerfulMove`: named high-BP Gen1 roster or
@@ -299,6 +305,10 @@ The fight stays on the live overworld. At Begin, `Themes.scene` picks a kit from
 | Gyms / indoor | `gym` / `indoor` | crates | sparse |
 
 Props draw as **chunky 2.5D voxel cubes** — never a painted floor wash, never `setBlock`.
+While a battler holds Reactive Defense cover, idle wander stops. They tuck behind
+the nearest overlay prop (which **grows**) or a surveyed wall / corner. Grass,
+cave, and water tiles paint an underfoot tell (blades, little rocks, dive foam); a
+sprite-glued crate is never used.
 
 - [x] Stop `setBlock` / `blockAt` during FIELD
 - [x] Themed kits instead of planting into the live map

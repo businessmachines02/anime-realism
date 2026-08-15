@@ -2120,7 +2120,7 @@ function tests.player_callin_does_not_recall_foe()
 end
 
 function tests.status_auras_follow_field_mons()
-  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0, seed = 0, flame = 0 }
+  local calls = { sparks = 0, ice = 0, bubbles = 0, zs = 0, swirl = 0, seed = 0, flame = 0, cover = 0 }
   local prevLove = love
   love = {
     graphics = {
@@ -2133,6 +2133,7 @@ function tests.status_auras_follow_field_mons()
         if mode == "fill" then
           calls.ice = calls.ice + 1
           calls.seed = calls.seed + 1
+          calls.cover = calls.cover + 1
         else
           calls.bubbles = calls.bubbles + 1
           calls.seed = calls.seed + 1
@@ -2148,6 +2149,7 @@ function tests.status_auras_follow_field_mons()
       polygon = function()
         calls.ice = calls.ice + 1
         calls.flame = calls.flame + 1
+        calls.cover = calls.cover + 1
       end,
     },
     timer = { getTime = function() return 1.25 end },
@@ -2195,16 +2197,297 @@ function tests.status_auras_follow_field_mons()
   Projectiles.drawStatusAuras(session, battle, 0, 0)
   truthy(calls.seed > 0, "leech seed paints pulsing grass on the seeded mon")
 
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame, calls.cover =
+      0, 0, 0, 0, 0, 0, 0, 0
   battle.player.mon.status = nil
   battle.enemy.confusedTurns = nil
   battle.enemy.leechSeeded = nil
-  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame =
-      0, 0, 0, 0, 0, 0, 0
+  battle.player._arFieldCover = true
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.cover > 0, "cover paints a crouch shade when no prop is nearby")
+
+  battle.player.mon.status = nil
+  battle.player._arFieldCover = nil
+  battle.enemy.confusedTurns = nil
+  battle.enemy.leechSeeded = nil
+  calls.sparks, calls.ice, calls.bubbles, calls.zs, calls.swirl, calls.seed, calls.flame, calls.cover =
+      0, 0, 0, 0, 0, 0, 0, 0
   Projectiles.drawStatusAuras(session, battle, 0, 0)
   eq(calls.sparks + calls.ice + calls.bubbles + calls.zs + calls.swirl
-      + calls.seed + calls.flame, 0,
+      + calls.seed + calls.flame + calls.cover, 0,
     "healthy mons have no status aura")
   love = prevLove
+end
+
+function tests.cover_aura_follows_tile_and_scene()
+  local ent = { padU = 1, padV = 2, cellX = 10, cellY = 12 }
+  local session = {
+    coverKind = "CRATE",
+    coverScene = "gym",
+    grid = { water = {} },
+  }
+  eq(Projectiles.coverFlavor(session, ent), "crate", "gym kit is wooden crates")
+
+  session.coverKind, session.coverScene = "ROCK", "cave"
+  eq(Projectiles.coverFlavor(session, ent), "rock", "cave kit is stone")
+
+  session.coverKind, session.coverScene = "TREE", "forest"
+  eq(Projectiles.coverFlavor(session, ent), "tree", "forest kit is leaves")
+
+  session.coverKind, session.coverScene = "TREE", "route"
+  eq(Projectiles.coverFlavor(session, ent), "tree", "route TREE kind stays leafy")
+
+  session.coverKind, session.coverScene = "ROCK", "water"
+  eq(Projectiles.coverFlavor(session, ent), "water", "ocean / seafoam kit is foam")
+
+  session.coverKind, session.coverScene = "ROCK", "grave"
+  eq(Projectiles.coverFlavor(session, ent), "grave", "tower kit is weeds")
+
+  session.coverKind, session.coverScene = "CRATE", "gym"
+  session.grid.water[Coords.key(1, 2)] = true
+  eq(Projectiles.coverFlavor(session, ent), "water", "water pad tile overrides gym crates")
+  session.grid.water[Coords.key(1, 2)] = nil
+
+  local battle = {
+    game = {
+      overworld = {
+        map = {
+          isWaterCell = function() return false end,
+          isGrassCell = function(_, x, y) return x == 10 and y == 12 end,
+        },
+      },
+    },
+  }
+  eq(Projectiles.coverFlavor(session, ent, battle), "grass",
+    "grass underfoot overrides gym crates")
+
+  session.coverKind, session.coverScene = "TREE", "forest"
+  eq(Projectiles.coverFlavor(session, ent, battle), "grass",
+    "grass tile overrides forest leaves")
+
+  session.covers = { { px = 16, py = 32, kind = "ROCK" } }
+  ent.px, ent.py = 18, 34
+  eq(Projectiles.coverFlavor(session, ent, battle), "rock",
+    "nearby rock prop wins over grass tile")
+end
+
+function tests.cover_hold_grows_nearest_prop()
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32, basePx = 16, basePy = 32 },
+    enemyMon = { px = 80, py = 32, basePx = 80, basePy = 32 },
+    covers = {
+      { px = 20, py = 36, kind = "ROCK", coverGrow = 0 },
+      { px = 90, py = 8, kind = "TREE", coverGrow = 0 },
+    },
+  }
+  local battle = {
+    player = { _arFieldCover = true, mon = {} },
+    enemy = { mon = {} },
+  }
+  Projectiles.syncCoverHold(session, battle, 1)
+  truthy((session.covers[1].coverGrow or 0) > 0.5, "nearest rock thickens")
+  eq(session.covers[2].coverGrow, 0, "far tree stays idle")
+  truthy((session.playerMon.coverBlend or 0) > 0.5, "covered mon tucks")
+  eq(session.playerMon._coverHeld, true, "cover pins the mon")
+  eq(session.playerMon.coverTx, 20, "tuck aims at the rock")
+  session.playerMon.wanderTx, session.playerMon.wanderTy = 40, 40
+  Projectiles.syncCoverHold(session, battle, 1)
+  eq(session.playerMon.wanderTx, nil, "cover cancels idle wander")
+  Projectiles.syncCoverHold(session, { player = { mon = {} }, enemy = { mon = {} } }, 1)
+  eq(session.covers[1].coverGrow, 0, "prop shrinks when cover drops")
+  eq(session.playerMon.coverBlend, 0, "tuck eases out")
+  eq(session.playerMon._coverHeld, false, "pin releases")
+end
+
+function tests.cover_hold_skips_sticker_when_prop_nearby()
+  local calls = { cover = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      rectangle = function() end,
+      arc = function() end,
+      ellipse = function(mode)
+        if mode == "fill" then
+          calls.cover = calls.cover + 1
+        end
+      end,
+      circle = function() end,
+      polygon = function()
+        calls.cover = calls.cover + 1
+      end,
+    },
+    timer = { getTime = function() return 1.25 end },
+  }
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32 },
+    enemyMon = { px = 80, py = 32 },
+    covers = { { px = 18, py = 34, kind = "CRATE" } },
+  }
+  local battle = {
+    player = { _arFieldCover = true, mon = {} },
+    enemy = { mon = {} },
+  }
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  eq(calls.cover, 0, "no sprite-glued crate when a pad prop is the cover")
+  session.covers = nil
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.cover > 0, "crouch shade paints when nothing is nearby to hide behind")
+  love = prevLove
+end
+
+function tests.cover_surface_follows_tile()
+  local ent = { padU = 1, padV = 1, cellX = 4, cellY = 5, px = 16, py = 32 }
+  local session = { grid = { water = {}, sizeU = 6, sizeV = 4 }, coverScene = "gym" }
+  eq(Projectiles.coverSurface(session, ent), "open", "bare indoor tile is open")
+
+  session.grid.water[Coords.key(1, 1)] = true
+  eq(Projectiles.coverSurface(session, ent), "water", "water pad is a dive")
+  session.grid.water[Coords.key(1, 1)] = nil
+
+  local battle = {
+    game = {
+      overworld = {
+        map = {
+          isWaterCell = function() return false end,
+          isGrassCell = function(_, x, y) return x == 4 and y == 5 end,
+        },
+      },
+    },
+  }
+  eq(Projectiles.coverSurface(session, ent, battle), "grass", "grass tile underfoot")
+
+  eq(Projectiles.coverSurface({ coverScene = "cave", grid = {} }, { padU = 0, padV = 0 }),
+    "cave", "cave kit clusters stones")
+end
+
+function tests.seek_wall_cover_prefers_corner()
+  local plan = Layout.plan(0, 0, 6, 0)
+  local pad = Coords.layoutPad({ minX = 0, maxX = 6, minY = 0, maxY = 4 }, 1, 0)
+  local walkable = {}
+  for u = 0, pad.sizeU - 1 do
+    for v = 0, pad.sizeV - 1 do
+      walkable[Coords.key(u, v)] = true
+    end
+  end
+  for v = 0, pad.sizeV - 1 do
+    walkable[Coords.key(0, v)] = false
+  end
+  for u = 0, pad.sizeU - 1 do
+    walkable[Coords.key(u, 0)] = false
+  end
+  local grid = Grid.build({ pad = pad, walkable = walkable }, plan)
+  local player = { id = "p", padU = 2, padV = 2 }
+  local enemy = { id = "e", padU = 5, padV = 2 }
+  truthy(Grid.setPad(grid, player, 2, 2), "place player")
+  truthy(Grid.setPad(grid, enemy, 5, 2), "place foe")
+  truthy(Grid.seekWallCover(grid, player, enemy), "cover steps to a wall")
+  local hug = Grid.wallHug(grid, player)
+  truthy(hug, "ended on a wall-hugging cell")
+  truthy(hug.corner, "prefers the inside corner")
+end
+
+function tests.cover_hold_paints_grass_underfoot()
+  local calls = { grass = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      rectangle = function() end,
+      arc = function() end,
+      ellipse = function() end,
+      circle = function() end,
+      polygon = function() calls.grass = calls.grass + 1 end,
+    },
+    timer = { getTime = function() return 1.0 end },
+  }
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32, padU = 1, padV = 1, cellX = 4, cellY = 5 },
+    enemyMon = { px = 80, py = 32 },
+    covers = { { px = 18, py = 34, kind = "CRATE" } },
+  }
+  local battle = {
+    player = { _arFieldCover = true, mon = {} },
+    enemy = { mon = {} },
+    game = {
+      overworld = {
+        map = {
+          isWaterCell = function() return false end,
+          isGrassCell = function(_, x, y) return x == 4 and y == 5 end,
+        },
+      },
+    },
+  }
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.grass > 0, "grass blades paint under a crouch even next to a crate")
+  love = prevLove
+end
+
+function tests.cover_hold_paints_cave_rocks()
+  local calls = { rocks = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      rectangle = function() end,
+      arc = function() end,
+      ellipse = function() end,
+      circle = function() end,
+      polygon = function() calls.rocks = calls.rocks + 1 end,
+    },
+    timer = { getTime = function() return 1.0 end },
+  }
+  local session = {
+    live = true,
+    coverScene = "cave",
+    playerMon = { px = 16, py = 32, padU = 1, padV = 1 },
+    enemyMon = { px = 80, py = 32 },
+  }
+  local battle = { player = { _arFieldCover = true, mon = {} }, enemy = { mon = {} } }
+  Projectiles.drawStatusAuras(session, battle, 0, 0)
+  truthy(calls.rocks > 0, "cave cover clusters little rocks around the mon")
+  love = prevLove
+end
+
+function tests.cover_cue_uses_wall_when_no_prop()
+  local plan = Layout.plan(0, 0, 6, 0)
+  local pad = Coords.layoutPad({ minX = 0, maxX = 6, minY = 0, maxY = 4 }, 1, 0)
+  local walkable = {}
+  for u = 0, pad.sizeU - 1 do
+    for v = 0, pad.sizeV - 1 do
+      walkable[Coords.key(u, v)] = true
+    end
+  end
+  for v = 0, pad.sizeV - 1 do
+    walkable[Coords.key(0, v)] = false
+  end
+  local grid = Grid.build({ pad = pad, walkable = walkable }, plan)
+  local player = {
+    id = "p", padU = 2, padV = 2,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = { id = "e", padU = 5, padV = 2 }
+  Grid.setPad(grid, player, 2, 2)
+  Grid.setPad(grid, enemy, 5, 2)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    coverSlots = {},
+  }
+  truthy(Cues.apply(session, "player", "cover", Grid), "cover cue fires")
+  eq(player.lastAnim, "cover", "wall hide plays cover, not a dodge")
+  eq(player.padU, 1, "steps beside the wall")
 end
 
 function tests.field_overlay_draws_projectiles()

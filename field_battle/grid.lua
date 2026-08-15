@@ -481,10 +481,56 @@ function Grid.pathObstructed(g, fromEnt, toEnt)
   return false
 end
 
+--- Cardinal walls / pad edges / blocked props adjacent to a pad cell.
+function Grid.wallDirs(g, u, v, ent)
+  local hits = {}
+  if not g or u == nil or v == nil then
+    return hits
+  end
+  local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+  for i = 1, 4 do
+    local d = dirs[i]
+    local nu, nv = u + d[1], v + d[2]
+    local kind = nil
+    if not Grid.inPad(g, nu, nv) then
+      kind = "edge"
+    elseif Grid.isBlocked(g, nu, nv) then
+      kind = "prop"
+    elseif not Grid.canTraverse(g, nu, nv, ent) then
+      kind = "wall"
+    end
+    if kind then
+      hits[#hits + 1] = { u = d[1], v = d[2], kind = kind }
+    end
+  end
+  return hits
+end
+
+--- Strongest adjacent wall/corner from `ent`'s current cell, or nil.
+function Grid.wallHug(g, ent)
+  local u, v = padOf(g, ent)
+  local hits = Grid.wallDirs(g, u, v, ent)
+  if #hits == 0 then
+    return nil
+  end
+  local hug = {
+    u = hits[1].u,
+    v = hits[1].v,
+    kind = hits[1].kind,
+    corner = #hits >= 2,
+    hits = hits,
+  }
+  if #hits >= 2 then
+    hug.u = hits[1].u + hits[2].u
+    hug.v = hits[1].v + hits[2].v
+  end
+  return hug
+end
+
 --- Nearest free cell adjacent to a prop, preferring far side on u from foe.
 function Grid.seekCover(g, ent, foeEnt)
-  if not (g and ent) or #g.props == 0 then
-    return Grid.dodge(g, ent, foeEnt)
+  if not (g and ent) or not g.props or #g.props == 0 then
+    return false
   end
   local best, bestScore = nil, -1e9
   local fu, fv
@@ -519,7 +565,50 @@ function Grid.seekCover(g, ent, foeEnt)
   if best then
     return Grid.setPad(g, ent, best.u, best.v)
   end
-  return Grid.dodge(g, ent, foeEnt)
+  return false
+end
+
+--- Step onto a nearby wall-hugging / corner cell (buildings, cave edges).
+function Grid.seekWallCover(g, ent, foeEnt)
+  if not (g and ent) then
+    return false
+  end
+  local eu, ev = padOf(g, ent)
+  local fu, fv
+  if foeEnt then
+    fu, fv = padOf(g, foeEnt)
+  end
+  local best, bestScore = nil, 0.5
+  for du = -2, 2 do
+    for dv = -2, 2 do
+      local u, v = eu + du, ev + dv
+      if Grid.isFree(g, u, v, ent.id, ent) then
+        local hugs = Grid.wallDirs(g, u, v, ent)
+        if #hugs > 0 then
+          local score = #hugs * 3.2 - math.abs(du) - math.abs(dv)
+          if #hugs >= 2 then
+            score = score + 6
+          end
+          if fu then
+            score = score + math.abs(u - fu) * 0.35
+            for i = 1, #hugs do
+              local h = hugs[i]
+              if (u - fu) * h.u + (v - (fv or v)) * h.v < 0 then
+                score = score + 3.5
+              end
+            end
+          end
+          if score > bestScore then
+            bestScore, best = score, { u = u, v = v }
+          end
+        end
+      end
+    end
+  end
+  if best then
+    return Grid.setPad(g, ent, best.u, best.v)
+  end
+  return false
 end
 
 function Grid.idleWander(g, ent, side)

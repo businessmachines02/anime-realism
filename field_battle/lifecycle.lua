@@ -1365,6 +1365,10 @@ local function tickIdleWander(session, Grid, ent, side, dt)
     if not ent or ent._removed or ent.hidden or ent._fainting then
         return
     end
+    if ent._coverHeld or (ent.coverBlend or 0) > 0.15 then
+        ent.wanderTx, ent.wanderTy = nil, nil
+        return
+    end
     local busy = ent.anim and ent.anim ~= "idle"
     if busy or ent._returnAt then
         return
@@ -1759,6 +1763,9 @@ function Lifecycle.tick(battle, dt, deps)
     tickSwitches(session, battle, deps, dt)
     if deps.Projectiles and type(deps.Projectiles.tick) == "function" then
         deps.Projectiles.tick(session, dt)
+    end
+    if deps.Projectiles and type(deps.Projectiles.syncCoverHold) == "function" then
+        deps.Projectiles.syncCoverHold(session, battle, dt)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
     Lifecycle.watchHpFaint(battle, deps)

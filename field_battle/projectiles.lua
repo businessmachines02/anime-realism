@@ -6,7 +6,8 @@
 --
 -- Movepool: named Gen1 moves + type defaults pick style / glitz. Persistent
 -- PAR / FRZ / PSN / BRN / SLP / confusion auras are drawn around live field
--- sprites each frame.
+-- sprites each frame. Cover plants the mon behind a real pad prop (or a
+-- crouch shade if none is nearby) — never a looping crate glued to the sprite.
 
 local Coords = require("coords")
 
@@ -190,6 +191,325 @@ local TYPE_CONTACT = {
   GRASS = "leaf",
 }
 
+local COVER_FLAVORS = {
+  rock = { color = { 0.52, 0.45, 0.36 }, lite = { 0.72, 0.64, 0.52 } },
+  grass = { color = { 0.28, 0.58, 0.20 }, lite = { 0.48, 0.78, 0.28 } },
+  tree = { color = { 0.22, 0.50, 0.18 }, lite = { 0.34, 0.68, 0.28 } },
+  water = { color = { 0.26, 0.54, 0.78 }, lite = { 0.72, 0.88, 1.00 } },
+  crate = { color = { 0.62, 0.44, 0.22 }, lite = { 0.86, 0.70, 0.42 } },
+  grave = { color = { 0.38, 0.36, 0.32 }, lite = { 0.58, 0.56, 0.50 } },
+}
+
+local COVER_PROP_RANGE2 = 48 * 48
+
+local function flavorFromPropKind(kind, scene)
+  kind = tostring(kind or ""):upper()
+  if kind == "CRATE" then
+    return "crate"
+  end
+  if kind == "TREE" then
+    return "tree"
+  end
+  if kind == "POND" or kind == "WATER" then
+    return "water"
+  end
+  if kind == "ROCK" then
+    if scene == "grave" then
+      return "grave"
+    end
+    return "rock"
+  end
+  return nil
+end
+
+local function propPixel(prop)
+  if not prop then
+    return nil, nil
+  end
+  local px = prop.px
+  local py = prop.py
+  if px == nil then
+    px = ((prop.cellX or prop.cx or prop.wx or 0) * 16)
+  end
+  if py == nil then
+    py = ((prop.cellY or prop.cy or prop.wy or 0) * 16)
+  end
+  return px, py
+end
+
+--- Nearest session cover / pad prop within a couple of tiles, or nil.
+function Projectiles.nearestCoverProp(session, ent)
+  if not (session and ent) then
+    return nil
+  end
+  local ex = ent.px or ent.basePx
+  local ey = ent.py or ent.basePy
+  if ex == nil and session.grid and ent.padU ~= nil and type(Coords.padToPx) == "function" then
+    ex, ey = Coords.padToPx(session.grid, ent.padU, ent.padV)
+  end
+  if ex == nil then
+    return nil
+  end
+  local best, bestD = nil, COVER_PROP_RANGE2 + 1
+  local function consider(prop)
+    if not prop or prop.hidden then
+      return
+    end
+    local px, py = propPixel(prop)
+    if px == nil then
+      return
+    end
+    local dx, dy = px - ex, py - ey
+    local d = dx * dx + dy * dy
+    if d < bestD then
+      bestD, best = d, prop
+    end
+  end
+  if type(session.covers) == "table" then
+    for i = 1, #session.covers do
+      consider(session.covers[i])
+    end
+  end
+  if not best and session.grid and type(session.grid.props) == "table" then
+    for i = 1, #session.grid.props do
+      consider(session.grid.props[i])
+    end
+  end
+  if bestD > COVER_PROP_RANGE2 then
+    return nil
+  end
+  return best
+end
+
+--- Nearby prop kind wins; then tile (water / grass); else the fight kit.
+function Projectiles.coverFlavor(session, ent, battle)
+  battle = battle or (session and session._battle)
+  local scene = tostring(session and session.coverScene or "")
+  local prop = Projectiles.nearestCoverProp(session, ent)
+  if prop then
+    local fromProp = flavorFromPropKind(prop.kind, scene)
+    if fromProp then
+      return fromProp
+    end
+  end
+  local grid = session and session.grid
+  local u, v = ent and ent.padU, ent and ent.padV
+  if grid and u ~= nil and v ~= nil then
+    local water = grid.water
+    if type(water) == "table" and water[Coords.key(u, v)] then
+      return "water"
+    end
+  end
+  local wx, wy = ent and ent.cellX, ent and ent.cellY
+  if wx == nil and grid and u ~= nil and type(Coords.padToWorld) == "function" then
+    wx, wy = Coords.padToWorld(grid, u, v)
+  end
+  local map = battle and battle.game and battle.game.overworld and battle.game.overworld.map
+  if map and wx ~= nil then
+    if type(map.isWaterCell) == "function" then
+      local ok, wet = pcall(map.isWaterCell, map, wx, wy)
+      if ok and wet then
+        return "water"
+      end
+    end
+    if type(map.isGrassCell) == "function" then
+      local ok, grassy = pcall(map.isGrassCell, map, wx, wy)
+      if ok and grassy then
+        return "grass"
+      end
+    end
+  end
+  local kind = tostring(session and session.coverKind or ""):upper()
+  if kind == "TREE" then
+    return "tree"
+  end
+  if kind == "CRATE" then
+    return "crate"
+  end
+  if kind == "ROCK" then
+    if scene == "grave" then
+      return "grave"
+    end
+    if scene == "water" then
+      return "water"
+    end
+    return "rock"
+  end
+  if scene == "forest" then
+    return "tree"
+  end
+  if scene == "route" then
+    return "grass"
+  end
+  if scene == "water" then
+    return "water"
+  end
+  if scene == "cave" or scene == "mountain" then
+    return "rock"
+  end
+  if scene == "gym" or scene == "indoor" or scene == "city" then
+    return "crate"
+  end
+  if scene == "grave" then
+    return "grave"
+  end
+  return "rock"
+end
+
+--- Tile underfoot for the crouch tell (independent of overlay props).
+function Projectiles.coverSurface(session, ent, battle)
+  battle = battle or (session and session._battle)
+  local grid = session and session.grid
+  local u, v = ent and ent.padU, ent and ent.padV
+  if grid and u ~= nil and v ~= nil then
+    local water = grid.water
+    if type(water) == "table" and water[Coords.key(u, v)] then
+      return "water"
+    end
+  end
+  local wx, wy = ent and ent.cellX, ent and ent.cellY
+  if wx == nil and grid and u ~= nil and type(Coords.padToWorld) == "function" then
+    wx, wy = Coords.padToWorld(grid, u, v)
+  end
+  local map = battle and battle.game and battle.game.overworld and battle.game.overworld.map
+  if map and wx ~= nil then
+    if type(map.isWaterCell) == "function" then
+      local ok, wet = pcall(map.isWaterCell, map, wx, wy)
+      if ok and wet then
+        return "water"
+      end
+    end
+    if type(map.isGrassCell) == "function" then
+      local ok, grassy = pcall(map.isGrassCell, map, wx, wy)
+      if ok and grassy then
+        return "grass"
+      end
+    end
+  end
+  local scene = tostring(session and session.coverScene or "")
+  if scene == "cave" or scene == "mountain" then
+    return "cave"
+  end
+  local GridMod = session and session._deps and session._deps.Grid
+  local hug = nil
+  if GridMod and type(GridMod.wallHug) == "function" then
+    hug = GridMod.wallHug(grid, ent)
+  end
+  if hug then
+    local indoor = scene == "gym" or scene == "indoor" or scene == "city"
+    local solid = hug.kind == "wall" or hug.kind == "prop"
+    local hits = hug.hits
+    if type(hits) == "table" then
+      for i = 1, #hits do
+        local k = hits[i].kind
+        if k == "wall" or k == "prop" then
+          solid = true
+        end
+      end
+    end
+    if indoor or solid then
+      return "wall"
+    end
+  end
+  return "open"
+end
+
+local function battlerCoverHeld(session, battle, battler, isPlayer)
+  if battler and (battler.cover == true or battler._arFieldCover == true) then
+    return true
+  end
+  local RD = session and (session.ReactiveDefense or (battle and battle._arReactiveDefense))
+  if RD and type(RD.sideState) == "function" then
+    local ok, side = pcall(RD.sideState, battle, isPlayer == true)
+    if ok and side and side.cover then
+      return true
+    end
+  end
+  return false
+end
+
+local function battlerInCover(session, battle, battler, isPlayer, ent)
+  if ent and (ent.coverBlend or 0) > 0.15 then
+    return true
+  end
+  return battlerCoverHeld(session, battle, battler, isPlayer)
+end
+
+--- Ease the mon toward the nearest prop and thicken that prop while held.
+function Projectiles.syncCoverHold(session, battle, dt)
+  if not session then
+    return
+  end
+  dt = dt or (1 / 60)
+  local covers = session.covers
+  if type(covers) == "table" then
+    for i = 1, #covers do
+      local prop = covers[i]
+      if prop then
+        prop.coverGrow = 0
+        prop._coverTowardX, prop._coverTowardY = nil, nil
+      end
+    end
+  end
+  local function apply(ent, covered)
+    if not ent then
+      return
+    end
+    local target = covered and 1 or 0
+    local cur = ent.coverBlend or 0
+    local rate = covered and 6 or 8
+    cur = cur + (target - cur) * math.min(1, dt * rate)
+    if math.abs(cur - target) < 0.02 then
+      cur = target
+    end
+    ent.coverBlend = cur
+    ent._coverHeld = covered == true
+    ent._coverSurface = Projectiles.coverSurface(session, ent, battle)
+    if covered then
+      ent.wanderTx, ent.wanderTy = nil, nil
+      ent._wanderCD = math.max(ent._wanderCD or 0, 2.2)
+    end
+    if cur > 0.05 then
+      local prop = Projectiles.nearestCoverProp(session, ent)
+      if prop then
+        local px, py = propPixel(prop)
+        ent.coverTx, ent.coverTy = px, py
+        prop.coverGrow = math.max(prop.coverGrow or 0, cur)
+        local dx = (ent.px or ent.basePx or px) - px
+        local dy = (ent.py or ent.basePy or py) - py
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len > 0.1 then
+          prop._coverTowardX, prop._coverTowardY = dx / len, dy / len
+        else
+          prop._coverTowardX, prop._coverTowardY = 0, 1
+        end
+        ent._coverWall = nil
+      else
+        local GridMod = session._deps and session._deps.Grid
+        local hug = GridMod and type(GridMod.wallHug) == "function"
+            and GridMod.wallHug(session.grid, ent) or nil
+        ent._coverWall = hug
+        if hug and session.grid and ent.padU ~= nil then
+          local wu = ent.padU + (hug.u or 0)
+          local wv = ent.padV + (hug.v or 0)
+          local px, py = Coords.padToPx(session.grid, wu, wv)
+          ent.coverTx, ent.coverTy = px, py
+        else
+          ent.coverTx, ent.coverTy = nil, nil
+        end
+      end
+    else
+      ent.coverTx, ent.coverTy = nil, nil
+      ent._coverWall = nil
+      if not covered then
+        ent._coverSurface = nil
+      end
+    end
+  end
+  apply(session.playerMon, battlerCoverHeld(session, battle, battle and battle.player, true))
+  apply(session.enemyMon, battlerCoverHeld(session, battle, battle and battle.enemy, false))
+end
+
 local STATUS_AURA = {
   PAR = { color = { 1.00, 0.88, 0.18 }, kind = "sparks" },
   FRZ = { color = { 0.55, 0.90, 1.00 }, kind = "ice" },
@@ -199,6 +519,7 @@ local STATUS_AURA = {
   SLP = { color = { 0.72, 0.78, 0.96 }, kind = "zs" },
   CNF = { color = { 0.95, 0.78, 0.22 }, kind = "swirl" },
   LEECH = { color = { 0.28, 0.72, 0.24 }, kind = "seed" },
+  COVER = { color = { 0.78, 0.66, 0.38 }, kind = "cover" },
 }
 
 -- Status moves that paint on the foe (not the user).
@@ -1649,6 +1970,137 @@ local function drawEffect(g, p, x, y, ox, oy)
   end
 end
 
+local function voxelPeek(g, cx, cy, w, h, rgb, alpha)
+  alpha = alpha or 1
+  local isoH = h * 0.5
+  local isoW = w * 0.5
+  if g.polygon then
+    g.setColor(rgb[1], rgb[2], rgb[3], alpha)
+    g.polygon("fill",
+      cx, cy - isoH,
+      cx + isoW, cy,
+      cx, cy + isoH,
+      cx - isoW, cy)
+    g.setColor(rgb[1] * 0.52, rgb[2] * 0.52, rgb[3] * 0.52, alpha * 0.9)
+    g.polygon("fill",
+      cx, cy + isoH,
+      cx + isoW, cy,
+      cx + isoW, cy + isoH * 0.8,
+      cx, cy + isoH * 1.55)
+  else
+    g.setColor(rgb[1], rgb[2], rgb[3], alpha)
+    g.rectangle("fill", cx - isoW, cy - isoH, w, h)
+  end
+end
+
+local function drawPebble(g, cx, cy, w, h, rgb, alpha)
+  voxelPeek(g, cx, cy, w, h, rgb, alpha)
+  g.setColor(1, 1, 1, 0.18 * (alpha or 1))
+  if g.ellipse then
+    g.ellipse("fill", cx + w * 0.08, cy - h * 0.28, w * 0.18, h * 0.12)
+  else
+    g.circle("fill", cx + 0.6, cy - 1.2, 0.8)
+  end
+end
+
+--- Crouch tell underfoot: grass patch, cave pebbles, water dive, wall shade.
+local function drawCoverAura(g, x, y, phase, surface, foeX, foeY, wall)
+  surface = surface or "open"
+  local pulse = 0.62 + 0.28 * math.abs(math.sin(phase * 2.1))
+  local ox, oy = 0, 5.8
+  if foeX and foeY then
+    local dx, dy = foeX - x, foeY - y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len > 1 then
+      ox = dx / len * 2.2
+      oy = oy + dy / len * 1.1
+    end
+  end
+  local cx, cy = x + ox, y + oy
+  if surface == "grass" then
+    g.setColor(0.12, 0.28, 0.10, 0.40 * pulse)
+    if g.ellipse then
+      g.ellipse("fill", cx, cy, 8.6, 2.6)
+    else
+      g.circle("fill", cx, cy, 3.0)
+    end
+    for i = -2, 2 do
+      local px = cx + i * 2.5
+      local sway = math.sin(phase * 4.6 + i * 1.2) * 0.85
+      local h = 4.4 + (i % 2) * 1.4
+      g.setColor(0.28, 0.62, 0.20, 0.82)
+      if g.polygon then
+        g.polygon("fill",
+          px + sway, cy - h,
+          px + 1.2, cy + 1.1,
+          px - 1.2, cy + 1.1)
+      else
+        g.line(px, cy + 1, px + sway, cy - h)
+      end
+    end
+    return
+  end
+  if surface == "cave" then
+    -- Little voxel rocks around the lower body — not a Dig hole.
+    local bob = math.sin(phase * 2.2) * 0.25
+    local rocks = {
+      { -7.2, 2.4, 7.5, 5.4, { 0.46, 0.38, 0.30 } },
+      { 6.8, 2.0, 6.6, 4.8, { 0.54, 0.46, 0.36 } },
+      { -3.4, 5.6, 6.2, 4.6, { 0.40, 0.34, 0.28 } },
+      { 3.6, 5.8, 8.2, 5.8, { 0.50, 0.42, 0.32 } },
+      { 0.4, 1.6, 5.0, 3.8, { 0.58, 0.50, 0.40 } },
+    }
+    for i = 1, #rocks do
+      local r = rocks[i]
+      local py = cy - 4.2 + r[2] + bob * ((i % 2 == 0) and 1 or -1)
+      drawPebble(g, cx + r[1], py, r[3], r[4], r[5], 0.92 * pulse)
+    end
+    return
+  end
+  if surface == "water" then
+    local ring = 0.7 + 0.3 * math.abs(math.sin(phase * 3.2))
+    g.setColor(0.18, 0.46, 0.72, 0.42 * pulse)
+    if g.ellipse then
+      g.ellipse("fill", cx, cy, 9.2 * ring, 3.0)
+      g.setColor(0.78, 0.92, 1.00, 0.40 * pulse)
+      g.ellipse("line", cx, cy, 8.0 * ring, 2.5)
+      g.ellipse("line", cx, cy, 5.2, 1.7)
+    else
+      g.circle("fill", cx, cy, 3.6)
+    end
+    for i = 1, 4 do
+      local drift = (phase * 0.7 + i * 0.22) % 1
+      local px = cx + math.sin(phase * 2.1 + i * 1.7) * 5.0
+      local py = cy - 1 - drift * 7
+      local a = 0.55 * (1 - drift)
+      g.setColor(0.55, 0.82, 1.00, a)
+      g.circle("fill", px, py, 1.05 + (i % 2) * 0.35)
+      g.setColor(1, 1, 1, a * 0.5)
+      g.circle("fill", px - 0.3, py - 0.3, 0.4)
+    end
+    return
+  end
+  if surface == "wall" then
+    local wx = (wall and wall.u or 0) * 3.2
+    local wy = (wall and wall.v or 0) * 2.4
+    g.setColor(0.05, 0.04, 0.05, 0.50 * pulse)
+    if g.ellipse then
+      g.ellipse("fill", cx + wx, cy + wy, 7.4, 2.6)
+    else
+      g.circle("fill", cx + wx, cy + wy, 3.0)
+    end
+    voxelPeek(g, cx + wx * 0.6, cy + wy - 1.2, 9, 5, { 0.08, 0.07, 0.08 }, 0.32 * pulse)
+    return
+  end
+  g.setColor(0.06, 0.05, 0.04, 0.42 * pulse)
+  if g.ellipse then
+    g.ellipse("fill", cx, cy, 8.4, 2.8)
+  else
+    g.circle("fill", cx, cy, 3.2)
+  end
+  voxelPeek(g, cx, cy - 1.6, 11, 6, { 0.10, 0.09, 0.08 }, 0.28 * pulse)
+end
+
 local function drawStatusAura(g, x, y, status, phase)
   local aura = STATUS_AURA[status]
   if not aura then
@@ -1755,6 +2207,8 @@ local function drawStatusAura(g, x, y, status, phase)
     end
   elseif aura.kind == "seed" then
     drawSeedSprouts(g, x, y, phase, c, { planted = true, fade = 1 })
+  elseif aura.kind == "cover" then
+    drawCoverAura(g, x, y, phase, "rock")
   end
 end
 
@@ -1861,9 +2315,17 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   local g = love.graphics
   local phase = now()
   camX, camY = camX or 0, camY or 0
+  local function mapPt(wx, wy)
+    local x = wx - camX
+    local y = wy - camY
+    if type(mapFn) == "function" then
+      x, y = mapFn(x, y)
+    end
+    return x, y
+  end
   for _, item in ipairs({
-    { ent = session.playerMon, battler = battle and battle.player },
-    { ent = session.enemyMon, battler = battle and battle.enemy },
+    { ent = session.playerMon, battler = battle and battle.player, isPlayer = true },
+    { ent = session.enemyMon, battler = battle and battle.enemy, isPlayer = false },
   }) do
     local ent = item.ent
     local mon = item.battler and item.battler.mon
@@ -1876,15 +2338,12 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
       confused = nil
     end
     local leech = item.battler and item.battler.leechSeeded
+    local covered = battlerInCover(session, battle, item.battler, item.isPlayer, ent)
     if ent and not ent.hidden and not ent._removed and not ent._fainting
-        and ((status and STATUS_AURA[status]) or confused or leech) then
+        and ((status and STATUS_AURA[status]) or confused or leech or covered) then
       local wx, wy = center(session, ent)
       if wx then
-        local x = wx - camX
-        local y = wy - camY
-        if type(mapFn) == "function" then
-          x, y = mapFn(x, y)
-        end
+        local x, y = mapPt(wx, wy)
         if status and STATUS_AURA[status] then
           drawStatusAura(g, x, y, status, phase)
         end
@@ -1893,6 +2352,21 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
         end
         if leech then
           drawStatusAura(g, x, y, "LEECH", phase)
+        end
+        if covered then
+          local surface = Projectiles.coverSurface(session, ent, battle)
+          local prop = Projectiles.nearestCoverProp(session, ent)
+          -- Tile tells (grass / cave / water) always sit under the crouch.
+          -- Open/wall with a real prop: the world prop is the hide, no sticker.
+          local paint = not (prop and (surface == "open" or surface == "wall"))
+          if paint then
+            local foe = item.isPlayer and session.enemyMon or session.playerMon
+            local foeX, foeY = center(session, foe)
+            if foeX then
+              foeX, foeY = mapPt(foeX, foeY)
+            end
+            drawCoverAura(g, x, y, phase, surface, foeX, foeY, ent._coverWall)
+          end
         end
       end
     end
