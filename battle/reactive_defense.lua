@@ -1,4 +1,4 @@
--- Anime Realism — Reactive Defense
+-- Anime Realism — Reactive Defense ~ REACT
 --
 -- Focus-meter reactions: Commit / Dodge / Take Cover / Brace / Entrench.
 -- Pure logic module; main.lua owns menus, queue splicing, and engine hooks.

@@ -1,4 +1,7 @@
-# Reactive Defense System — Design Sketch
+# The REACT Battle System — Overview
+
+An overhauled reactive defense system that expands on traditional turn-based Pokémon battles.
+
 
 ## Core Resource: Focus Meter
 

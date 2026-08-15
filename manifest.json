@@ -3,6 +3,9 @@
   "name": "Anime Realism",
   "version": "4.6.0",
   "api": 2,
+  "games": [
+    "gen1"
+  ],
   "entry": "main.lua",
   "profile": "content",
   "category": "GAMEPLAY",
@@ -21,6 +24,6 @@
   "permissions": [
     "engine_internals"
   ],
-  "description": "FIELD battles with diamond move cast, Right-Shift pause, and readable toasts.",
+  "description": "FIELD battles with the overhauled REACT battle system, Right-Shift pause, and readable toasts.",
   "github": "businessmachines02/anime-realism"
 }

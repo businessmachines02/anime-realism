@@ -1,8 +1,19 @@
 # Anime Realism
 
-A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: hide levels and HP everywhere so you play by feel instead of numbers. In the anime you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting.
+A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
 **Current build:** `4.5.20` (`anime_realism-4.5.20.zip`)
+
+> **Important Note:**  
+> This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+
+## Compatibility 
+
+This works best when the following mods are installed: 
+
+
+
 
 ## Why hide levels too?
 
@@ -25,31 +36,9 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 
 ### Reactive Defense (Focus)
 
-Requires **REACTIVE DEF**. Your reactions use a **Focus** meter (starts at 50, caps around 100 and scales a bit with level / base Speed).
+The overhauled battle system to create a more anime-like experience. Requires **REACTIVE DEF**. Your reactions use a **Focus** meter (starts at 50, caps around 75 and scales a bit with level / base Speed).
 
-| Option | Cost | Effect |
-|--------|------|--------|
-| **COMMIT** | 0 | Take the hit; bank Focus regen (+15 end of turn if you didn't react) |
-| **DODGE** | 25 | Speed check — miss or take +30% and lose priority next |
-| **TAKE COVER** | 20 | Durability pool from Defense (type bonus for Ground/Water/Ghost); soak hits |
-| **BRACE** | 15 | Call Physical / Special / Status — correct call cuts damage; wrong call hurts more |
-| **ENTRENCH** | 30 | Lock 2–3 turns of heavy mitigation; FIGHT offers HOLD / BREAK |
-
-- **REACT MENU:** ALWAYS (default) / THREAT / OFF. OFF skips the menu (hits resolve without Focus spends).
-- End of turn: +5 Focus if you reacted, +15 if you Committed (or didn't spend a react).
-- **Cover:** while sheltered, FIGHT offers **EMERGE** (−10 Focus, exposed next hit) or **STAY**. Pierce moves (Earthquake, Surf, …) and unreactables chew durability harder.
-- **Unreactable** starters: Explosion / Selfdestruct / Hyper Beam — Dodge/Brace disabled; Cover still possible but fragile.
-- **Entrench:** incoming hits auto-soak with mitigation while locked; HOLD / BREAK on your turn (early break refunds a little Focus).
-- Legacy trainer-foe auto dodge/brace and your physical **COUNTER** / **Again!** path still apply alongside Focus.
-
-1. Counter arms when the foe **misses** you with a damaging move (dodge EVADE helping here is the usual path), or on a rare **~20%** chance when a **physical** hit still lands.
-2. If you attack while armed (going first or second): the announce is only **“Counter with X!”** (no generic move callout under it), the hit deals **+25%** once — no OPENING! menu.
-3. Same-round **COUNTER!** (pick a move / HOLD) only appears after a **successful dodge** and the foe’s attack **misses** — after the miss anim and “dodged aside!” line. Failed dodges never open it.
-4. Going **second**: that panel can **change moves** from your turn-start pick (or **HOLD** to keep the plan without the counter boost). Going **first**: it fires an immediate extra counter strike.
-5. **Risk (light):** counter swings have only ~**5%** extra miss chance. If your counter **misses**, there is a ~**40%** chance the foe snaps back for about **half** the damage their whiffed hit would have done (otherwise it’s just a normal miss).
-6. If the foe **survives** that counter hit → a varied **Again!** callout (opening / flinch / pressure flavor, not just “Again!”) — a true second strike (fresh anim + damage roll + re-armed Stadium / Battle Cinematics attack camera, no extra PP, no double recoil/secondaries). Skipped for Explosion / Selfdestruct / Struggle / the move Counter.
-7. **HOLD** (same-round panel only): no boost; arming clears (going second: your original move still happens).
-8. Arming can survive across turn boundaries until you spend it on an attack.
+See the detailed [The REACT Battle System Design](./battle/OVERVIEW.md) for full mechanics and examples.
 
 ### Trainer foe reactions
 
@@ -59,18 +48,6 @@ Requires **REACTIVE DEF**. Your reactions use a **Focus** meter (starts at 50, c
 - After a foe counter that lands, ~**40%** chance they also **Again!** (same true second-hit rules).
 - Foe cover clears when they attack (with a short leave-cover line when they had cover).
 - Enemy switch clears foe cover / counter state.
-
-### REACT MENU — when THREAT opens the menu
-
-A damaging foe move is “threat” if any of these hold:
-
-- Your HP is at or below **LOW HP AT**
-- Move power ≥ **80**
-- Special move with power ≥ **40**
-- Foe is ≥ **5** levels above you
-- First meaningful foe hit this turn with power ≥ **40** (once)
-
-Damage is deferred until after the Focus pick so Dodge misses / Brace mults / Cover soak apply.
 
 ### Underdog EXP
 
@@ -171,20 +148,10 @@ Three packages under one mod:
 | Package | Role |
 |---------|------|
 | `immersion/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
-| `battle/` | Traditional battle systems (Reactive Defense, callouts, bubbles, banter, chips) |
+| `battle/` | The overhauled REACT battle system math |
 | `field_battle/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
 
 `main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field_battle/SPEC.md`](field_battle/SPEC.md).
-
-## Compatibility
-
-Works with the stock battle UI. Optional companions:
-
-- **Dramatic Shape** (`DRAMATIC_SHAPE`)
-- **Dramaless Shape** (`DRAMALESS_SHAPE`) — Stadium models
-- **StadiumBattleFX** (`STADIUM_BATTLE_FX`) — Stadium move VFX (load priority 110; Anime Realism is 200 for HUD/text). Dig/Fly-style dodge hides still play alongside Stadium/Dramaless.
-- **Quality of Life** (`quality_of_life`) — XP bar suppression
-- **Gen 3 Inspired UI** (`gen3_battle_ui`)
 
 ## License
 
