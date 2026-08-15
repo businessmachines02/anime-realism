@@ -34,6 +34,13 @@ Lifecycle.CAMERA_CLAMP_PAD = 32
 Lifecycle.CAMERA_EDGE_MARGIN_X = 22
 Lifecycle.CAMERA_EDGE_MARGIN_TOP = 16
 Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM = 54
+-- Mouse look-around: while the cursor is moving, peek around the fight.
+-- When it rests, the auto camera eases back in.
+Lifecycle.CAMERA_LOOK_HOLD = 0.45
+Lifecycle.CAMERA_LOOK_RATE = 11
+Lifecycle.CAMERA_LOOK_SPAN = 56
+Lifecycle.CAMERA_LOOK_CLAMP_PAD = 64
+Lifecycle.CAMERA_LOOK_MOVE_PX = 3
 
 -- Weak keys: sessions die with their BattleState without explicit cleanup races.
 local byBattle = setmetatable({}, { __mode = "k" })
@@ -430,14 +437,14 @@ local function applyCameraFocus(cam, fx, fy, vw, vh)
     end
 end
 
-local function envelopeRectPx(session)
+local function envelopeRectPx(session, pad)
     local rect = session and ((session.envelope and session.envelope.gridRect)
         or (session.grid and session.grid.worldRect))
     if not rect then
         return nil
     end
     local cell = Coords.CELL
-    local pad = Lifecycle.CAMERA_CLAMP_PAD or 32
+    pad = pad or Lifecycle.CAMERA_CLAMP_PAD or 32
     return {
         minX = rect.minX * cell + cell / 2 - pad,
         maxX = rect.maxX * cell + cell / 2 + pad,
@@ -549,6 +556,89 @@ local function actionLeavesView(pts, cam, focusX, focusY, vw, vh)
     return false
 end
 
+local function windowSize()
+    if love and love.graphics then
+        if type(love.graphics.getDimensions) == "function" then
+            local ok, w, h = pcall(love.graphics.getDimensions)
+            if ok and type(w) == "number" and w > 0 then
+                return w, h or w
+            end
+        end
+        if type(love.graphics.getWidth) == "function" then
+            local w = love.graphics.getWidth()
+            local h = (type(love.graphics.getHeight) == "function")
+                and love.graphics.getHeight() or w
+            if type(w) == "number" and w > 0 then
+                return w, h
+            end
+        end
+    end
+    return nil, nil
+end
+
+--- Cursor as a -1..1 offset from the window center (right/down positive).
+function Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
+    sw = tonumber(sw) or 0
+    sh = tonumber(sh) or 0
+    if sw < 1 or sh < 1 then
+        return 0, 0
+    end
+    local nx = ((tonumber(mx) or 0) / sw) * 2 - 1
+    local ny = ((tonumber(my) or 0) / sh) * 2 - 1
+    return clamp(nx, -1, 1), clamp(ny, -1, 1)
+end
+
+--- Tests / input hook: hold a look offset until the idle timer elapses.
+function Lifecycle.noteMouseLook(session, nx, ny, hold)
+    if not session then
+        return
+    end
+    session.mouseLookNx = clamp(tonumber(nx) or 0, -1, 1)
+    session.mouseLookNy = clamp(tonumber(ny) or 0, -1, 1)
+    session.mouseLookT = hold or Lifecycle.CAMERA_LOOK_HOLD or 0.45
+end
+
+local function sampleMouseLook(session, dt)
+    if not session then
+        return
+    end
+    dt = (type(dt) == "number" and dt > 0) and dt or 0
+    session.mouseLookT = math.max(0, (session.mouseLookT or 0) - dt)
+    if session._mouseLookInjected then
+        return
+    end
+    if not (love and love.mouse and type(love.mouse.getPosition) == "function") then
+        return
+    end
+    if love.window and type(love.window.hasMouseFocus) == "function" then
+        local ok, focused = pcall(love.window.hasMouseFocus)
+        if ok and focused == false then
+            return
+        end
+    end
+    local ok, mx, my = pcall(love.mouse.getPosition)
+    if not (ok and type(mx) == "number") then
+        return
+    end
+    local sw, sh = windowSize()
+    if not sw then
+        return
+    end
+    local lastX, lastY = session._mouseWinX, session._mouseWinY
+    session._mouseWinX, session._mouseWinY = mx, my
+    if lastX == nil then
+        -- First sample: remember pose, do not look (cursor may sit in a corner).
+        return
+    end
+    local dx, dy = mx - lastX, my - lastY
+    local eps = Lifecycle.CAMERA_LOOK_MOVE_PX or 3
+    if (dx * dx + dy * dy) < (eps * eps) then
+        return
+    end
+    local nx, ny = Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
+    Lifecycle.noteMouseLook(session, nx, ny)
+end
+
 function Lifecycle.focusCamera(battle, dt)
     local session = Lifecycle.get(battle)
     if not (session and session.live) then
@@ -561,9 +651,16 @@ function Lifecycle.focusCamera(battle, dt)
         return
     end
 
+    local useDt = (type(dt) == "number" and dt > 0) and dt or (1 / 60)
+    if useDt > 1 / 15 then
+        useDt = 1 / 15
+    end
+    sampleMouseLook(session, useDt)
+
     local fx, fy, pts = liveActionFocus(session)
+    local looking = (session.mouseLookT or 0) > 0
     local nudgeT = session.camNudgeT or 0
-    if nudgeT > 0 and session.camNudgeX and session.camNudgeY then
+    if not looking and nudgeT > 0 and session.camNudgeX and session.camNudgeY then
         local w = math.min(1, nudgeT / 0.35) * 0.55
         fx = fx * (1 - w) + session.camNudgeX * w
         fy = fy * (1 - w) + session.camNudgeY * w
@@ -575,6 +672,16 @@ function Lifecycle.focusCamera(battle, dt)
     -- the compact pad appears in the unobstructed upper viewport.
     local targetX = fx
     local targetY = fy + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
+    if looking then
+        local span = Lifecycle.CAMERA_LOOK_SPAN or 56
+        targetX = targetX + (session.mouseLookNx or 0) * span
+        targetY = targetY + (session.mouseLookNy or 0) * span
+        local env = envelopeRectPx(session, Lifecycle.CAMERA_LOOK_CLAMP_PAD)
+        if env then
+            targetX = clamp(targetX, env.minX, env.maxX)
+            targetY = clamp(targetY, env.minY, env.maxY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y))
+        end
+    end
     session.camTargetX, session.camTargetY = targetX, targetY
     session.focusX, session.focusY = fx, fy
 
@@ -587,10 +694,6 @@ function Lifecycle.focusCamera(battle, dt)
         end
     end
 
-    local useDt = (type(dt) == "number" and dt > 0) and dt or (1 / 60)
-    if useDt > 1 / 15 then
-        useDt = 1 / 15
-    end
     local dx, dy = targetX - cx, targetY - cy
     local dist2 = dx * dx + dy * dy
     local snap = Lifecycle.CAMERA_PAN_SNAP
@@ -599,7 +702,9 @@ function Lifecycle.focusCamera(battle, dt)
         cx, cy = targetX, targetY
     else
         local rate = Lifecycle.CAMERA_PAN_RATE
-        if nudgeT > 0 then
+        if looking then
+            rate = Lifecycle.CAMERA_LOOK_RATE
+        elseif nudgeT > 0 then
             rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
         elseif offscreen then
             rate = Lifecycle.CAMERA_PAN_CATCHUP_RATE

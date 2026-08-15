@@ -91,6 +91,46 @@ local function hpBar(g, x, y, w, ratio)
     end
 end
 
+-- Letter + bar + pointer: keep the chip on the canvas when a mon is
+-- near the top (or side) of the view.
+UI.HP_CHIP_W = 27
+UI.HP_CHIP_H = 7
+UI.HP_CHIP_TOP = 2
+
+function UI.clampHpChip(x, y, canvasW, canvasH)
+    canvasW = tonumber(canvasW) or UI.WIDTH
+    canvasH = tonumber(canvasH) or UI.HEIGHT
+    local w = UI.HP_CHIP_W
+    local h = UI.HP_CHIP_H
+    local top = UI.HP_CHIP_TOP
+    y = tonumber(y) or 0
+    x = tonumber(x) or 0
+    if y < top then
+        y = top
+    end
+    if y + h > canvasH - 1 then
+        y = canvasH - 1 - h
+    end
+    local half = math.floor(w / 2)
+    if x - half < 1 then
+        x = 1 + half
+    elseif x - half + w > canvasW - 1 then
+        x = canvasW - 1 - w + half
+    end
+    return x, y
+end
+
+local function overlaySize(ren)
+    local w, h = UI.WIDTH, UI.HEIGHT
+    if ren and type(ren.uiSize) == "function" then
+        local a, b = ren:uiSize()
+        if type(a) == "number" and a > 0 then
+            w, h = a, b or h
+        end
+    end
+    return w, h
+end
+
 function UI.active(battle)
     return battle ~= nil
         and (battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone)
@@ -167,6 +207,14 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             if mode == "ui" and Coords and type(Coords.worldViewToUi) == "function" then
                 x, y = Coords.worldViewToUi(wx, wy, ren)
             end
+            local canvasW, canvasH = overlaySize(ren)
+            if mode ~= "ui" and ren and type(ren.worldViewSize) == "function" then
+                local a, b = ren:worldViewSize()
+                if type(a) == "number" and a > 0 then
+                    canvasW, canvasH = a, b or canvasH
+                end
+            end
+            x, y = UI.clampHpChip(x, y, canvasW, canvasH)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
             -- Stash UI anchors for speech bubbles / other overlay chrome.

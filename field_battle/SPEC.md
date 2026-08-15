@@ -136,7 +136,8 @@ All step helpers mutate **pad** only; convert at boundaries (staging, draw, FX, 
 ## Compact FIELD UI
 
 - Tiny proportional HP bars follow each visible Pokémon in world space; FIELD
-  does not reserve the top of the screen for status panels.
+  does not reserve the top of the screen for status panels. Chips clamp to
+  the visible canvas so a mon near the top of the view cannot hide its bar.
 - Compact command and move cursors read `battle.menuIndex` / `battle.moveIndex`; input
   and phase transitions remain owned by `BattleState`.
 - Dialogue reuses `battle.shown`, waits, and typewriter progress in a narrow
@@ -179,7 +180,8 @@ Dedupe by wall time (`_lastPresentAt`, ~8ms) so multiple drivers don’t double-
 
 - `Cast.tick` → entity `tick` (bob, idle foot-swap, animT, lerp to pad target)
 - `Cues.tickReturns` (physical attack return-home)
-- soft camera follow of the **live fight** (throttled; clamped to the envelope)
+- soft camera follow of the **live fight** (throttled; clamped to the envelope;
+  mouse look-around while the cursor is moving, auto resume on idle)
 - `Anims.cache` while `animPlaying` or moving
 
 ### What present tick must NOT depend on
@@ -268,6 +270,8 @@ Intended sequence:
 7. **Live** — present clock starts; camera soft-pans to the live battler
    midpoint (clamped to the fight envelope so wander / knockback / cover
    cannot drag it off the pad) and briefly emphasizes attack targets.
+   Moving the mouse peeks around that focus; when the cursor rests, auto
+   framing eases back in.
 
 ## Battle end (`Lifecycle.finish`)
 

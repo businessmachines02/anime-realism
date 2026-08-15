@@ -37,6 +37,7 @@ RD.COST = {
 -- which requires more focus and effort—mirroring how it's easier to stay still than to move suddenly in real life.
 --
 -- Bracing on the other hand, is never likely to "miss"...unless the foe naturally does. 
+-- but since bracing is a buff to yourself, it does consume focus points.
 RD.DODGE_COUNTER_CHANCE = 0.30
 RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2

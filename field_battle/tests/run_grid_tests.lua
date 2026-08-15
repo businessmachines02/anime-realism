@@ -336,6 +336,69 @@ function tests.compact_field_ui_tracks_engine_cursors()
   truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
 end
 
+function tests.hp_chip_stays_on_screen_near_top()
+  local x, y = UI.clampHpChip(80, -12, 160, 144)
+  eq(y, UI.HP_CHIP_TOP, "negative bar Y pins to the top margin")
+  x, y = UI.clampHpChip(80, 0, 160, 144)
+  eq(y, UI.HP_CHIP_TOP, "bar at y=0 is still fully visible")
+  x, y = UI.clampHpChip(80, 40, 160, 144)
+  eq(x, 80, "in-view bar keeps its X")
+  eq(y, 40, "in-view bar keeps its Y")
+  x = select(1, UI.clampHpChip(-20, 40, 160, 144))
+  truthy(x - math.floor(UI.HP_CHIP_W / 2) >= 1, "left edge stays on canvas")
+
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80,
+    py = 4,
+    _fieldBarLift = 24,
+    hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = {
+        camera = { x = 0, y = 0 },
+        entities = { enemy },
+      },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  truthy(#painted > 0, "HP chip paints")
+  local minY = 999
+  for i = 1, #painted do
+    if painted[i].y < minY then
+      minY = painted[i].y
+    end
+  end
+  truthy(minY >= UI.HP_CHIP_TOP, "top-of-screen mon does not clip its HP chip")
+end
+
 function tests.compact_arena_keeps_cast_lanes_clear()
   local player = { cellX = 10, cellY = 10, facing = "right" }
   local fx, fy = Layout.wildAnchor(player)
@@ -1563,6 +1626,66 @@ function tests.camera_tracks_live_battlers()
   truthy(math.abs(followed.x - startX) > 2, "camera leaves the static envelope lock")
   eq(followed.x, wantX, "pan settles on live battler midpoint X")
   eq(followed.y, wantY, "pan settles on live battler midpoint Y above menu")
+end
+
+function tests.camera_mouse_look_then_returns()
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+    _mouseLookInjected = true,
+  }
+  Lifecycle._testBind(battle, session)
+
+  local nx, ny = Lifecycle.mouseLookFromWindow(160, 72, 160, 144)
+  eq(nx, 1, "right edge is +1 look X")
+  eq(ny, 0, "vertical center is 0 look Y")
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local restX = followed.x
+  local restY = followed.y
+
+  Lifecycle.noteMouseLook(session, 1, 0, 8)
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  truthy(followed.x > restX + 8, "mouse motion peeks the camera to the right")
+  local peekedX = followed.x
+
+  session.mouseLookT = 0
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  eq(followed.x, restX, "idle mouse returns camera X to auto framing")
+  eq(followed.y, restY, "idle mouse returns camera Y to auto framing")
+  truthy(peekedX ~= restX, "look-around actually moved the camera")
 end
 
 function tests.sprite_cast_and_animation()

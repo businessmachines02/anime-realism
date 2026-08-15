@@ -71,6 +71,41 @@ function Hooks.install(FBV, mod)
         end
     end
 
+    -- Peek around the fight while the mouse is moving. Idle → auto camera.
+    do
+        local okG, Game = pcall(require, "src.core.Game")
+        if okG and type(Game) == "table" and not Game._arFbvMouseLook then
+            local origMove = Game.mousemoved
+            function Game:mousemoved(x, y, dx, dy, ...)
+                if FBV.enabled(mod) and FBV.Lifecycle
+                    and type(FBV.Lifecycle.liveBattle) == "function" then
+                    local session = select(2, FBV.Lifecycle.liveBattle(self))
+                    if session and session.live then
+                        local mx = tonumber(dx) or 0
+                        local my = tonumber(dy) or 0
+                        local eps = FBV.Lifecycle.CAMERA_LOOK_MOVE_PX or 3
+                        if (mx * mx + my * my) >= (eps * eps) then
+                            local sw, sh = 160, 144
+                            if love and love.graphics
+                                and type(love.graphics.getDimensions) == "function" then
+                                local ok, w, h = pcall(love.graphics.getDimensions)
+                                if ok and type(w) == "number" and w > 0 then
+                                    sw, sh = w, h or sh
+                                end
+                            end
+                            local nx, ny = FBV.Lifecycle.mouseLookFromWindow(x, y, sw, sh)
+                            FBV.Lifecycle.noteMouseLook(session, nx, ny)
+                        end
+                    end
+                end
+                if type(origMove) == "function" then
+                    return origMove(self, x, y, dx, dy, ...)
+                end
+            end
+            Game._arFbvMouseLook = true
+        end
+    end
+
     local function focusEntrenched(battle)
         -- Entrench used to eat PreferMoves attacks via executeAction → holdPosition.
         -- We still avoid auto-opening the diamond so FIGHT can show ENTRENCH!.
