@@ -4,7 +4,6 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 <img width="800" height="596" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" />
 
-**Current build:** `3.0.0` (`anime_realism-3.0.0.zip`)
 
 > **Important Note:**  
 > This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [architecture.md](./architecture.md).
