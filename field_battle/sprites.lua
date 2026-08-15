@@ -20,22 +20,6 @@ local function loadImage(path)
     end
   end
   if love and love.graphics and love.graphics.newImage then
-    local f = io.open(path, "rb")
-    if f and love.filesystem and love.filesystem.newFileData then
-      local bytes = f:read("*a")
-      f:close()
-      if type(bytes) == "string" and #bytes > 0 then
-        local okFd, fd = pcall(love.filesystem.newFileData, bytes, "fbv.png")
-        if okFd and fd then
-          local okImg, img = pcall(love.graphics.newImage, fd)
-          if okImg and img then
-            return img
-          end
-        end
-      end
-    elseif f then
-      f:close()
-    end
     local ok, img = pcall(love.graphics.newImage, path)
     if ok and img then
       return img
@@ -59,16 +43,11 @@ local function findHandle(mod, id)
   return nil
 end
 
-local function fileExists(path)
-  if type(path) ~= "string" or path == "" then
-    return false
+local function loadablePath(path)
+  if loadImage(path) then
+    return path
   end
-  local f = io.open(path, "rb")
-  if f then
-    f:close()
-    return true
-  end
-  return false
+  return nil
 end
 
 local function handleRoot(handle)
@@ -153,22 +132,10 @@ function Sprites.fieldSpriteStyle(mod)
   return "followers"
 end
 
-local function appSupport(rel)
-  local home = os.getenv and os.getenv("HOME")
-  if type(home) ~= "string" or home == "" then
-    return nil
-  end
-  return home .. "/Library/Application Support/pokemon-love2d/mods/" .. rel
-end
-
 local function sheetFromPath(path, frames, walker)
   if type(path) ~= "string" or path == "" then
     return nil
   end
-  if fileExists(path) then
-    return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
-  end
-  -- Assets.image can still resolve some pack-relative paths.
   return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
 end
 
@@ -187,19 +154,11 @@ local function pokePcPath(mod, game, species)
     local root = handleRoot(handle)
     local dex = speciesDex(game, key)
     if root and dex then
-      local path = root .. "/assets/sprites/follower_"
-        .. string.format("%03d", dex) .. ".png"
-      if fileExists(path) then
+      local path = loadablePath(root .. "/assets/sprites/follower_"
+        .. string.format("%03d", dex) .. ".png")
+      if path then
         return path
       end
-    end
-  end
-  local dex = speciesDex(game, key)
-  if dex then
-    local path = appSupport("PokePCFollowers_VoxelMerge/assets/sprites/follower_"
-      .. string.format("%03d", dex) .. ".png")
-    if path and fileExists(path) then
-      return path
     end
   end
   return nil
@@ -207,15 +166,7 @@ end
 
 local function wildsRoot(mod)
   local handle = findHandle(mod, "overworld_wild_spawns")
-  local root = handleRoot(handle)
-  if root then
-    return root
-  end
-  local path = appSupport("overworld_wild_spawns")
-  if path and fileExists(path .. "/manifest.json") then
-    return path
-  end
-  return nil
+  return handleRoot(handle)
 end
 
 local function wildsPackPath(mod, game, species, style, shiny)
@@ -253,8 +204,9 @@ local function wildsPackPath(mod, game, species, style, shiny)
     }
   end
   for i = 1, #candidates do
-    if fileExists(candidates[i]) then
-      return candidates[i]
+    local path = loadablePath(candidates[i])
+    if path then
+      return path
     end
   end
   return nil
@@ -339,8 +291,9 @@ local function swimPackPath(mod, game, species, shiny)
     root .. "/assets/generated/true_size/levitate/" .. nnn .. "-normal.png",
   }
   for i = 1, #candidates do
-    if fileExists(candidates[i]) then
-      return candidates[i]
+    local path = loadablePath(candidates[i])
+    if path then
+      return path
     end
   end
   return nil

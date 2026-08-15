@@ -32,13 +32,6 @@ return function(mod)
                 src = body
             end
         end
-        if type(src) ~= "string" and type(mod.path) == "string" then
-            local f = io.open(mod.path .. "/lib/modload.lua", "r")
-            if f then
-                src = f:read("*a")
-                f:close()
-            end
-        end
         if type(src) == "string" and src ~= "" then
             local chunk, err = load(src, "@lib/modload.lua")
             if chunk then
@@ -277,39 +270,11 @@ return function(mod)
         local dev = {
             linesMax = 12,
             byBattle = setmetatable({}, { __mode = "k" }),
-            filePath = nil,
             peek = nil,
             draw = nil,
         }
         function dev.on()
             return mod.options:get("dev_overlay") == true
-        end
-
-        function dev.file()
-            if dev.filePath then
-                return dev.filePath
-            end
-            if love and love.filesystem and love.filesystem.getSaveDirectory then
-                local ok, dir = pcall(love.filesystem.getSaveDirectory)
-                if ok and type(dir) == "string" and dir ~= "" then
-                    dev.filePath = dir .. "/anime_realism_dev.log"
-                    return dev.filePath
-                end
-            end
-            return nil
-        end
-
-        function dev.append(line)
-            local path = dev.file()
-            if not path then
-                return
-            end
-            local ok, f = pcall(io.open, path, "a")
-            if ok and f then
-                f:write(line)
-                f:write("\n")
-                f:close()
-            end
         end
 
         function dev.bag(battle)
@@ -340,7 +305,6 @@ return function(mod)
             while #lines > dev.linesMax do
                 table.remove(lines, 1)
             end
-            dev.append(msg)
         end
 
         local function calloutPickMode()
@@ -7827,6 +7791,7 @@ return function(mod)
             -- Same-turn COUNTER! waits for dodge-whiff text in wrapBattleSay.
             return result
         end
+
         EffectRegistry._arReactRunDamaging = EffectRegistry.runDamaging
 
         local function silentStageDelta(who, stat, delta)
