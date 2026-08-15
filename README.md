@@ -8,6 +8,8 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
   <img width="400" height="298" alt="wild-encounter" src="https://github.com/user-attachments/assets/6f86a3a4-6e48-43c2-a0df-c94ac85b4449" style="display: inline-block; vertical-align: top;" />
 </p>
 <img width="800" height="614" alt="caves-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/56d2ea5f-9469-493f-8d89-b78ed2815563" />
+<img width="800" height="613" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" />
+
 
 
 
