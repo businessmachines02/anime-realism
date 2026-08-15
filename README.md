@@ -2,18 +2,52 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
-**Current build:** `4.5.20` (`anime_realism-4.5.20.zip`)
+**Current build:** `3.0` (`anime_realism-3.0.zip`)
 
 > **Important Note:**  
-> This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+> This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [architecture.md](./architecture.md).
 
+## Compatibility
 
-## Compatibility 
+FIELD sits on the live overworld. This is the companion stack and Dramatic Shape / Dramaless settings currently used with this mod. Anime Realism itself has no hard deps; without the mods below you still get hidden numbers and REACT, but FIELD battlers and the voxel map will be missing or flat.
 
-This works best when the following mods are installed: 
+### Companion mods
 
+Enable **one** voxel world mod only — Dramatic Shape, Dramaless Shape, and Potato Voxel conflict.
 
+| Mod | Id | Why |
+|-----|----|-----|
+| [Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod) or [Dramaless Shape](https://github.com/artyrambles/DRAMALESS_SHAPE) | `DRAMATIC_SHAPE` / `DRAMALESS_SHAPE` | Voxel overworld under FIELD. Staging is gated so a 3D arena does not cover map fights. |
+| [Wilds of Kanto](https://github.com/YoDrehDenSwagAuf/overworld-spawn-mod) | `overworld_wild_spawns` | Visible wilds plus overworld sheets FIELD can use |
+| PokéPC Followers (Voxel Merge) | `PokePCFollowers_VoxelMerge` | GSC-style follower / battler sheets |
+| [Followers EX](https://github.com/masterwebx/gen1recomp-followers-ex) | `FOLLOWERS_EX` | Follower control on voxel maps (needs PokéPC Followers + Wilds) |
+| [Battle Cinematics](https://github.com/EnterPlayerOne/Battle-Cinematics-Stadium-Camera) | `BATTLE_CINEMATICS` | Optional. Again! / extra swings re-emit `battle.move_used` |
+| [Quality of Life](https://github.com/unxpected-uxp/pokemon-gen1-recomp-mod-qol) | `quality_of_life` | Optional HUD/XP helpers (skipped while FIELD compact UI is up) |
+| Overworld Encounters | `overworld_encounters` | Optional older roaming-wilds companion |
+| Gen 3 Inspired UI | `gen3_battle_ui` | Optional; skipped during FIELD compact UI |
 
+Leave **Stadium Overworld Models** (`STADIUM_OVERWORLD_MODELS`) and **Stadium Battle FX** (`STADIUM_BATTLE_FX`) off. FIELD owns the fight; Stadium staging and FX fight that presentation.
+
+On this install, Anime Realism is **BATTLE STAGE = FIELD** and **FIELD SPRITES = HGSS**.
+
+### Dramatic Shape / Dramaless settings
+
+Same OPTIONS rows on Dramatic Shape and Dramaless Shape. Values below are the current saved set (Dramatic Shape 1.8.1).
+
+| Row | Value | Notes |
+|-----|-------|-------|
+| **VOXEL** | `35` | Keep a walking camera on (not `OFF`) so FIELD has a 3D map |
+| **T-SHIFT** | `1` | Tilt-shift blur on the diorama |
+| **3D-BTL** | `2D-3D A` | Can stay on; FIELD still blocks DS from staging a separate arena. Do not use `STADIUM A` / `STADIUM B` |
+| **BACK SPRITES** | `OFF` | FIELD uses overworld battler sprites, not GB back pics |
+| **WATER** | `FULL` | Sky + shoreline reflections |
+| **V-CURVE** | `2` | Horizon bend |
+| **V-GRID** | `ON` | Voxel edge wireframe |
+| **FOREST FX** | `FULL` | Haze / light shafts in woods |
+| **AA** | `4X` | Drop to `2X` or `OFF` if the machine stutters |
+| **SHINY ODDS** | `1:256` | Unrelated to FIELD; included because it is on this save |
+
+If Potato Voxel is installed, leave it **disabled** while Dramatic Shape or Dramaless is on.
 
 ## Why hide levels too?
 
@@ -132,7 +166,7 @@ remain on their normal presentation path.
 
 ## Install
 
-1. Run `./build.sh` (or use a prebuilt `anime_realism-*.zip`). The zip keeps package folders.
+1. Download `anime_realism-<version>.zip` from [Releases](https://github.com/businessmachines02/anime-realism/releases), or run `./build.sh` locally. The zip keeps package folders.
 2. In Gen1Recomp, import the zip — or copy the mod folder into:
 
    `~/Library/Application Support/pokemon-love2d/mods/anime_realism/`
@@ -140,6 +174,17 @@ remain on their normal presentation path.
 3. Enable the mod and restart/reload if needed.
 
 Requires `engine_internals` permission (declared in the manifest).
+
+## Releases
+
+Push a version tag to publish. The tag must match `manifest.json` (`v4.6.0` for `"version": "4.6.0"`).
+
+```bash
+git tag v4.6.0
+git push origin v4.6.0
+```
+
+GitHub Actions runs FIELD unit tests, builds `anime_realism-<version>.zip`, and attaches it to the release. Local `./build.sh` still builds a zip for testing; it does not publish.
 
 ## Layout
 
@@ -172,3 +217,8 @@ Keep `LICENSE`, and note your changes.
 - `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
 - `LICENSE` — CC BY 4.0 (attribution required)
 - `build.sh` — builds `anime_realism-<version>.zip`
+- `.github/workflows/release.yml` — GitHub Release pipeline
+
+---
+
+Developed with ❤️ by **businessmachines02**.

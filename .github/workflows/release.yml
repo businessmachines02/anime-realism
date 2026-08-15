@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read tag version
+        id: ver
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "ERROR: Release tag must look like vMAJOR.MINOR.PATCH, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "zip=anime_realism-${BASH_REMATCH[1]}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag / manifest versions
+        env:
+          RELEASE_TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          tag = os.environ["RELEASE_TAG"]
+          version = tag[1:]
+          with open("manifest.json", encoding="utf-8") as f:
+              manifest = json.load(f)
+          mid = manifest.get("id")
+          mver = str(manifest.get("version"))
+          if mid != "anime_realism":
+              print(f"ERROR: manifest id is {mid!r}, expected 'anime_realism'", file=sys.stderr)
+              sys.exit(1)
+          if mver != version:
+              print(f"ERROR: manifest version {mver!r} does not match tag {tag}", file=sys.stderr)
+              sys.exit(1)
+          print(f"OK: {mid} {mver} matches {tag}")
+          PY
+
+      - name: Install LuaJIT for unit tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit zip unzip
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          echo "==> luajit field_battle/tests/run_grid_tests.lua"
+          luajit field_battle/tests/run_grid_tests.lua
+
+      - name: Build release ZIP
+        run: chmod +x ./build.sh && ./build.sh
+
+      - name: Validate ZIP structure
+        env:
+          ZIP_NAME: ${{ steps.ver.outputs.zip }}
+        run: |
+          set -euo pipefail
+          test -f "$ZIP_NAME"
+          python3 - <<'PY'
+          import os, sys, zipfile
+          zip_path = os.environ["ZIP_NAME"]
+          with zipfile.ZipFile(zip_path) as zf:
+              names = zf.namelist()
+          required = [
+              "manifest.json",
+              "main.lua",
+              "LICENSE",
+              "lib/modload.lua",
+              "immersion/init.lua",
+              "battle/init.lua",
+              "battle/reactive_defense.lua",
+              "field_battle/init.lua",
+          ]
+          for req in required:
+              if req not in names:
+                  print(f"ERROR: ZIP missing {req} at archive root", file=sys.stderr)
+                  sys.exit(1)
+          if any(n.startswith("field_battle/tests/") for n in names):
+              print("ERROR: field_battle tests included in ZIP", file=sys.stderr)
+              sys.exit(1)
+          print("ZIP root check: ok")
+          print(f"  files: {len(names)}")
+          PY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Anime Realism ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: ${{ steps.ver.outputs.zip }}
+          fail_on_unmatched_files: true

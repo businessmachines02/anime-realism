@@ -4,6 +4,3 @@
 *.jpg
 *.jpeg
 .cursor/
-# Local-only publish helper (do not commit)
-release.sh
-
