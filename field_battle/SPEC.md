@@ -179,7 +179,7 @@ Dedupe by wall time (`_lastPresentAt`, ~8ms) so multiple drivers don’t double-
 
 - `Cast.tick` → entity `tick` (bob, idle foot-swap, animT, lerp to pad target)
 - `Cues.tickReturns` (physical attack return-home)
-- soft camera follow (throttled)
+- soft camera follow of the **live fight** (throttled; clamped to the envelope)
 - `Anims.cache` while `animPlaying` or moving
 
 ### What present tick must NOT depend on
@@ -265,8 +265,9 @@ Intended sequence:
 4. Snapshot player + foe **poses** and the overworld **entity list** (to restore on Finish). Freeze / lock player (and foe trainer); park them on edge pad cells. Set `ow.engaging`.
 5. Stage enemy mon onto enemy home pad cell. Player mon stays deferred until lead / send-out.
 6. Swap `ow.entities` to the fight cast (arena floor, player, foe trainer, enemy mon, session cover). Apply zoom. `bgMode == "world"`, transparent battle, no wipe.
-7. **Live** — present clock starts; camera holds stable envelope framing and
-   briefly emphasizes attack targets.
+7. **Live** — present clock starts; camera soft-pans to the live battler
+   midpoint (clamped to the fight envelope so wander / knockback / cover
+   cannot drag it off the pad) and briefly emphasizes attack targets.
 
 ## Battle end (`Lifecycle.finish`)
 

@@ -9,12 +9,13 @@ local byBattle = setmetatable({}, { __mode = "k" })
 
 -- Tunables (design sketch).
 RD.FOCUS_START = 50
-RD.FOCUS_CAP_BASE = 100
+-- RD.FOCUS_CAP_BASE = 100
+RD.FOCUS_CAP_BASE = 75
 RD.FOCUS_REGEN_COMMIT = 15
 RD.FOCUS_REGEN_REACT = 5
 
 RD.COST = {
-  commit = 0,
+  commit = 0, -- just take it the usual way
   dodge = 25,
   cover = 20,
   cover_exit = 10,
@@ -22,10 +23,24 @@ RD.COST = {
   entrench = 30,
 }
 
+-- Dodging is a high-risk high-reward play.
+
+-- If it lands: 
+-- 1. You miss damage completely that turn. 
+-- 2. You have a 30% chance to effectively deal 1.5 damage (of a selected counter move) in return
+--
+-- If it doesn't:
+-- 1. You are not punished too badly ( due to the inherant focus trade-off made earlier in the turn ~ you could have conserved more focus points by bracing instead )
+--
+-- Generally, it should consume high levels of focus, creating an clear tradeoff situation. 
+-- In practice, remaining stationary or not taking action ("committing") is less taxing than actively dodging or reacting, 
+-- which requires more focus and effort—mirroring how it's easier to stay still than to move suddenly in real life.
+--
+-- Bracing on the other hand, is never likely to "miss"...unless the foe naturally does. 
 RD.DODGE_COUNTER_CHANCE = 0.30
-RD.DODGE_COUNTER_POWER = 0.40
+RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2
-RD.DODGE_FAIL_MULT = 1.20
+RD.DODGE_FAIL_MULT = 1.10
 
 RD.BRACE_WRONG_MULT = 1.18
 RD.BRACE_COUNTER_CHANCE = 0.35
@@ -33,9 +48,9 @@ RD.BRACE_COUNTER_CD = 4
 RD.BRACE_STATUS_RESIST = 0.30
 
 RD.COVER_DEF_MULT = 1.5
-RD.COVER_TYPE_BONUS = 1.20
+RD.COVER_TYPE_BONUS = 1.20 -- a rock type covering in a cave, or water type around water.
 RD.COVER_EMERGE_MULT = 1.20
-RD.COVER_PIERCE_MULT = 2.0
+RD.COVER_PIERCE_MULT = 2.0 -- if a foe pierces through the defense
 RD.COVER_UNREACT_DUR_MULT = 2.75
 
 RD.ENTRENCH_TURNS_MIN = 2
@@ -118,7 +133,6 @@ local function baseSpeedOf(battler)
   if mon and mon.species and battler and battler.data and battler.data.pokemon then
     local def = battler.data.pokemon[mon.species]
     if def and def.stats and def.stats.speed then
-      print("Base speed: " .. (tonumber(def.stats.speed) or 0) .. " for " .. mon.species .. " with current battle speed " .. (tonumber(battler.stats.speed) or 0))
       return tonumber(def.stats.speed) or 0
     end
   end
@@ -333,11 +347,22 @@ function RD.addFocus(battle, isPlayer, amount)
   side.focus = clamp((side.focus or 0) + (amount or 0), 0, cap)
 end
 
+-- Depending on where our pokemon is fighting, some poke
 function RD.dodgeSuccessChance(defender, attacker)
   local speDef = speedStat(defender)
   local speAtk = speedStat(attacker)
   local chance = clamp(35 + (speDef - speAtk) * 0.14, 20, 85) / 100
-  print("Dodge success chance: " .. chance .. " for defender speed " .. speDef .. " vs attacker speed " .. speAtk)
+
+  print(
+    "Has cover type bonus: " .. tostring(hasCoverTypeBonus(defender)) ..
+    ", Chance: " .. tostring(chance) ..
+    ", Clamped chance: " .. tostring(clamp(chance * 1.5, 0, 1))
+  )
+
+
+  if hasCoverTypeBonus(defender) then 
+    return clamp(chance * 1.5, 0, 1)
+  end
   return chance
 end
 

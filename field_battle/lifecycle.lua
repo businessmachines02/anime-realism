@@ -24,10 +24,16 @@ local Coords = require("coords")
 
 local Lifecycle = {}
 Lifecycle.CAMERA_UI_BIAS_Y = 18
--- Soft pan toward the battle envelope (higher = snappier). Nudges use a faster rate.
+-- Soft pan toward the live fight (higher = snappier). Nudges / off-screen catch-up use a faster rate.
 Lifecycle.CAMERA_PAN_RATE = 4.2
 Lifecycle.CAMERA_PAN_NUDGE_RATE = 10
+Lifecycle.CAMERA_PAN_CATCHUP_RATE = 7.2
 Lifecycle.CAMERA_PAN_SNAP = 1.25
+-- Follow battlers this far past the surveyed envelope (wander / knockback slack).
+Lifecycle.CAMERA_CLAMP_PAD = 32
+Lifecycle.CAMERA_EDGE_MARGIN_X = 22
+Lifecycle.CAMERA_EDGE_MARGIN_TOP = 16
+Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM = 54
 
 -- Weak keys: sessions die with their BattleState without explicit cleanup races.
 local byBattle = setmetatable({}, { __mode = "k" })
@@ -424,6 +430,125 @@ local function applyCameraFocus(cam, fx, fy, vw, vh)
     end
 end
 
+local function envelopeRectPx(session)
+    local rect = session and ((session.envelope and session.envelope.gridRect)
+        or (session.grid and session.grid.worldRect))
+    if not rect then
+        return nil
+    end
+    local cell = Coords.CELL
+    local pad = Lifecycle.CAMERA_CLAMP_PAD or 32
+    return {
+        minX = rect.minX * cell + cell / 2 - pad,
+        maxX = rect.maxX * cell + cell / 2 + pad,
+        minY = rect.minY * cell + cell / 2 - pad,
+        maxY = rect.maxY * cell + cell / 2 + pad,
+        midX = ((rect.minX + rect.maxX) / 2) * cell + cell / 2,
+        midY = ((rect.minY + rect.maxY) / 2) * cell + cell / 2,
+    }
+end
+
+local function clamp(v, lo, hi)
+    if lo > hi then
+        return (lo + hi) * 0.5
+    end
+    if v < lo then
+        return lo
+    end
+    if v > hi then
+        return hi
+    end
+    return v
+end
+
+local function battlerFocusPx(ent, grid)
+    if not ent or ent.hidden or ent._removed then
+        return nil, nil
+    end
+    -- basePx follows pad lerp without idle bob, so the camera does not pulse.
+    if type(ent.basePx) == "number" and type(ent.basePy) == "number" then
+        return ent.basePx + 8, ent.basePy + 8
+    end
+    if grid and ent.padU ~= nil then
+        return Coords.padCenterPx(grid, ent.padU, ent.padV)
+    end
+    if type(ent.px) == "number" then
+        return ent.px + 8, (ent.py or 0) + 8
+    end
+    return nil, nil
+end
+
+--- Live fight focus: midpoint of visible battlers, clamped to the battle
+--- envelope so knockback / cover / wander cannot drag the camera off-map.
+local function liveActionFocus(session)
+    local grid = session and session.grid
+    local env = envelopeRectPx(session)
+    local function envelopeMid()
+        if env then
+            return env.midX, env.midY
+        end
+        return (session.midX or 0) * 16 + 8, (session.midY or 0) * 16 + 8
+    end
+
+    -- Intro: only the foe is staged. Hold the envelope so a cornered wild
+    -- does not yank the camera off the pad before the player appears.
+    if session.awaitPlayerMon then
+        return envelopeMid()
+    end
+
+    local pts = {}
+    local function add(ent)
+        local x, y = battlerFocusPx(ent, grid)
+        if x then
+            pts[#pts + 1] = { x = x, y = y }
+        end
+    end
+    add(session.playerMon)
+    add(session.enemyMon)
+    if #pts == 0 then
+        return envelopeMid()
+    end
+    local sx, sy = 0, 0
+    for i = 1, #pts do
+        sx = sx + pts[i].x
+        sy = sy + pts[i].y
+    end
+    local fx, fy = sx / #pts, sy / #pts
+    if env then
+        fx = clamp(fx, env.minX, env.maxX)
+        fy = clamp(fy, env.minY, env.maxY)
+    end
+    return fx, fy, pts
+end
+
+local function viewTopLeft(cam, focusX, focusY, vw, vh)
+    if cam and type(cam.x) == "number" and type(cam.y) == "number" then
+        return cam.x, cam.y
+    end
+    if cam and type(cam.follow) == "function" then
+        return focusX - (vw / 2 - 16), focusY - (vh / 2 - 8)
+    end
+    return focusX - vw / 2, focusY - vh / 2
+end
+
+local function actionLeavesView(pts, cam, focusX, focusY, vw, vh)
+    if not pts or #pts == 0 then
+        return false
+    end
+    local camX, camY = viewTopLeft(cam, focusX, focusY, vw, vh)
+    local mx = Lifecycle.CAMERA_EDGE_MARGIN_X or 22
+    local mt = Lifecycle.CAMERA_EDGE_MARGIN_TOP or 16
+    local mb = Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM or 54
+    for i = 1, #pts do
+        local sx = pts[i].x - camX
+        local sy = pts[i].y - camY
+        if sx < mx or sx > vw - mx or sy < mt or sy > vh - mb then
+            return true
+        end
+    end
+    return false
+end
+
 function Lifecycle.focusCamera(battle, dt)
     local session = Lifecycle.get(battle)
     if not (session and session.live) then
@@ -436,36 +561,7 @@ function Lifecycle.focusCamera(battle, dt)
         return
     end
 
-    local fx, fy
-    local p, e = session.playerMon, session.enemyMon
-    local grid = session.grid
-    local function focusOf(ent)
-        if not ent then
-            return nil, nil
-        end
-        if grid and ent.padU ~= nil then
-            return Coords.padCenterPx(grid, ent.padU, ent.padV)
-        end
-        return (ent.basePx or ent.px or 0) + 8, (ent.basePy or ent.py or 0) + 8
-    end
-    local rect = session.envelope and session.envelope.gridRect
-    if rect then
-        fx = ((rect.minX + rect.maxX) / 2) * Coords.CELL + Coords.CELL / 2
-        fy = ((rect.minY + rect.maxY) / 2) * Coords.CELL + Coords.CELL / 2
-    elseif p and e then
-        local px, py = focusOf(p)
-        local ex, ey = focusOf(e)
-        fx = (px + ex) / 2
-        fy = (py + ey) / 2
-    elseif p then
-        fx, fy = focusOf(p)
-    elseif e then
-        fx, fy = focusOf(e)
-    else
-        fx = (session.midX or 0) * 16 + 8
-        fy = (session.midY or 0) * 16 + 8
-    end
-
+    local fx, fy, pts = liveActionFocus(session)
     local nudgeT = session.camNudgeT or 0
     if nudgeT > 0 and session.camNudgeX and session.camNudgeY then
         local w = math.min(1, nudgeT / 0.35) * 0.55
@@ -498,10 +594,16 @@ function Lifecycle.focusCamera(battle, dt)
     local dx, dy = targetX - cx, targetY - cy
     local dist2 = dx * dx + dy * dy
     local snap = Lifecycle.CAMERA_PAN_SNAP
+    local offscreen = actionLeavesView(pts, cam, cx, cy, vw, vh)
     if dist2 <= snap * snap then
         cx, cy = targetX, targetY
     else
-        local rate = (nudgeT > 0) and Lifecycle.CAMERA_PAN_NUDGE_RATE or Lifecycle.CAMERA_PAN_RATE
+        local rate = Lifecycle.CAMERA_PAN_RATE
+        if nudgeT > 0 then
+            rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
+        elseif offscreen then
+            rate = Lifecycle.CAMERA_PAN_CATCHUP_RATE
+        end
         local alpha = 1 - math.exp(-useDt * rate)
         cx = cx + dx * alpha
         cy = cy + dy * alpha

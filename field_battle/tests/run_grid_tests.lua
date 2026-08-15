@@ -1432,8 +1432,8 @@ function tests.camera_avoids_battle_menu()
       renderer = { worldViewSize = function() return 160, 144 end },
     },
   }
-  local player = { padU = grid.home.player.u, padV = 0 }
-  local enemy = { padU = grid.home.enemy.u, padV = 0 }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
   Lifecycle._testBind(battle, {
     state = Lifecycle.STATE.Live,
     live = true,
@@ -1442,15 +1442,15 @@ function tests.camera_avoids_battle_menu()
     enemyMon = enemy,
     envelope = { gridRect = grid.worldRect },
   })
-  -- No prior camera pose → settle on the envelope immediately.
+  -- No prior camera pose → settle on the opening formation immediately.
   Lifecycle.focusCamera(battle)
   Lifecycle._testUnbind(battle)
 
   truthy(followed, "camera follows field cast")
-  local rect = grid.worldRect
-  local actionY = ((rect.minY + rect.maxY) / 2) * Coords.CELL + Coords.CELL / 2
-  eq(followed.y, actionY + Lifecycle.CAMERA_UI_BIAS_Y,
-    "camera stably frames envelope above menu")
+  local px, py = Coords.padCenterPx(grid, player.padU, player.padV)
+  local ex, ey = Coords.padCenterPx(grid, enemy.padU, enemy.padV)
+  eq(followed.y, (py + ey) / 2 + Lifecycle.CAMERA_UI_BIAS_Y,
+    "camera stably frames the fight above the menu")
 end
 
 function tests.camera_pans_to_envelope()
@@ -1473,8 +1473,8 @@ function tests.camera_pans_to_envelope()
       renderer = { worldViewSize = function() return 160, 144 end },
     },
   }
-  local player = { padU = grid.home.player.u, padV = 0 }
-  local enemy = { padU = grid.home.enemy.u, padV = 0 }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
   Lifecycle._testBind(battle, {
     state = Lifecycle.STATE.Live,
     live = true,
@@ -1484,10 +1484,10 @@ function tests.camera_pans_to_envelope()
     envelope = { gridRect = grid.worldRect },
   })
 
-  local rect = grid.worldRect
-  local targetX = ((rect.minX + rect.maxX) / 2) * Coords.CELL + Coords.CELL / 2
-  local targetY = ((rect.minY + rect.maxY) / 2) * Coords.CELL + Coords.CELL / 2
-    + Lifecycle.CAMERA_UI_BIAS_Y
+  local px, py = Coords.padCenterPx(grid, player.padU, player.padV)
+  local ex, ey = Coords.padCenterPx(grid, enemy.padU, enemy.padV)
+  local targetX = (px + ex) / 2
+  local targetY = (py + ey) / 2 + Lifecycle.CAMERA_UI_BIAS_Y
 
   Lifecycle.focusCamera(battle, 1 / 60)
   truthy(followed, "camera begins soft pan")
@@ -1500,8 +1500,69 @@ function tests.camera_pans_to_envelope()
   end
   Lifecycle._testUnbind(battle)
 
-  eq(followed.x, targetX, "pan settles on envelope X")
-  eq(followed.y, targetY, "pan settles on envelope Y above menu")
+  eq(followed.x, targetX, "pan settles on fight center X")
+  eq(followed.y, targetY, "pan settles on fight center Y above menu")
+end
+
+function tests.camera_tracks_live_battlers()
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  Lifecycle._testBind(battle, {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+  })
+
+  Lifecycle.focusCamera(battle)
+  local startX = followed.x
+  -- Knock / cover: foe steps several pads off the opening formation.
+  enemy.padU = grid.home.enemy.u + 3
+  enemy.padV = (grid.home.enemy.v or 0) + 2
+  local px, py = Coords.padCenterPx(grid, player.padU, player.padV)
+  local ex, ey = Coords.padCenterPx(grid, enemy.padU, enemy.padV)
+  local wantX = (px + ex) / 2
+  local wantY = (py + ey) / 2 + Lifecycle.CAMERA_UI_BIAS_Y
+  local rect = grid.worldRect
+  local cell = Coords.CELL
+  local pad = Lifecycle.CAMERA_CLAMP_PAD
+  local minX = rect.minX * cell + cell / 2 - pad
+  local maxX = rect.maxX * cell + cell / 2 + pad
+  local minY = rect.minY * cell + cell / 2 - pad
+  local maxY = rect.maxY * cell + cell / 2 + pad
+  if wantX < minX then wantX = minX elseif wantX > maxX then wantX = maxX end
+  local actionY = (py + ey) / 2
+  if actionY < minY then actionY = minY elseif actionY > maxY then actionY = maxY end
+  wantY = actionY + Lifecycle.CAMERA_UI_BIAS_Y
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  truthy(math.abs(followed.x - startX) > 2, "camera leaves the static envelope lock")
+  eq(followed.x, wantX, "pan settles on live battler midpoint X")
+  eq(followed.y, wantY, "pan settles on live battler midpoint Y above menu")
 end
 
 function tests.sprite_cast_and_animation()

@@ -404,11 +404,11 @@ return function(mod)
 
         -- Short party-list lines (fit the old HP row).
         S.PARTY_HINTS = {
-            "WEAK-HEAL SOON!",
-            "TIRED-HEAL SOON!",
-            "LOOKING WEAK!",
-            "LOOKING TIRED!",
-            "NEEDS HEALING!",
+            "WK-HEAL!",
+            "TRD-HEAL!",
+            "WK!",
+            "TRD!",
+            "HEAL!",
         }
 
         local function pickLine(lines)
@@ -2545,26 +2545,23 @@ return function(mod)
             "%s, now-\nstrike!",
         }
         S.AGAIN_CALLS = {
-            "%s!\nAgain!",
-            "%s!\nOne more!",
-            "Don't stop!\n%s!",
-            "%s!\nKeep going!",
-            "Again!\n%s!",
-            "Opening!\nHit 'em again!",
-            "They flinched!\nOne more time!",
-            "Now's your\nchance, %s!",
-            "Don't let up!\n%s!",
-            "Press it!\n%s, again!",
-            "You've got\n'em! Again!",
-            "They're open!\nStrike again!",
-            "%s!\nFinish that!",
-            "Keep the\npressure on!",
-            "One more hit,\n%s!",
-            "Go again,\n%s!",
-            "That rattled\n'them! Again!",
-            "Don't give\n'them room!",
-            "You have an\nopening-again!",
-            "%s!\nHit 'em again!",
+            "%s! One more!",
+            "Don't stop, %s!",
+            "%s! Keep going!",
+            "There's an opening—hit again!",
+            "They're reeling—one more time!",
+            "Now's your chance, %s!",
+            "Don't let up, %s!",
+            "Press in! %s, again!",
+            "You've got them! Again!",
+            "They're open—strike again!",
+            "%s! Finish it!",
+            "Keep up the pressure!",
+            "One more hit, %s!",
+            "Go again, %s!",
+            "Don't give them space!",
+            "You have the opening—again!",
+            "%s! Hit again!",
         }
 
         local function enemyMonName(battle)
