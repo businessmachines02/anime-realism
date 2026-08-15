@@ -3,4 +3,5 @@
 *.png
 *.jpg
 *.jpeg
+tag.sh
 .cursor/
