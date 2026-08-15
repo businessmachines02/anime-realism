@@ -3,7 +3,7 @@
 -- Three packages (see folders):
 --   immersion/     — HP / EXP / numbers feel (hide HUD, underdog EXP, effort)
 --   battle/        — traditional battle systems (Reactive Defense, callouts,
---                    speech bubbles, banter, chips; Stadium helpers)
+--                    speech bubbles, banter, chips)
 --   field_battle/  — standalone overworld FIELD combat (BattleState on stack,
 --                    transparent over the live map)
 --
@@ -154,9 +154,8 @@ return function(mod)
                 label = "BATTLE STAGE",
                 default = "AUTO",
                 choices = {
-                    { "AUTO",    "AUTO" },
-                    { "FIELD",   "FIELD" },
-                    { "STADIUM", "STADIUM" },
+                    { "AUTO",  "AUTO" },
+                    { "FIELD", "FIELD" },
                 },
             },
             {
@@ -248,19 +247,15 @@ return function(mod)
             return mod.options:get(key) ~= false
         end
 
-        -- AUTO = leave Dramatic Shape alone.
+        -- AUTO = leave other battle presentation mods alone.
         -- FIELD = anime map fight: flat overworld stays under the battle UI, trainers
         --         stay visible, OW Pokémon sprites stand between them. potato_voxel
         --         free-roam VOXEL keeps drawing; OverworldBattle staging is gated.
-        -- STADIUM = Dramatic Shape Stadium / 3D arena models.
-        -- Legacy "CLASSIC" maps to AUTO.
+        -- Legacy CLASSIC / STADIUM saves map to AUTO.
         local function battleStage()
             local raw = tostring(mod.options:get("battle_stage") or "AUTO"):upper()
-            if raw == "CLASSIC" then
-                return "AUTO"
-            end
-            if raw == "FIELD" or raw == "STADIUM" then
-                return raw
+            if raw == "FIELD" then
+                return "FIELD"
             end
             return "AUTO"
         end
@@ -1046,9 +1041,6 @@ return function(mod)
                 if ReactiveDefense then
                     ReactiveDefense.clear(ev.battle)
                     ReactiveDefense.state(ev.battle)
-                end
-                if type(dev.applyBattleStage) == "function" then
-                    pcall(dev.applyBattleStage, ev.battle and ev.battle.game)
                 end
                 -- DS cover stamps only. FIELD arena snapshot/restore is owned by field_battle/.
                 local fieldOn = FieldBattleViewer and type(FieldBattleViewer.enabled) == "function"
@@ -3575,29 +3567,25 @@ return function(mod)
 
         local MoveEffects = require("src.battle.MoveEffects")
         local Menu = require("src.ui.Menu")
+        -- Engine damage pipeline. Wrapped so Reactive Defense can defer a hit
+        -- for the REACT menu / auto-counter. Not a Stadium package.
         local EffectRegistry = require("src.battle.EffectRegistry")
         -- Capture the engine function once. Hot-reload used to chain wraps so
         -- finishCalloutPick → origRunDamaging re-entered an OLD wrap that still
         -- queued REACT! (often with a stale HUD draw closure).
         local function ensureVanillaRunDamaging()
             local stored = EffectRegistry._arVanillaRunDamaging
+            local liveWrap = EffectRegistry._arReactRunDamaging
             -- Ignore a stored value that is actually our previous wrap.
-            if type(stored) == "function"
-                and stored ~= EffectRegistry._arReactRunDamaging then
+            if type(stored) == "function" and stored ~= liveWrap then
                 return stored
             end
-            local erName = "src.battle.EffectRegistry"
-            local live = EffectRegistry
-            package.loaded[erName] = nil
-            local freshOk, fresh = pcall(require, erName)
-            package.loaded[erName] = live
-            local vanilla = (freshOk and type(fresh) == "table" and fresh.runDamaging)
-                or live.runDamaging
-            -- If "fresh" somehow still returned our wrap, keep any prior vanilla.
-            if vanilla == live._arReactRunDamaging and type(stored) == "function" then
+            local vanilla = EffectRegistry.runDamaging
+            -- If runDamaging is already our wrap (hot reload), keep any prior vanilla.
+            if vanilla == liveWrap and type(stored) == "function" then
                 vanilla = stored
             end
-            live._arVanillaRunDamaging = vanilla
+            EffectRegistry._arVanillaRunDamaging = vanilla
             return vanilla
         end
         local origRunDamaging = ensureVanillaRunDamaging()
@@ -3896,7 +3884,7 @@ return function(mod)
         -- is in the world — briefly show the intro trainer on the enemy billboard
         -- and ease the camera toward that side. Packed as one table for LuaJIT.
         local BanterCameo = {}
-        BanterCameo.OW_MODS = { "DRAMATIC_SHAPE", "DRAMALESS_SHAPE", "potato_voxel" }
+        BanterCameo.OW_MODS = { "DRAMATIC_SHAPE", "potato_voxel" }
 
         function BanterCameo.owLive(battle)
             if type(battle) ~= "table" or not mod.find then
@@ -3968,7 +3956,7 @@ return function(mod)
         end
 
         -- 3D-BTL: put the trainer on the enemy world billboard (same seam as the
-        -- battle intro). Stadium.covers yields to the pic while this is set.
+        -- battle intro).
         function BanterCameo.showTrainer(battle, cameo)
             if not (battle and cameo and cameo.ow) or cameo.forcedTrainer then
                 return
@@ -4388,7 +4376,7 @@ return function(mod)
             return false
         end
 
-        -- Re-arm Stadium / Battle Cinematics attack cameras for swings we fire
+        -- Re-arm Battle Cinematics attack cameras for swings we fire
         -- outside a normal resolveTurn (Again!, same-turn COUNTER!, menu waits…).
         -- Also clears banter orbit / trainer billboard so the attack cam can take over.
         local function resetBattleCamera(battle)
@@ -4417,7 +4405,7 @@ return function(mod)
                 move = move,
                 isCalled = opts.isCalled == true,
             }
-            -- Prefer the shared Runtime bus when present so BC / Stadium FX hear us.
+            -- Prefer the shared Runtime bus when present so Battle Cinematics hears us.
             local okRt, Runtime = pcall(require, "src.mods.Runtime")
             if okRt and Runtime and Runtime.events and type(Runtime.events.emit) == "function" then
                 pcall(Runtime.events.emit, Runtime.events, "battle.move_used", payload)
@@ -4716,8 +4704,7 @@ return function(mod)
             table.insert(q, insertAt, item)
         end
 
-        -- Pick a Gen1 move id that exists in this battle's data (StadiumBattleFX
-        -- / Dramaless will restyle FLY, RAZOR_LEAF, DIG, SURF, … when loaded).
+        -- Pick a Gen1 move id that exists in this battle's data.
         local function pickHideMoveAnim(battle, candidates)
             local moves = battle and battle.data and battle.data.moves
             if type(moves) ~= "table" or type(candidates) ~= "table" then
@@ -4737,7 +4724,6 @@ return function(mod)
         end
 
         -- Dig/Fly/leaf/surf-style hides: picFx motion + thematic move anim.
-        -- Labels map to distinct exits; move pools prefer Stadium leaf/fly FX.
         local function dodgeAnimSpec(choice, battle)
             local label = ""
             if type(choice) == "table" then
@@ -5269,23 +5255,7 @@ return function(mod)
             local pick = slots[rr(1, #slots)]
             local hx, hz = pick.x, pick.z
             -- Nudge further from the foe so the prop sits between mon and enemy.
-            local arena
-            local lib = dev.findStadiumLib()
-            if lib then
-                local ok, OB = pcall(lib.require, "OverworldBattle")
-                if ok and OB and type(OB.arena) == "function" then
-                    arena = OB.arena()
-                end
-            end
-            if arena and arena.enemy then
-                local ex, ez = arena.enemy[1], arena.enemy[2]
-                local dx, dz = hx - ex, hz - ez
-                local len = math.sqrt(dx * dx + dz * dz)
-                if len > 0.001 then
-                    hx = hx + (dx / len) * 7
-                    hz = hz + (dz / len) * 7
-                end
-            elseif FieldBattleViewer and type(FieldBattleViewer.session) == "function" then
+            if FieldBattleViewer and type(FieldBattleViewer.session) == "function" then
                 local sess = FieldBattleViewer.session(battle)
                 local foe = sess and sess.enemyMon
                 if foe then
@@ -5306,7 +5276,7 @@ return function(mod)
             return true
         end
 
-        -- Apply tuck: Stadium model moves in world; flat pic gets an ox/oy nudge.
+        -- Apply tuck: flat pic gets an ox/oy nudge behind cover.
         dev.applyCoverTuckVisual = function(battle)
             if not battle then
                 return
@@ -5328,12 +5298,12 @@ return function(mod)
             end
         end
 
-        -- Dramatic Shape / Dramaless Stadium session (3D-BTL models).
-        dev.findStadiumLib = function()
+        -- Dramatic Shape OverworldBattle (cover stamps on staged 3D fights).
+        dev.findDsLib = function()
             if not mod.find then
                 return nil
             end
-            local ids = { "DRAMATIC_SHAPE", "DRAMALESS_SHAPE", "potato_voxel" }
+            local ids = { "DRAMATIC_SHAPE", "potato_voxel" }
             for i = 1, #ids do
                 local handle = mod.find(ids[i])
                 local lib = handle and handle.exports and handle.exports.lib
@@ -5344,148 +5314,15 @@ return function(mod)
             return nil
         end
 
-        -- BATTLE STAGE preference (AUTO / FIELD / STADIUM).
+        -- BATTLE STAGE preference (AUTO / FIELD).
         dev.battleStage = function()
             return battleStage()
-        end
-
-        -- Live DS 3D-BTL rung, if Dramatic Shape is present.
-        dev.dsBattleMode = function()
-            local lib = dev.findStadiumLib()
-            if not lib then
-                return nil
-            end
-            local ok, OB = pcall(lib.require, "OverworldBattle")
-            if not (ok and type(OB) == "table") then
-                return nil
-            end
-            local mode = nil
-            if type(OB.setting) == "table" and type(OB.setting.get) == "function" then
-                mode = OB.setting:get()
-            end
-            local stadiumOn = false
-            if type(OB.stadium) == "function" then
-                local okS, s = pcall(OB.stadium)
-                stadiumOn = okS and s and true or false
-            end
-            return mode, stadiumOn, OB
-        end
-
-        -- FIELD = overworld/map fight (Dramatic Shape 2D-3D A), not Stadium models.
-        dev.wantsFieldStage = function()
-            local stage = battleStage()
-            if stage == "FIELD" then
-                return true
-            end
-            if stage == "STADIUM" then
-                return false
-            end
-            -- AUTO: treat non-Stadium 3D-BTL as field.
-            local mode, stadiumOn = dev.dsBattleMode()
-            if mode == false or mode == nil then
-                return false
-            end
-            return not stadiumOn
-        end
-
-        -- STADIUM FX only when Stadium models are wanted.
-        dev.wantsStadiumFx = function()
-            local stage = battleStage()
-            if stage == "STADIUM" then
-                return true
-            end
-            if stage == "FIELD" then
-                return false
-            end
-            local _, stadiumOn = dev.dsBattleMode()
-            return stadiumOn and true or false
-        end
-
-        -- Push BATTLE STAGE into Dramatic Shape's 3D-BTL row.
-        -- FIELD: do not force 3D-BTL OFF (that flattened the voxel overworld).
-        -- field_battle/compat.lua already gates OverworldBattle.begin/ensure so DS
-        -- cannot stage over FIELD. STADIUM → stadium (or 2D-3D A if gated off).
-        dev.applyBattleStage = function(game)
-            local stage = battleStage()
-            if stage == "AUTO" or stage == "FIELD" then
-                return
-            end
-            local lib = dev.findStadiumLib()
-            if not lib then
-                return
-            end
-            local ok, OB = pcall(lib.require, "OverworldBattle")
-            if not (ok and type(OB) == "table" and type(OB.setting) == "table") then
-                return
-            end
-            local setting = OB.setting
-            if type(setting.setValue) ~= "function" then
-                return
-            end
-            local g = game
-            if not g then
-                local okG, Game = pcall(require, "src.core.Game")
-                if okG then
-                    g = Game
-                end
-            end
-            local want = "stadium"
-            if type(setting.allows) == "function" then
-                local idx = nil
-                for i = 1, #(setting.values or {}) do
-                    if setting.values[i] == "stadium" then
-                        idx = i
-                        break
-                    end
-                end
-                if idx and not setting:allows(idx) then
-                    want = true
-                end
-            end
-            local cur = type(setting.get) == "function" and setting:get() or nil
-            if cur ~= want then
-                pcall(setting.setValue, setting, want, g)
-            end
         end
 
         -- FIELD presentation lives in field_battle/ (lifecycle + tile grid).
         dev.wantsAnimeField = function()
             return FieldBattleViewer and type(FieldBattleViewer.enabled) == "function"
                 and FieldBattleViewer.enabled(mod)
-        end
-
-        -- STADIUM-only: keep trainers visible if DS culls during stadium fights.
-        dev.wantsAnimeCast = function()
-            return battleStage() == "STADIUM"
-        end
-
-        dev.restoreAnimeFieldCast = function(state, savedEntities)
-            if not state or type(savedEntities) ~= "table" then
-                return
-            end
-            if not dev.wantsAnimeCast() then
-                return
-            end
-            local player = state.player
-            local keep, seen = {}, {}
-            local function add(e)
-                if e and not seen[e] then
-                    seen[e] = true
-                    keep[#keep + 1] = e
-                end
-            end
-            add(player)
-            for i = 1, #savedEntities do
-                local e = savedEntities[i]
-                if e and e ~= player then
-                    if e.trainer or e.trainerClass then
-                        add(e)
-                    elseif e.species then
-                        add(e)
-                    end
-                end
-            end
-            state.entities = keep
         end
 
         dev.installFieldFightSpriteHook = function()
@@ -5498,219 +5335,12 @@ return function(mod)
             return nil
         end
 
-        dev.getStadium = function()
-            local lib = dev.findStadiumLib()
-            if not lib then
-                return nil
-            end
-            local ok, Stadium = pcall(lib.require, "Stadium")
-            if ok and type(Stadium) == "table" then
-                return Stadium, lib
-            end
-            return nil
-        end
-
-        dev.getStadiumSession = function()
-            if type(dev._stadiumSessionGet) == "function" then
-                local ok, s = pcall(dev._stadiumSessionGet)
-                if ok then
-                    return s
-                end
-            end
-            if not (debug and debug.getupvalue) then
-                return nil
-            end
-            local Stadium = dev.getStadium()
-            if not Stadium then
-                return nil
-            end
-            local probes = {
-                Stadium.update, Stadium.animOf, Stadium.showing, Stadium.draw, Stadium.covers,
-            }
-            for p = 1, #probes do
-                local fn = probes[p]
-                if type(fn) == "function" then
-                    for i = 1, 80 do
-                        local name, value = debug.getupvalue(fn, i)
-                        if not name then
-                            break
-                        end
-                        if name == "session" then
-                            local idx = i
-                            local closed = fn
-                            dev._stadiumSessionGet = function()
-                                local _, now = debug.getupvalue(closed, idx)
-                                return now
-                            end
-                            return value
-                        end
-                    end
-                end
-            end
-            return nil
-        end
-
-        dev.stadiumMon = function(side)
-            local session = dev.getStadiumSession()
-            return session and session[side or "player"] or nil
-        end
-
-        -- Stadium packs have no true hit clip; Stage1 / we shove the model back.
-        dev.ensureStadiumRecoil = function()
-            if dev._stadiumRecoilReady then
-                return
-            end
-            local lib = dev.findStadiumLib()
-            if not lib then
-                return
-            end
-            local ok, StadiumMon = pcall(lib.require, "StadiumMon")
-            if not (ok and type(StadiumMon) == "table" and type(StadiumMon.matrix) == "function") then
-                return
-            end
-            if StadiumMon._stage1RecoilMatrix then
-                dev._stadiumRecoilField = "_stage1Recoil"
-                dev._stadiumRecoilReady = true
-                return
-            end
-            if StadiumMon._arRecoilMatrix then
-                dev._stadiumRecoilField = "_arRecoil"
-                dev._stadiumRecoilReady = true
-                return
-            end
-            local inner = StadiumMon.matrix
-            StadiumMon.matrix = function(self, x, groundY, z, faceX, faceZ, ...)
-                local recoil = tonumber(self._arRecoil) or 0
-                if recoil > 0 and faceX and faceZ then
-                    local len = math.sqrt(faceX * faceX + faceZ * faceZ)
-                    if len > 0.0001 then
-                        local push = math.sin(math.min(1, recoil) * math.pi) * 1.35
-                        x = x - (faceX / len) * push
-                        z = z - (faceZ / len) * push
-                    end
-                end
-                return inner(self, x, groundY, z, faceX, faceZ, ...)
-            end
-            StadiumMon._arRecoilMatrix = true
-            dev._stadiumRecoilField = "_arRecoil"
-            dev._stadiumRecoilReady = true
-        end
-
-        -- Successful Focus react: replay Stadium send-out / entrance.
-        dev.playStadiumEntrance = function()
-            if not dev.wantsStadiumFx() then
-                return
-            end
-            dev.installStadiumFocusHooks()
-            dev.ensureStadiumRecoil()
-            local mon = dev.stadiumMon("player")
-            if mon and mon.rig and type(mon.request) == "function" then
-                pcall(mon.request, mon, "entrance")
-            end
-        end
-
-        -- Failed dodge: whole-body recoil (no flinch slot in Stadium packs).
-        dev.playStadiumHit = function()
-            if not dev.wantsStadiumFx() then
-                return
-            end
-            dev.installStadiumFocusHooks()
-            dev.ensureStadiumRecoil()
-            local mon = dev.stadiumMon("player")
-            if not mon then
-                return
-            end
-            local field = dev._stadiumRecoilField or "_arRecoil"
-            mon[field] = 1
-        end
-
-        -- Move Stadium player behind cover prop while Focus-covered; decay recoil.
-        dev.installStadiumFocusHooks = function()
-            local Stadium = dev.getStadium()
-            if not Stadium then
-                return
-            end
-            dev.ensureStadiumRecoil()
-
-            -- Tuck wrap (outermost): overrides any older "hide model while covered" wrap.
-            if type(Stadium.update) == "function" and not Stadium._arFocusTuckUpdate then
-                local innerUpdate = Stadium.update
-                Stadium.update = function(dt, battle, groundY, ...)
-                    local a, b, c, d = innerUpdate(dt, battle, groundY, ...)
-                    local session = dev.getStadiumSession()
-                    local mon = session and session.player
-                    if mon then
-                        if mon._arRecoil then
-                            local t = tonumber(mon._arRecoil) or 0
-                            t = t - (tonumber(dt) or 0) / 0.20
-                            mon._arRecoil = t > 0 and t or nil
-                        end
-                        local covered = false
-                        if battle and ReactiveDefense then
-                            local sideSt = ReactiveDefense.sideState(battle, true)
-                            covered = sideSt and sideSt.cover and true or false
-                        end
-                        local state = battle and momentumByBattle[battle]
-                        local hide = state and state.coverHideWorld
-                        if covered and hide and mon.rig and type(mon.matrix) == "function" then
-                            mon.visible = true
-                            local arena
-                            local lib = dev.findStadiumLib()
-                            if lib then
-                                local ok, OB = pcall(lib.require, "OverworldBattle")
-                                if ok and OB and type(OB.arena) == "function" then
-                                    arena = OB.arena()
-                                end
-                            end
-                            local other = arena and arena.enemy
-                            local gy = session.groundY or groundY or 0
-                            if other then
-                                pcall(function()
-                                    mon.model_matrix = mon:matrix(
-                                        hide.x, gy, hide.z,
-                                        other[1] - hide.x, other[2] - hide.z)
-                                    if type(mon.build) == "function" then
-                                        mon:build()
-                                    end
-                                end)
-                            end
-                            if type(dev.applyCoverTuckVisual) == "function" then
-                                pcall(dev.applyCoverTuckVisual, battle)
-                            end
-                        end
-                    end
-                    return a, b, c, d
-                end
-                Stadium._arFocusTuckUpdate = true
-            end
-
-            -- If an older wrap forced covers=false during Focus cover, undo that.
-            if type(Stadium.covers) == "function" and not Stadium._arFocusCoversFixed then
-                local innerCovers = Stadium.covers
-                Stadium.covers = function(battle, side)
-                    local result = innerCovers(battle, side)
-                    if side == "player" and result == false and battle and ReactiveDefense then
-                        local sideSt = ReactiveDefense.sideState(battle, true)
-                        if sideSt and sideSt.cover then
-                            local session = dev.getStadiumSession()
-                            if session and session.player and session.player.rig then
-                                return true
-                            end
-                        end
-                    end
-                    return result
-                end
-                Stadium._arFocusCoversFixed = true
-            end
-            dev._stadiumFocusHooks = true
-        end
-
         -- Play dodge / cover / brace / entrench FX for Focus reacts.
         dev.playFocusReactFx = function(battle, action, result)
             if not battle or not opt("momentum_counter") then
                 return
             end
-            -- FIELD: OW sprites + projectiles own the react beat — skip Stadium FX.
+            -- FIELD: OW sprites + projectiles own the react beat.
             if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
                 if FieldBattleViewer and type(FieldBattleViewer.react) == "function" then
                     local kind = tostring(action or "")
@@ -5725,33 +5355,19 @@ return function(mod)
             action = tostring(action or "")
             result = result or {}
             local state = momentumState(battle)
-            dev.installStadiumFocusHooks()
 
             if action == "dodge" then
                 if result.forceMiss then
-                    -- Queue hide first, then entrance at the same slot so entrance runs first.
                     enqueueDodgeHideAnim(battle, {
                         label = "DODGE",
                         beforeAnim = true,
                         stayHidden = false,
                     })
-                    insertBeforeAnim(battle, {
-                        arFx = true,
-                        fn = function()
-                            if type(dev.playStadiumEntrance) == "function" then
-                                dev.playStadiumEntrance()
-                            end
-                        end,
-                    })
                 else
-                    -- Failed dodge: Stadium recoil + flat blink before the hit lands.
                     insertBeforeAnim(battle, { wait = 10, arFx = true })
                     insertBeforeAnim(battle, {
                         arFx = true,
                         fn = function()
-                            if type(dev.playStadiumHit) == "function" then
-                                dev.playStadiumHit()
-                            end
                             if battle.picFxFor and battle.player then
                                 local pf = battle:picFxFor(battle.player)
                                 if pf then
@@ -5792,9 +5408,6 @@ return function(mod)
                 insertBeforeAnim(battle, {
                     arFx = true,
                     fn = function()
-                        if type(dev.playStadiumEntrance) == "function" then
-                            dev.playStadiumEntrance()
-                        end
                         if tucked and type(dev.applyCoverTuckVisual) == "function" then
                             dev.applyCoverTuckVisual(battle)
                         end
@@ -5808,28 +5421,12 @@ return function(mod)
 
             if action == "brace" then
                 enqueueBraceAnim(battle, { beforeAnim = true })
-                insertBeforeAnim(battle, {
-                    arFx = true,
-                    fn = function()
-                        if type(dev.playStadiumEntrance) == "function" then
-                            dev.playStadiumEntrance()
-                        end
-                    end,
-                })
                 return
             end
 
             if action == "entrench" or action == "entrench_hold" then
                 if action == "entrench" then
                     enqueueBraceAnim(battle, { beforeAnim = true, entrenched = true })
-                    insertBeforeAnim(battle, {
-                        arFx = true,
-                        fn = function()
-                            if type(dev.playStadiumEntrance) == "function" then
-                                dev.playStadiumEntrance()
-                            end
-                        end,
-                    })
                 end
                 return
             end
@@ -6092,9 +5689,8 @@ return function(mod)
             if scene == "indoor" or scene == "gym" then
                 return
             end
-            dev.installStadiumFocusHooks()
             local arena, map
-            local lib = dev.findStadiumLib()
+            local lib = dev.findDsLib()
             if lib then
                 local ok, OB = pcall(lib.require, "OverworldBattle")
                 if ok and type(OB) == "table" and type(OB.arena) == "function" then
@@ -6271,36 +5867,15 @@ return function(mod)
             end
         end
 
-        -- Hook OverworldBattle.begin: cover stamps + anime cast (trainers stay).
+        -- Hook OverworldBattle.begin: cover stamps.
         dev.installCoverPropStampHooks = function()
-            local lib = dev.findStadiumLib()
+            local lib = dev.findDsLib()
             if not lib then
                 return
             end
             local ok, OB = pcall(lib.require, "OverworldBattle")
             if not (ok and type(OB) == "table" and type(OB.begin) == "function") then
                 return
-            end
-
-            -- Anime cast wrap (outermost / idempotent).
-            if not OB._arAnimeCastBegin then
-                local currentBegin = OB.begin
-                OB.begin = function(state, battle)
-                    local saved = nil
-                    if state and type(state.entities) == "table" and type(dev.wantsAnimeCast) == "function"
-                        and dev.wantsAnimeCast() then
-                        saved = {}
-                        for i = 1, #state.entities do
-                            saved[i] = state.entities[i]
-                        end
-                    end
-                    local result = currentBegin(state, battle)
-                    if result and saved and type(dev.restoreAnimeFieldCast) == "function" then
-                        pcall(dev.restoreAnimeFieldCast, state, saved)
-                    end
-                    return result
-                end
-                OB._arAnimeCastBegin = true
             end
 
             if not OB._arCoverPropBegin then
@@ -9768,6 +9343,10 @@ return function(mod)
             if type(fn) ~= "function" then
                 return
             end
+            if not (debug and type(debug.getupvalue) == "function"
+                and type(debug.setupvalue) == "function") then
+                return
+            end
             seen = seen or {}
             if seen[fn] then
                 return
@@ -9835,9 +9414,6 @@ return function(mod)
 
         -- Dramatic Shape snaps HUD bands + frosted panels outside drawHUDs.
         hud.installDramaticShapeHide = function()
-            if type(dev.installStadiumFocusHooks) == "function" then
-                pcall(dev.installStadiumFocusHooks)
-            end
             if type(dev.installCoverPropStampHooks) == "function" then
                 pcall(dev.installCoverPropStampHooks)
             end
@@ -9847,13 +9423,9 @@ return function(mod)
             if FieldBattleViewer and type(FieldBattleViewer.install) == "function" then
                 pcall(FieldBattleViewer.install, mod)
             end
-            if type(dev.applyBattleStage) == "function" then
-                pcall(dev.applyBattleStage)
-            end
             local handle = mod.find and mod.find("DRAMATIC_SHAPE")
             local lib = handle and handle.exports and handle.exports.lib
             if not (lib and type(lib.require) == "function") then
-                -- Still try Dramaless / potato via the shared Stadium hooks above.
                 return
             end
             local ok, OverworldBattle = pcall(lib.require, "OverworldBattle")
@@ -9896,6 +9468,10 @@ return function(mod)
         -- "Lv." tags and status panels honor this mod's options.
         hud.patchCompatUiFn = function(fn, seen)
             if type(fn) ~= "function" or seen[fn] then
+                return
+            end
+            if not (debug and type(debug.getupvalue) == "function"
+                and type(debug.setupvalue) == "function") then
                 return
             end
             seen[fn] = true
@@ -10075,18 +9651,12 @@ return function(mod)
             if FieldBattleViewer and type(FieldBattleViewer.install) == "function" then
                 pcall(FieldBattleViewer.install, mod)
             end
-            if type(dev.applyBattleStage) == "function" then
-                pcall(dev.applyBattleStage)
-            end
         end)
         mod.events:on("game.ready", function()
             hud.installLoveTextFilters()
             hud.installCompatUiOverrides()
             if FieldBattleViewer and type(FieldBattleViewer.install) == "function" then
                 pcall(FieldBattleViewer.install, mod)
-            end
-            if type(dev.applyBattleStage) == "function" then
-                pcall(dev.applyBattleStage)
             end
         end)
         -- Hot reload / late installers.
@@ -10242,7 +9812,7 @@ return function(mod)
             if type(origDraw) == "function" then
                 function BattleState.draw(self)
                     local result = origDraw(self)
-                    -- Ambient menu pulses: ensure Stadium/Gen1 anim sprites paint even
+                    -- Ambient menu pulses: ensure Gen1 anim sprites paint even
                     -- if the engine skipped them outside a queued attack.
                     if self and self._arAmbientOwned and self.animPlayer then
                         local ap = self.animPlayer

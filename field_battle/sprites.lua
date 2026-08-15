@@ -1275,41 +1275,7 @@ function Sprites.syncSurface(ent)
   end
 end
 
-local function picDrawer(img, scale)
-  scale = scale or 1
-  local angles = {
-    down = 0,
-    right = -math.pi / 2,
-    left = math.pi / 2,
-    up = math.pi,
-  }
-  return function(ent, camX, camY)
-    if not img or ent.hidden or ent._removed then
-      return
-    end
-    local iw, ih = img:getDimensions()
-    local w, h = iw * scale, ih * scale
-    local x = ent.px - camX + 8
-    local y = ent.py - camY + 8
-    local ang = angles[ent.facing or "down"] or 0
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(img, x, y, ang, scale, scale, iw / 2, ih / 2)
-  end
-end
-
 function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler, grid)
-  local mode = Sprites.castMode(mod)
-
-  if mode == "STADIUM" then
-    local img = battler and battler.sprite or nil
-    if type(img) == "userdata" or type(img) == "table" then
-      local iw = (img.getWidth and img:getWidth()) or 56
-      local scale = (iw > 40) and 0.55 or 1
-      return finalizeEntity(buildEntity(side, cellX, cellY, facing, species,
-        picDrawer(img, scale), "stadium", grid), battler, 12, mod, game, species)
-    end
-  end
-
   local sheet = Sprites.resolveSheet(mod, game, species, battler, "land")
   local visual = sheetToVisual(sheet, side)
   if visual then

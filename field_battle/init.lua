@@ -39,27 +39,51 @@ return function(env)
   end
 
   local Coords = loadFile("coords.lua")
-  package.loaded["coords"] = Coords
   local Themes = loadFile("themes.lua")
-  package.loaded["themes"] = Themes
-  local Layout = loadFile("layout.lua")
-  local Sprites = loadFile("sprites.lua")
-  local Arena = loadFile("arena.lua")
-  local Survey = loadFile("survey.lua")
-  local Grid = loadFile("grid.lua")
-  local Cast = loadFile("cast.lua")
-  local Cues = loadFile("cues.lua")
-  local Projectiles = loadFile("projectiles.lua")
-  local Audio = loadFile("audio.lua")
-  local Anims = loadFile("anims.lua")
-  local Lifecycle = loadFile("lifecycle.lua")
-  local Spectators = loadFile("spectators.lua")
-  local Wildlife = loadFile("wildlife.lua")
-  local Compat = loadFile("compat.lua")
-  local Hooks = loadFile("hooks.lua")
-  local Intercept = loadFile("intercept.lua")
-  local Debug = loadFile("debug.lua")
-  local UI = loadFile("ui.lua")
+  do
+    local loaded = package and package.loaded
+    if type(loaded) == "table" then
+      loaded["coords"] = Coords
+      loaded["themes"] = Themes
+    end
+  end
+  local origRequire = require
+  require = function(name)
+    if name == "coords" then
+      return Coords
+    end
+    if name == "themes" then
+      return Themes
+    end
+    return origRequire(name)
+  end
+  local Layout, Sprites, Arena, Survey, Grid, Cast, Cues, Projectiles
+  local Audio, Anims, Lifecycle, Spectators, Wildlife, Compat
+  local Hooks, Intercept, Debug, UI
+  local loadOk, loadErr = pcall(function()
+    Layout = loadFile("layout.lua")
+    Sprites = loadFile("sprites.lua")
+    Arena = loadFile("arena.lua")
+    Survey = loadFile("survey.lua")
+    Grid = loadFile("grid.lua")
+    Cast = loadFile("cast.lua")
+    Cues = loadFile("cues.lua")
+    Projectiles = loadFile("projectiles.lua")
+    Audio = loadFile("audio.lua")
+    Anims = loadFile("anims.lua")
+    Lifecycle = loadFile("lifecycle.lua")
+    Spectators = loadFile("spectators.lua")
+    Wildlife = loadFile("wildlife.lua")
+    Compat = loadFile("compat.lua")
+    Hooks = loadFile("hooks.lua")
+    Intercept = loadFile("intercept.lua")
+    Debug = loadFile("debug.lua")
+    UI = loadFile("ui.lua")
+  end)
+  require = origRequire
+  if not loadOk then
+    error(loadErr)
+  end
 
   local deps = {
     Layout = Layout,

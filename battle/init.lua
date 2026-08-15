@@ -1,9 +1,9 @@
 -- Battle systems — traditional battle layer
 --
 -- Reactive Defense (Focus), anime move callouts, speech bubbles, trainer
--- banter, status/focus chips, Stadium FX helpers. Works on CLASSIC / STADIUM
--- (and under FIELD for menus/logic). Presentation of FIELD itself is
--- field_battle/; this package is the fight systems on top of BattleState.
+-- banter, status/focus chips. Works on CLASSIC battles and under FIELD for
+-- menus/logic. Presentation of FIELD itself is field_battle/; this package
+-- is the fight systems on top of BattleState.
 --
 --   immersion/     → HP/EXP hide + rewards
 --   battle/        → this package

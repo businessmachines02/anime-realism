@@ -37,7 +37,7 @@ function Callouts.anchor(session, side, ow, battle)
     return nil, nil
   end
   local Coords = (session._deps and session._deps.Coords)
-    or (package.loaded and package.loaded["coords"])
+    or (package and package.loaded and package.loaded["coords"])
   if not Coords or type(Coords.worldViewToUi) ~= "function" then
     local ok, mod = pcall(require, "coords")
     Coords = ok and mod or nil

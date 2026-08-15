@@ -11,8 +11,6 @@
   "affects_link": false,
   "optional_dependencies": [
     "DRAMATIC_SHAPE",
-    "DRAMALESS_SHAPE",
-    "STADIUM_BATTLE_FX",
     "BATTLE_CINEMATICS",
     "PokePCFollowers_VoxelMerge",
     "FOLLOWERS_EX",

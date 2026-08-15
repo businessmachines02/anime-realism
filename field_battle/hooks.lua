@@ -1,7 +1,7 @@
 -- Field battle — BattleState presentation hooks + events + standalone intercept.
 --
 -- Responsibilities:
---   • Suppress classic/Stadium move paint; FIELD FX come from projectiles.lua
+--   • Suppress classic move paint; FIELD FX come from projectiles.lua
 --   • Drive present-clock ticks so idle bob keeps moving under menus
 --   • FIELD input UX on top of vanilla BattleState phases:
 --       - Start on FIGHT / PKMN / ITEM / RUN until the player picks FIGHT
@@ -174,7 +174,7 @@ function Hooks.install(FBV, mod)
             local origAnim = BattleState.drawAnimLayer
             function BattleState:drawAnimLayer(colorized, ...)
                 if isFieldBattle(self) then
-                    -- SPEC: suppress classic/Stadium paint. Engine anim rows still
+                    -- SPEC: suppress classic move paint. Engine anim rows still
                     -- advance for timing + SFX; world FX come from projectiles.lua.
                     return
                 end
