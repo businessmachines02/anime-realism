@@ -2,13 +2,15 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
-<img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" />
+<p align="center">
+  <img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" style="display: inline-block; margin-right: 8px;" />
+  <img width="800" height="613" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
+</p>
 <p align="center">
   <img width="400" height="298" alt="water" src="https://github.com/user-attachments/assets/eb277dcf-562a-4adc-a44d-481071a1c10a" style="display: inline-block; vertical-align: top; margin-right: 8px;" />
   <img width="400" height="298" alt="wild-encounter" src="https://github.com/user-attachments/assets/6f86a3a4-6e48-43c2-a0df-c94ac85b4449" style="display: inline-block; vertical-align: top;" />
 </p>
 <img width="800" height="614" alt="caves-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/56d2ea5f-9469-493f-8d89-b78ed2815563" />
-<img width="800" height="613" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" />
 
 
 
