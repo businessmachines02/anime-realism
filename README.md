@@ -4,7 +4,7 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 <p align="center">
   <img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" style="display: inline-block; margin-right: 8px;" />
-  <img width="800" height="613" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
+  <img width="550" height="410" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
 </p>
 <p align="center">
   <img width="400" height="298" alt="water" src="https://github.com/user-attachments/assets/eb277dcf-562a-4adc-a44d-481071a1c10a" style="display: inline-block; vertical-align: top; margin-right: 8px;" />
