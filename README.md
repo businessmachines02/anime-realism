@@ -6,7 +6,7 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 
 > **Important Note:**  
-> This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [architecture.md](./architecture.md).
+> This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [architecture.md](./ARCHITECTURE.md).
 
 ## Compatibility
 
