@@ -17,6 +17,28 @@
 
 local Hooks = {}
 
+-- Classic BattleState paints the field as a 160×144 white fill, then flashes
+-- the same rect at ~0.85 alpha for hit / attack programs. Over a white field
+-- that reads as a flash; over the live map it is a white overlay. Compact
+-- FIELD boxes are smaller than the frame, so they stay visible.
+--
+-- Returns "clear" (opaque: also wipe bg/wave canvases), "drop", or false.
+function Hooks.shouldDropFieldFill(mode, x, y, w, h, r, gr, b, a)
+    if mode ~= "fill" or x ~= 0 or y ~= 0 or w ~= 160 or h ~= 144 then
+        return false
+    end
+    if type(r) ~= "number" or type(gr) ~= "number" or type(b) ~= "number" then
+        return false
+    end
+    if r <= 0.99 or gr <= 0.99 or b <= 0.99 then
+        return false
+    end
+    if a == nil or a > 0.99 then
+        return "clear"
+    end
+    return "drop"
+end
+
 function Hooks.install(FBV, mod)
     if not mod then
         return false
@@ -184,7 +206,8 @@ function Hooks.install(FBV, mod)
             BattleState._arFbvAnim21 = true
         end
 
-        if type(BattleState.drawClassic) == "function" and not BattleState._arFbvDraw then
+        -- _arFbvDraw23 also drops translucent attack flashes (issue #12).
+        if type(BattleState.drawClassic) == "function" and not BattleState._arFbvDraw23 then
             local origDraw = BattleState.drawClassic
             function BattleState:drawClassic(...)
                 if not isFieldBattle(self) then
@@ -194,19 +217,22 @@ function Hooks.install(FBV, mod)
                 self.showEnemyTrainer = false
                 self.introBalls = false
                 self.introSlide = 0
+                self.letterboxWhite = false
+                self.isOpaque = false
                 local g = love.graphics
                 local rectangle = g.rectangle
                 g.rectangle = function(mode, x, y, w, h, ...)
-                    if mode == "fill" and x == 0 and y == 0 and w == 160 and h == 144 then
-                        local r, gr, b, a = g.getColor()
-                        if r > 0.99 and gr > 0.99 and b > 0.99 and (not a or a > 0.99) then
+                    local r, gr, b, a = g.getColor()
+                    local drop = Hooks.shouldDropFieldFill(mode, x, y, w, h, r, gr, b, a)
+                    if drop then
+                        if drop == "clear" then
                             local target = g.getCanvas()
                             if target ~= nil
                                 and (target == self.bgCanvas or target == self.waveCanvas) then
                                 g.clear(0, 0, 0, 0)
                             end
-                            return
                         end
+                        return
                     end
                     return rectangle(mode, x, y, w, h, ...)
                 end
@@ -217,7 +243,34 @@ function Hooks.install(FBV, mod)
                 end
             end
 
+            BattleState._arFbvDraw23 = true
             BattleState._arFbvDraw = true
+        end
+
+        -- Screen-shake zone fills are color 0 (white). Invisible on the classic
+        -- field; a flickering sheet over the live map.
+        if type(BattleState.drawZonePass) == "function" and not BattleState._arFbvZone23 then
+            local origZone = BattleState.drawZonePass
+            function BattleState:drawZonePass(...)
+                if not isFieldBattle(self) then
+                    return origZone(self, ...)
+                end
+                local g = love.graphics
+                local rectangle = g.rectangle
+                g.rectangle = function(mode, ...)
+                    if mode == "fill" then
+                        return
+                    end
+                    return rectangle(mode, ...)
+                end
+                local okZ, err = pcall(origZone, self, ...)
+                g.rectangle = rectangle
+                if not okZ then
+                    error(err, 0)
+                end
+            end
+
+            BattleState._arFbvZone23 = true
         end
 
         if type(BattleState.wideLayout) == "function" and not BattleState._arFbvWide then
@@ -240,6 +293,7 @@ function Hooks.install(FBV, mod)
                 if isFieldBattle(self) then
                     self.showPlayerBack = false
                     self.showEnemyTrainer = false
+                    self.letterboxWhite = false
 
                     local input = self.game and self.game.input
 

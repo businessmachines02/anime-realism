@@ -35,6 +35,7 @@ local Spectators = load("spectators.lua")
 local Wildlife = load("wildlife.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
+local Hooks = load("hooks.lua")
 
 local tests = {}
 
@@ -63,6 +64,21 @@ function tests.field_allows_learn_move_textbox()
   battle.game.stack.states = { battle, party }
   truthy(not Compat.fieldAllowsStackedBottomUI(battle),
     "opaque party menu does not unhide battle chrome")
+end
+
+function tests.field_drops_classic_white_overlay()
+  eq(Hooks.shouldDropFieldFill("fill", 0, 0, 160, 144, 1, 1, 1, 1),
+    "clear", "opaque battle-field fill")
+  eq(Hooks.shouldDropFieldFill("fill", 0, 0, 160, 144, 1, 1, 1, nil),
+    "clear", "opaque fill with implicit alpha")
+  eq(Hooks.shouldDropFieldFill("fill", 0, 0, 160, 144, 1, 1, 1, 0.85),
+    "drop", "translucent attack flash")
+  eq(Hooks.shouldDropFieldFill("fill", 0, 64, 160, 80, 1, 1, 1, 1),
+    false, "compact FIELD box stays")
+  eq(Hooks.shouldDropFieldFill("fill", 0, 0, 160, 144, 0, 0, 0, 1),
+    false, "black fill is not the overlay")
+  eq(Hooks.shouldDropFieldFill("line", 0, 0, 160, 144, 1, 1, 1, 1),
+    false, "stroke is not the overlay")
 end
 
 function tests.supported_battle_gate()
