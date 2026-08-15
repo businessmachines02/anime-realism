@@ -229,8 +229,8 @@ return function(env)
     return Lifecycle.react(battle, side, kind, opts)
   end
 
-  function FBV.shouldSkipEventReact(battle, side, kind)
-    return Lifecycle.shouldSkipEventReact(battle, side, kind)
+  function FBV.shouldSkipEventReact(battle, side, kind, opts)
+    return Lifecycle.shouldSkipEventReact(battle, side, kind, opts)
   end
 
   function FBV.onFainted(battle, side)

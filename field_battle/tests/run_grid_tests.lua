@@ -983,6 +983,37 @@ function tests.cues_and_dedupe()
 
   session._now = 14
   truthy(not Cues.shouldSkipEvent(session, "player", "attack"), "dedupe expires")
+  -- Same named special stays locked past the toast window (issue #3).
+  session._now = 16
+  session._lastCueAt = nil
+  player.lastAnim = nil
+  Projectiles.clear(session)
+  Grid.setPad(grid, player, pHome.u, pHome.v)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "special",
+    moveType = "PSYCHIC",
+    moveId = "PSYCHIC",
+  }), "psychic attack cue")
+  eq(#(session.projectiles or {}), 1, "psychic spawns once")
+  session._now = 20
+  truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "PSYCHIC" }),
+    "same moveId stays locked after 1.25s")
+  local psychicBattle = {
+    current = {
+      arFieldCue = {
+        side = "player", kind = "attack", category = "special",
+        moveId = "PSYCHIC", moveType = "PSYCHIC",
+      },
+    },
+  }
+  eq(Cues.pumpCurrent(session, psychicBattle, Grid, nil), false,
+    "pumpCurrent does not replay psychic")
+  eq(#(session.projectiles or {}), 1, "no second psychic projectile")
+  truthy(not Cues.shouldSkipEvent(session, "player", "attack", {
+    moveId = "PSYCHIC", isCalled = true,
+  }), "Again! isCalled may strike again")
+
+  session._now = 21
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil,
     { category = "special", push = false }), "hit cue")
   eq(enemy.lastAnim, "hit", "hit animation")
@@ -1725,6 +1756,52 @@ function tests.sprite_cast_and_animation()
   end
   truthy(enemy._faintDone, "faint animation completes")
   truthy(enemy.hidden, "fainted sprite hides after the collapse")
+end
+
+function tests.tick_does_not_replay_attack_while_react_holds_anim()
+  -- Issue #3: REACT leaves battle.animPlaying true after the FIELD clip
+  -- returns to idle. Tick must not start a second (or third) attack.
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+    animPlaying = true,
+    moveAnimRow = { anim = "TACKLE", attackerIsPlayer = false },
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    plan = plan,
+    grid = grid,
+    _battle = battle,
+  }
+  local deps = {
+    Cast = Cast,
+    Sprites = Sprites,
+    Grid = Grid,
+    Projectiles = { tick = function() end, syncCoverHold = function() end },
+    Cues = {
+      pumpCurrent = function() end,
+      tickReturns = function() end,
+    },
+    Anims = { cache = function() end },
+  }
+  session._deps = deps
+  session.playerMon = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  session.enemyMon = Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  Lifecycle._testBind(battle, session)
+
+  session.enemyMon:play("attack")
+  for _ = 1, 40 do
+    Lifecycle.tick(battle, 1 / 60, deps)
+  end
+  eq(session.enemyMon.anim, "idle", "first FIELD swing finished")
+  Lifecycle.tick(battle, 1 / 60, deps)
+  eq(session.enemyMon.anim, "idle",
+    "REACT hold must not restart the attack clip")
+  Lifecycle._testUnbind(battle)
 end
 
 function tests.switch_and_capture_choreography()

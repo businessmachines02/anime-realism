@@ -1598,6 +1598,7 @@ function Lifecycle.onTurnStarted(battle)
     end
     repairInvalidCell(session.playerMon)
     repairInvalidCell(session.enemyMon)
+    session._lastCueMoveId = nil
 end
 
 function Lifecycle.react(battle, side, kind, opts)
@@ -1605,17 +1606,25 @@ function Lifecycle.react(battle, side, kind, opts)
     if not (session and session.live) then
         return
     end
+    opts = opts or {}
+    -- Camera re-arms (REACT resume / BC tick) must not spawn another Surf/Psychic.
+    if opts.presentationOnly then
+        return
+    end
     local deps = session._deps
+    if deps.Cues.shouldSkipEvent(session, side, kind, opts) then
+        return
+    end
     deps.Cues.apply(session, side, kind, deps.Grid, Lifecycle.nudgeCamera, battle, opts)
 end
 
-function Lifecycle.shouldSkipEventReact(battle, side, kind)
+function Lifecycle.shouldSkipEventReact(battle, side, kind, opts)
     local session = Lifecycle.get(battle)
     local deps = session and session._deps
     if not (session and deps) then
         return false
     end
-    return deps.Cues.shouldSkipEvent(session, side, kind)
+    return deps.Cues.shouldSkipEvent(session, side, kind, opts)
 end
 
 local function wallNow(session)
@@ -1881,20 +1890,10 @@ function Lifecycle.tick(battle, dt, deps)
         end
     end
 
-    if battle.animPlaying then
-        local row = battle.moveAnimRow
-        local atkPlayer = row and row.attackerIsPlayer
-        if atkPlayer == nil and battle.current and battle.current.attackerIsPlayer ~= nil then
-            atkPlayer = battle.current.attackerIsPlayer
-        end
-        if atkPlayer == true and p and type(p.play) == "function"
-            and (not p.anim or p.anim == "idle") then
-            p:play("attack")
-        elseif atkPlayer == false and e and type(e.play) == "function"
-            and (not e.anim or e.anim == "idle") then
-            e:play("attack")
-        end
-    end
+    -- Do not restart play("attack") from battle.animPlaying. Cues own the
+    -- one-shot FIELD swing (announce / move_used). REACT keeps the engine
+    -- anim flag up after the clip returns to idle; retriggering here replayed
+    -- the lunge when the HUD opened and again after the pick (issue #3).
 
     session._xformAcc = (session._xformAcc or 0) + dt
     if battle.animPlaying or moving or session._xformAcc >= 0.12 then

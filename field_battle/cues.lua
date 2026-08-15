@@ -109,6 +109,13 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   if category then
     session._lastAttackCategory = category
   end
+  if kind == "attack" or kind == "status" then
+    local mid = opts.moveId and tostring(opts.moveId):upper() or nil
+    if mid == "" then
+      mid = nil
+    end
+    session._lastCueMoveId = mid
+  end
   local foe = foeOf(session, side)
   local g = session.grid
 
@@ -408,8 +415,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   return true
 end
 
-function Cues.shouldSkipEvent(session, side, kind)
+function Cues.shouldSkipEvent(session, side, kind, opts)
   kind = tostring(kind or "")
+  opts = opts or {}
   -- Faint / recall stay one-shot even after the 1.25s beat window: the
   -- "fainted!" dialogue often becomes current well after the HP bar emptied.
   if session and (kind == "faint" or kind == "recall") then
@@ -421,13 +429,30 @@ function Cues.shouldSkipEvent(session, side, kind)
   if not (session and session.live and session._lastCueAt) then
     return false
   end
-  if (now(session) - session._lastCueAt) > 1.25 then
-    return false
-  end
   if session._lastCueSide ~= side then
     return false
   end
   local last = session._lastCueKind
+  -- Again! / Dig-Fly release must be allowed to strike after the first swing.
+  if opts.releaseStrike or opts.again or opts.isCalled then
+    return false
+  end
+  -- Announce toast (~1.5s) + REACT menu outlive the short beat window.
+  -- Same side + move already presented this turn: skip move_used / pumpCurrent
+  -- duplicates (Confusion / Surf / Psychic were replaying the travel FX).
+  if (kind == "attack" or kind == "status")
+      and (last == "attack" or last == "status") then
+    local mid = opts.moveId and tostring(opts.moveId):upper() or nil
+    if mid == "" then
+      mid = nil
+    end
+    if mid and session._lastCueMoveId == mid then
+      return true
+    end
+  end
+  if (now(session) - session._lastCueAt) > 1.25 then
+    return false
+  end
   if kind == "attack" and last == "attack" then
     return true
   end
@@ -467,11 +492,19 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   if kind == "faint" or kind == "recall" then
     return false
   end
+  -- Mark done even when skipped so a late toast cannot replay after the
+  -- 1.25s window (announce + move_used + REACT re-arm).
+  if Cues.shouldSkipEvent(session, cue.side, kind, cue) then
+    return false
+  end
   return Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, {
     category = cue.category,
     moveType = cue.moveType,
     moveId = cue.moveId,
     vanish = cue.vanish,
+    again = cue.again,
+    isCalled = cue.isCalled,
+    releaseStrike = cue.releaseStrike,
   })
 end
 

@@ -741,17 +741,20 @@ function Hooks.install(FBV, mod)
             end
             local status = isStatusMove(move)
             local kind = status and "status" or "attack"
-            local skip = false
-            if type(FBV.shouldSkipEventReact) == "function" then
-                local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, kind)
+            local opts = {
+                category = status and "status" or moveCategory(move),
+                moveType = move.type,
+                moveId = move.id,
+                isCalled = ev.isCalled == true,
+                presentationOnly = ev.presentationOnly == true,
+            }
+            local skip = opts.presentationOnly
+            if not skip and type(FBV.shouldSkipEventReact) == "function" then
+                local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, kind, opts)
                 skip = okS and s
             end
             if not skip then
-                pcall(FBV.react, battle, side, kind, {
-                    category = status and "status" or moveCategory(move),
-                    moveType = move.type,
-                    moveId = move.id,
-                })
+                pcall(FBV.react, battle, side, kind, opts)
             end
         end)
 

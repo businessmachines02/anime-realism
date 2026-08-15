@@ -41,7 +41,7 @@ Every Pokémon has a **Focus Meter** (0–100).
 | **Entry cost** | 20 Focus to enter cover |
 | **Upkeep** | Free to *stay* in cover |
 | **Exit cost** | 10 Focus to emerge and attack |
-| **Cover Durability** | Pool = `Defense stat × 1.5`. Depletes when hit while covered. |
+| **Cover Durability** | Pool = `Defense stat × 1.5`. Depletes when hit while covered — each hit reduces durability by the opposing move's power (damage dealt). |
 | **While covered, choose each turn:** | **Stay** (skip your attack, cover holds/refreshes) or **Emerge** (attack this turn, but you're re-exposed — next incoming hit does 120% damage) |
 | **Cover break** | If Durability hits 0, cover shatters — you take that hit's damage in full and are auto-exposed next turn |
 | **Cover-piercing moves** | High-BP, AoE, or "explosive" moves (Earthquake, Explosion-type effects) deal **bonus damage to Durability** or ignore cover outright — stops turtling from being a free win |
