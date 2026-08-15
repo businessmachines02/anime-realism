@@ -4,6 +4,7 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 <img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" />
 <img width="550" height="410" alt="water" src="https://github.com/user-attachments/assets/eb277dcf-562a-4adc-a44d-481071a1c10a" />
+<img width="800" height="597" alt="wild-encounter" src="https://github.com/user-attachments/assets/6f86a3a4-6e48-43c2-a0df-c94ac85b4449" />
 <img width="800" height="614" alt="caves-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/56d2ea5f-9469-493f-8d89-b78ed2815563" />
 
 
