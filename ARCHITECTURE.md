@@ -98,6 +98,7 @@ HUD table). Option keys live on packages; most *behavior* for immersion and
 classic battle still runs in `main.lua`. FIELD presentation is the extracted
 viewer.
 
+
 | Package | Owns at runtime | Still in `main.lua` |
 |---------|-----------------|---------------------|
 | `immersion/` | Option keys / labels | Hide HUD/XP, generic level-up, underdog EXP, effort faint, party heal hints |
