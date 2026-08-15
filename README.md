@@ -8,6 +8,13 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 > **Important Note:**  
 > This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+
+> **Need help or found a bug?**  
+> [![Discord](https://img.shields.io/badge/discord-blue?logo=discord&logoColor=white)](https://discord.com/channels/1019387038820216882/1536576688526336122)  
+> Reach out to the developer in the [Anime Realism Discord channel](https://discord.com/channels/1019387038820216882/1536576688526336122).
+
+
+
 ## Compatibility
 
 FIELD sits on the live overworld. This is the companion stack and Dramatic Shape / Dramaless settings currently used with this mod. Anime Realism itself has no hard deps; without the mods below you still get hidden numbers and REACT, but FIELD battlers and the voxel map will be missing or flat.
