@@ -2,7 +2,7 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
-**Current build:** `3.0` (`anime_realism-3.0.zip`)
+**Current build:** `3.0.0` (`anime_realism-3.0.0.zip`)
 
 > **Important Note:**  
 > This mod is not an engine overhaul or a competitive balance patch. It is designed for immersion and guided by anime logic and feel, not for tournament fairness or transparency. Most mechanics are explained in spirit or flavor-first — for technical engine or API boundaries, see [architecture.md](./architecture.md).
@@ -164,6 +164,7 @@ remain on their normal presentation path.
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
+
 ## Layout
 
 Three packages under one mod:
@@ -194,8 +195,9 @@ Keep `LICENSE`, and note your changes.
 - `battle/` — battle systems (`reactive_defense.lua` lives here)
 - `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
 - `LICENSE` — CC BY 4.0 (attribution required)
-- `build.sh` — builds `anime_realism-<version>.zip`
-- `.github/workflows/release.yml` — GitHub Release pipeline
+- `DIFFERENCES.md` — what this mod changes from vanilla
+- `build.sh` — local zip for testing
+- `.github/workflows/release.yml` — Gen1Recomp launcher release pipeline
 
 ---
 
