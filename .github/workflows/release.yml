@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -32,6 +34,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           echo "zip=anime_realism-${BASH_REMATCH[1]}.zip" >> "$GITHUB_OUTPUT"
+          # Annotated tag message (`git tag -a -m`); empty for lightweight tags.
+          NOTES="$(git tag -l --format='%(contents)' "$TAG" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+          {
+            echo "notes<<EOF"
+            printf '%s\n' "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate tag / manifest versions
         env:
@@ -102,6 +111,7 @@ jobs:
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Anime Realism ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
+          body: ${{ steps.ver.outputs.notes }}
+          generate_release_notes: ${{ steps.ver.outputs.notes == '' }}
           files: ${{ steps.ver.outputs.zip }}
           fail_on_unmatched_files: true
