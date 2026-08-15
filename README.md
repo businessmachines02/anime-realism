@@ -164,28 +164,6 @@ remain on their normal presentation path.
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
-## Install
-
-1. Download `anime_realism-<version>.zip` from [Releases](https://github.com/businessmachines02/anime-realism/releases), or run `./build.sh` locally. The zip keeps package folders.
-2. In Gen1Recomp, import the zip — or copy the mod folder into:
-
-   `~/Library/Application Support/pokemon-love2d/mods/anime_realism/`
-
-3. Enable the mod and restart/reload if needed.
-
-Requires `engine_internals` permission (declared in the manifest).
-
-## Releases
-
-Push a version tag to publish. The tag must match `manifest.json` (`v4.6.0` for `"version": "4.6.0"`).
-
-```bash
-git tag v4.6.0
-git push origin v4.6.0
-```
-
-GitHub Actions runs FIELD unit tests, builds `anime_realism-<version>.zip`, and attaches it to the release. Local `./build.sh` still builds a zip for testing; it does not publish.
-
 ## Layout
 
 Three packages under one mod:
