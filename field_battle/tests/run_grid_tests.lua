@@ -2706,6 +2706,56 @@ function tests.camera_mouse_look_then_returns()
   truthy(peekedX ~= restX, "look-around actually moved the camera")
 end
 
+function tests.camera_look_span_scales_with_world_view()
+  local sx, sy = Lifecycle.mouseLookSpan(160, 144)
+  eq(sx, Lifecycle.CAMERA_LOOK_SPAN, "classic view keeps a 56px peek X")
+  eq(sy, Lifecycle.CAMERA_LOOK_SPAN, "classic view keeps a 56px peek Y")
+  local wideX = select(1, Lifecycle.mouseLookSpan(320, 144))
+  eq(wideX, Lifecycle.CAMERA_LOOK_SPAN * 2, "double-wide view doubles peek X")
+
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 320, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+    _mouseLookInjected = true,
+  }
+  Lifecycle._testBind(battle, session)
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local restX = followed.x
+  Lifecycle.noteMouseLook(session, 1, 0, 8)
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+  truthy(followed.x > restX + Lifecycle.CAMERA_LOOK_SPAN,
+    "wide world view peeks farther than the classic 56px span")
+end
+
 function tests.camera_look_zone_skips_touch_chrome()
   local sw, sh = 160, 144
   truthy(Lifecycle.mouseLookInZone(80, 72, sw, sh), "center is in the look zone")

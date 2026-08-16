@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.35)
+# FIELD combat SPEC (v4.5.36)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -189,9 +189,10 @@ Dedupe by wall time (`_lastPresentAt`, ~8ms) so multiple drivers don’t double-
 - `Cues.tickReturns` (physical attack return-home)
 - soft camera follow of the **live fight** (throttled; clamped to the envelope;
   mouse look-around while the cursor is moving, auto resume on idle.
-  Desktop may peek from anywhere in the window. While the on-screen pad is
-  up, only the inner viewport may peek, and a d-pad / A / B / START / SELECT
-  hit never pans)
+  Peek distance scales with `worldViewSize` so mobile Dramaless pans the
+  overworld camera like desktop. Desktop may peek from anywhere in the window.
+  While the on-screen pad is up, only the inner viewport may peek, and a
+  d-pad / A / B / START / SELECT hit never pans)
 - `Anims.cache` while `animPlaying` or moving
 
 ### What present tick must NOT depend on
