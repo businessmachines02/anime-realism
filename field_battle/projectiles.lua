@@ -735,6 +735,14 @@ function Projectiles.isTravelFx(opts)
   return TRAVEL_STYLES[named.style] == true
 end
 
+-- Jaws / punches / slams close the gap even when the Gen1 type split marks
+-- the move special (Bite is often Dark; Fire Punch is Fire).
+function Projectiles.isContactFx(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  local named = MOVE_FX[moveId]
+  return named and named.style == "contact" or false
+end
+
 function Projectiles.isPowerfulMove(opts)
   opts = opts or {}
   local moveId = tostring(opts.moveId or ""):upper():gsub("%s+", "_")

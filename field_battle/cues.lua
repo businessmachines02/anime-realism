@@ -69,6 +69,22 @@ function Cues.vanishKind(moveId)
   return Cues.VANISH_MOVES[tostring(moveId):upper()]
 end
 
+-- Walk-in / close-the-gap: contact FX and physicals. Travel FX and
+-- non-contact specials cast in place. Bite / Fire Punch stay melee even
+-- when Damage.isSpecial(type) is true.
+function Cues.isMeleeAttack(opts, Projectiles)
+  opts = opts or {}
+  if Projectiles and type(Projectiles.isTravelFx) == "function"
+      and Projectiles.isTravelFx(opts) then
+    return false
+  end
+  if Projectiles and type(Projectiles.isContactFx) == "function"
+      and Projectiles.isContactFx(opts) then
+    return true
+  end
+  return normCategory(opts.category) ~= "special"
+end
+
 local function battlerChargingVanish(battler)
   if not battler then
     return nil
@@ -519,11 +535,10 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     -- Special: hold cell; still play an in-place cast anim.
     local Projectiles = session._deps and session._deps.Projectiles
     local Audio = session._deps and session._deps.Audio
-    -- Travel FX (beams, streams, Night Shade shadow, …) fly even when the
-    -- Gen1 type split marks the move physical — don't contact-lunge instead.
-    local travel = Projectiles and type(Projectiles.isTravelFx) == "function"
-        and Projectiles.isTravelFx(opts)
-    if category == "special" or travel then
+    -- Travel FX (beams, Night Shade, …) fly even when the Gen1 type split
+    -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
+    -- when that split marks them special.
+    if not Cues.isMeleeAttack(opts, Projectiles) then
       if Audio and type(Audio.playMove) == "function" then
         pcall(Audio.playMove, battle or session._battle, opts.moveId,
           side == "player")

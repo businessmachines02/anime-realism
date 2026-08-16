@@ -492,7 +492,16 @@ function Hooks.install(FBV, mod)
                         local damaging = move and ((move.power or 0) > 0
                             or move.fixedDamage)
                             and cat ~= "status"
-                        if damaging and not special then
+                        local Cues = FBV and FBV.Cues
+                        local melee = damaging and not special
+                        if damaging and Cues and type(Cues.isMeleeAttack) == "function" then
+                            melee = Cues.isMeleeAttack({
+                                category = special and "special" or "physical",
+                                moveId = move.id,
+                                moveType = move.type,
+                            }, FBV.Projectiles)
+                        end
+                        if melee then
                             pcall(FBV.react, self, "player", "attack", {
                                 category = "physical",
                                 moveType = move.type,

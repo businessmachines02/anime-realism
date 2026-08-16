@@ -1257,6 +1257,39 @@ function tests.close_gap_powerful_hit_pushes_two()
   eq(enemy.lastAnim, "hit", "foe plays the hit")
 end
 
+function tests.bite_closes_gap_when_typed_special()
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 1, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 7, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 3,
+    _deps = { Projectiles = Projectiles },
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "special", moveId = "BITE", moveType = "DARK",
+  }), "dark bite still applies")
+  eq(player.padU, 6, "bite closes the gap instead of casting in place")
+  truthy(player._pendingCloseStrike, "bite punch waits for melee reach")
+  eq(player.lastAnim, nil, "cast anim does not play on a contact bite")
+end
+
 function tests.special_trajectories_track_mons()
   local grid = sampleGrid()
   local player = {
@@ -2133,6 +2166,18 @@ function tests.world_space_projectiles()
     moveType = "NORMAL", moveId = "BITE",
   })
   eq(bite.glitz, "bite", "bite contact uses jaw glitz")
+  truthy(Projectiles.isContactFx({ moveId = "BITE" }), "bite is contact FX")
+  truthy(Projectiles.isContactFx({ moveId = "FIRE_PUNCH" }), "fire punch is contact FX")
+  truthy(not Projectiles.isTravelFx({ moveId = "BITE" }), "bite is not travel FX")
+  truthy(Cues.isMeleeAttack({
+    category = "special", moveId = "BITE", moveType = "DARK",
+  }, Projectiles), "dark bite still counts as melee")
+  truthy(Cues.isMeleeAttack({
+    category = "special", moveId = "FIRE_PUNCH", moveType = "FIRE",
+  }, Projectiles), "fire punch still counts as melee")
+  truthy(not Cues.isMeleeAttack({
+    category = "physical", moveId = "NIGHT_SHADE", moveType = "GHOST",
+  }, Projectiles), "night shade stays a travel cast")
   local pound = Projectiles.contact(session, "player", {
     moveType = "NORMAL", moveId = "POUND",
   })
