@@ -624,6 +624,10 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   end
 
   function ent:play(kind)
+    -- HUD confirm arms a close-the-gap walk; do not lunge until melee reach.
+    if (kind == "attack" or kind == "jump") and self._pendingCloseStrike then
+      return
+    end
     self.anim = kind or "idle"
     self.animT = 0
     self._recallDone = nil
@@ -785,10 +789,18 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     end
 
     local anim = self.anim or "idle"
+    if (anim == "attack" or anim == "jump") and self._pendingCloseStrike then
+      anim = "idle"
+      self.anim = "idle"
+      self.animT = 0
+    end
     if anim == "idle" and not self._fainting then
       -- Overworld-style idle: one stable frame with a gentle vertical bob.
+      -- Closing a gap keeps the walk cycle from the pad lerp above.
       self._idleT = (self._idleT or 0) + dt
-      self._walkFrame = 0
+      if not self._pendingCloseStrike then
+        self._walkFrame = 0
+      end
     end
 
     if anim == "sendout" then

@@ -63,6 +63,26 @@ function Hooks.playerMustSwitch(battle)
     return false
 end
 
+-- Foe fainted / empty bar: do not reopen the move diamond over "fainted!".
+function Hooks.foeIsDown(battle)
+    if not battle then
+        return false
+    end
+    local e = battle.enemy
+    if not e then
+        return false
+    end
+    local hp = (e.mon and e.mon.hp) or e.hp
+    if type(hp) == "number" and hp <= 0 then
+        return true
+    end
+    local shown = e.shownHP
+    if type(shown) == "number" and shown <= 0 then
+        return true
+    end
+    return false
+end
+
 function Hooks.install(FBV, mod)
     if not mod then
         return false
@@ -311,7 +331,7 @@ function Hooks.install(FBV, mod)
 
         -- ---- FIELD turn UX (menu latch + directional cast) ----
         -- _arFbvUpdate23 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate23 then
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate24 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -360,14 +380,24 @@ function Hooks.install(FBV, mod)
                     end
                     local entrenched = focusEntrenched(self)
                     local mustSwitch = Hooks.playerMustSwitch(self)
+                    local foeDown = Hooks.foeIsDown(self)
 
                     -- Issue #6: fainted player cannot be stuck on the move diamond.
+                    -- Delayed CLOSE THE GAP KOs must also drop the diamond so the
+                    -- engine faint / send-out script can run.
                     if mustSwitch then
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
                         if self.phase == "moveSelect" or self.phase == "mimicSelect" then
                             self.phase = "menu"
                             self.menuIndex = self.menuIndex or 2
+                            self.moveSwapIndex = nil
+                        end
+                    elseif foeDown then
+                        self._arFieldPreferMoves = nil
+                        self._arFieldCommandHold = true
+                        if self.phase == "moveSelect" or self.phase == "mimicSelect" then
+                            self.phase = "messages"
                             self.moveSwapIndex = nil
                         end
                     end
@@ -389,7 +419,7 @@ function Hooks.install(FBV, mod)
                         self._arFieldCommandHold = true
                         swallowPause = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
-                        and not entrenched and not mustSwitch
+                        and not entrenched and not mustSwitch and not foeDown
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
                         and #(self.player.curMoves) > 0 then
@@ -444,6 +474,33 @@ function Hooks.install(FBV, mod)
                         pcall(FBV.tick, self, dt)
                     end
 
+                    -- Arm the close-the-gap walk before origUpdate so engine
+                    -- applyDamage / runDamaging on this confirm frame are held.
+                    if self._arFieldInstantMove and FBV.Cues
+                        and type(FBV.react) == "function" then
+                        local moves = self.player and self.player.curMoves
+                        local move = moves and moves[self.moveIndex]
+                        local cat = move and tostring(move.category or ""):lower()
+                        local special = cat == "special"
+                        if not special and move and move.type then
+                            local okD, Damage = pcall(require, "src.battle.Damage")
+                            if okD and Damage and type(Damage.isSpecial) == "function" then
+                                local okS, isSp = pcall(Damage.isSpecial, move.type)
+                                special = okS and isSp and true or false
+                            end
+                        end
+                        local damaging = move and ((move.power or 0) > 0
+                            or move.fixedDamage)
+                            and cat ~= "status"
+                        if damaging and not special then
+                            pcall(FBV.react, self, "player", "attack", {
+                                category = "physical",
+                                moveType = move.type,
+                                moveId = move.id,
+                            })
+                        end
+                    end
+
                     local heldBefore = self._arFieldShiftHeld
                     if swallowPause then
                         self._arFieldShiftHeld = true
@@ -483,13 +540,15 @@ function Hooks.install(FBV, mod)
                     self._arFieldShiftHeld = heldBefore
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
-                    if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA then
+                    if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA
+                        and not mustSwitch and not foeDown then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
                     end
                     -- Also latch when COVER!/ENTRENCH! STRIKE/EMERGE/BREAK called
                     -- goMoveSelect (phase becomes moveSelect without our A).
                     if self.phase == "moveSelect" and not entrenched
+                        and not mustSwitch and not foeDown
                         and (phaseBefore == "menu" or pressedA) then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
@@ -500,6 +559,7 @@ function Hooks.install(FBV, mod)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate24 = true
             BattleState._arFbvUpdate23 = true
             BattleState._arFbvUpdate22 = true
             BattleState._arFbvUpdate21 = true
@@ -813,6 +873,54 @@ function Hooks.install(FBV, mod)
             return true
         end
 
+        -- Hold engine HP / hit text until CLOSE THE GAP lands. Otherwise the
+        -- logic clock resolves the swing while the sprite is still walking.
+        do
+            local okE, EffectRegistry = pcall(require, "src.battle.EffectRegistry")
+            if okE and type(EffectRegistry) == "table"
+                and type(EffectRegistry.runDamaging) == "function"
+                and not EffectRegistry._arFbvCloseGap then
+                local origRun = EffectRegistry.runDamaging
+                function EffectRegistry.runDamaging(battle, ctx, record)
+                    if battle and battle._arCloseGapResuming then
+                        return origRun(battle, ctx, record)
+                    end
+                    local session = FBV and type(FBV.session) == "function"
+                        and FBV.session(battle)
+                    local Cues = FBV and FBV.Cues
+                    if session and Cues and type(Cues.shouldHoldEngineHit) == "function"
+                        and Cues.shouldHoldEngineHit(session, ctx) then
+                        battle._arCloseGapDamage = { ctx = ctx, record = record }
+                        return
+                    end
+                    return origRun(battle, ctx, record)
+                end
+                EffectRegistry._arFbvCloseGap = true
+            end
+        end
+
+        if type(BattleState.applyDamage) == "function" and not BattleState._arFbvApplyDmg then
+            local origApply = BattleState.applyDamage
+            function BattleState:applyDamage(...)
+                if self and self._arCloseGapResuming then
+                    return origApply(self, ...)
+                end
+                local session = FBV and type(FBV.session) == "function"
+                    and FBV.session(self)
+                local Cues = FBV and FBV.Cues
+                if session and Cues and type(Cues.closeGapHoldActive) == "function"
+                    and Cues.closeGapHoldActive(session) then
+                    local args = { ... }
+                    self._arCloseGapApply = self._arCloseGapApply or {}
+                    self._arCloseGapApply[#self._arCloseGapApply + 1] = args
+                    -- Report the hit without changing HP yet.
+                    return tonumber(args[2]) or 0
+                end
+                return origApply(self, ...)
+            end
+            BattleState._arFbvApplyDmg = true
+        end
+
         mod.events:on("battle.move_used", function(ev)
             local battle = ev and ev.battle
             if not (battle and isFieldBattle(battle) and ev.user) then
@@ -853,6 +961,13 @@ function Hooks.install(FBV, mod)
             local battle = ev and ev.battle
             if not (battle and isFieldBattle(battle)
                     and ev.target and (ev.damage or 0) > 0) then
+                return
+            end
+            local session = FBV and type(FBV.session) == "function"
+                and FBV.session(battle)
+            local Cues = FBV and FBV.Cues
+            if session and Cues and type(Cues.shouldHoldEngineHit) == "function"
+                and Cues.shouldHoldEngineHit(session, { user = ev.user }) then
                 return
             end
             local side = ev.target.isPlayer and "player" or "enemy"

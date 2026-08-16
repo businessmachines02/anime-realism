@@ -1375,7 +1375,7 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         return
     end
     local busy = ent.anim and ent.anim ~= "idle"
-    if busy or ent._returnAt then
+    if busy or ent._returnAt or ent._pendingCloseStrike or ent._withdrawAfterStrike then
         return
     end
     -- Still lerping to a cell target.
@@ -1396,7 +1396,8 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         ent._wanderCD = 2.8 + rr() * 2.4
         return
     end
-    if Grid.idleWander(session.grid, ent, side) then
+    local foe = (side == "player") and session.enemyMon or session.playerMon
+    if Grid.idleWander(session.grid, ent, side, foe) then
         ent._wanderCD = 3.2 + rr() * 2.8
     else
         ent._wanderCD = 2.0 + rr() * 1.5
@@ -1787,6 +1788,9 @@ function Lifecycle.tick(battle, dt, deps)
     end
     Lifecycle.watchHpFaint(battle, deps)
     deps.Cues.tickReturns(session, deps.Grid)
+    if type(deps.Cues.flushHeldHit) == "function" then
+      pcall(deps.Cues.flushHeldHit, session, battle)
+    end
     if type(deps.Cues.syncSemiInvuln) == "function" then
       deps.Cues.syncSemiInvuln(session, deps.Grid)
     end
@@ -1902,6 +1906,8 @@ function Lifecycle.tick(battle, dt, deps)
     -- one-shot FIELD swing (announce / move_used). REACT keeps the engine
     -- anim flag up after the clip returns to idle; retriggering here replayed
     -- the lunge when the HUD opened and again after the pick (issue #3).
+    -- pumpCurrent above only arms the cue; close-the-gap physicals walk first
+    -- and Cues.tickReturns plays the punch once the sprite is in reach.
 
     session._xformAcc = (session._xformAcc or 0) + dt
     if battle.animPlaying or moving or session._xformAcc >= 0.12 then

@@ -449,8 +449,62 @@ function Grid.closeGap(g, ent, foeEnt)
   if bestU == nil then
     return false
   end
-  ent._returnU, ent._returnV = u, v
+  -- Stay near the foe after the strike; do not stash the opening cell.
+  ent._returnU, ent._returnV = nil, nil
   return Grid.setPad(g, ent, bestU, bestV)
+end
+
+local function rng()
+  return (love and love.math and love.math.random) or math.random
+end
+
+local function pickCell(list)
+  if not list or #list == 0 then
+    return nil
+  end
+  return list[rng()(1, #list)]
+end
+
+--- Re-anchor one or two tiles from the foe (slight withdraw after a close-in).
+function Grid.withdrawFromFoe(g, ent, foeEnt)
+  if not (g and ent and foeEnt) then
+    return false
+  end
+  local u, v = padOf(g, ent)
+  local fu, fv = padOf(g, foeEnt)
+  local ring2, ring1 = {}, {}
+  for du = -2, 2 do
+    for dv = -2, 2 do
+      local dist = math.max(math.abs(du), math.abs(dv))
+      if dist >= 1 and dist <= 2 then
+        local nu, nv = fu + du, fv + dv
+        if Grid.isFree(g, nu, nv, ent.id, ent) then
+          local cell = { u = nu, v = nv }
+          if dist == 2 then
+            ring2[#ring2 + 1] = cell
+          elseif not (nu == u and nv == v) then
+            ring1[#ring1 + 1] = cell
+          end
+        end
+      end
+    end
+  end
+  local choice = pickCell(ring2) or pickCell(ring1)
+  local function anchor(nu, nv)
+    ent.homePadU, ent.homePadV = nu, nv
+    ent._meleeAnchor = true
+    ent._returnU, ent._returnV = nil, nil
+  end
+  if not choice then
+    anchor(u, v)
+    return false
+  end
+  if not Grid.setPad(g, ent, choice.u, choice.v) then
+    anchor(u, v)
+    return false
+  end
+  anchor(choice.u, choice.v)
+  return true
 end
 
 function Grid.returnHome(g, ent)
@@ -655,9 +709,65 @@ function Grid.seekWallCover(g, ent, foeEnt)
   return false
 end
 
-function Grid.idleWander(g, ent, side)
+local function shuffleDirs(dirs, rr)
+  for i = #dirs, 2, -1 do
+    local j = rr(1, i)
+    dirs[i], dirs[j] = dirs[j], dirs[i]
+  end
+  return dirs
+end
+
+--- Idle roam in the 1–2 tile ring around the foe after a close-in strike.
+local function wanderNearFoe(g, ent, foeEnt)
+  local u, v = padOf(g, ent)
+  local fu, fv = padOf(g, foeEnt)
+  local here = math.max(math.abs(u - fu), math.abs(v - fv))
+  local rr = rng()
+  local dirs = shuffleDirs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }, rr)
+
+  local function tryStep(okDist)
+    for i = 1, #dirs do
+      local nu = u + dirs[i][1]
+      local nv = v + dirs[i][2]
+      local dist = math.max(math.abs(nu - fu), math.abs(nv - fv))
+      if okDist(dist) and Grid.step(g, ent, dirs[i][1], dirs[i][2]) then
+        return true
+      end
+    end
+    return false
+  end
+
+  if here > 2 then
+    return tryStep(function(dist)
+      return dist < here and dist >= 1
+    end)
+  end
+  if here < 1 then
+    return tryStep(function(dist)
+      return dist >= 1 and dist <= 2
+    end)
+  end
+  if here == 1 and rr() <= 0.55 then
+    if tryStep(function(dist) return dist == 2 end) then
+      return true
+    end
+  end
+  if here == 2 and rr() <= 0.50 then
+    if tryStep(function(dist) return dist == 2 end) then
+      return true
+    end
+  end
+  return tryStep(function(dist)
+    return dist >= 1 and dist <= 2
+  end)
+end
+
+function Grid.idleWander(g, ent, side, foeEnt)
   if not (g and ent) then
     return false
+  end
+  if ent._meleeAnchor and foeEnt then
+    return wanderNearFoe(g, ent, foeEnt)
   end
   local hu, hv = Grid.homePad(g, side)
   if hu == nil then
@@ -669,7 +779,7 @@ function Grid.idleWander(g, ent, side)
   end
   local u, v = padOf(g, ent)
   local here = math.abs(u - hu) + math.abs(v - hv)
-  local rr = (love and love.math and love.math.random) or math.random
+  local rr = rng()
 
   local function tryStepTowardHome()
     local dirs = {}
@@ -693,11 +803,7 @@ function Grid.idleWander(g, ent, side)
   end
 
   -- Wander one step, but never beyond two cells from home.
-  local dirs = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
-  for i = #dirs, 2, -1 do
-    local j = rr(1, i)
-    dirs[i], dirs[j] = dirs[j], dirs[i]
-  end
+  local dirs = shuffleDirs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }, rr)
   for i = 1, #dirs do
     local nu = u + dirs[i][1]
     local nv = v + dirs[i][2]

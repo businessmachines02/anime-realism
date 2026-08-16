@@ -31,6 +31,9 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 FIELD sits on the live overworld. This is the companion stack and Dramatic Shape / Dramaless settings currently used with this mod. Anime Realism itself has no hard deps; without the mods below you still get hidden numbers and REACT, but FIELD battlers and the voxel map will be missing or flat.
 
+> **📣 Note:**
+> **Minimum Required gen1recomp Version:** `0.1.86`
+
 ## General Settings for Optimized Play
 
 `battle speed`: 2x
@@ -39,16 +42,16 @@ FIELD sits on the live overworld. This is the companion stack and Dramatic Shape
 
 Enable **one** voxel world mod only — Dramatic Shape, Dramaless Shape, and Potato Voxel conflict.
 
-| Mod | Id | Why |
-|-----|----|-----|
-| [Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod) or [Dramaless Shape](https://github.com/artyrambles/DRAMALESS_SHAPE) | `DRAMATIC_SHAPE` / `DRAMALESS_SHAPE` | Voxel overworld under FIELD. Staging is gated so a 3D arena does not cover map fights. |
-| [Wilds of Kanto](https://github.com/YoDrehDenSwagAuf/overworld-spawn-mod) | `overworld_wild_spawns` | Visible wilds plus overworld sheets FIELD can use |
-| [PokéPC Followers (Voxel Merge)](https://github.com/mfrtechconsult/PokePCFollowers) | `PokePCFollowers_VoxelMerge` | GSC-style follower / battler sheets |
-| [Followers EX](https://github.com/masterwebx/gen1recomp-followers-ex) | `FOLLOWERS_EX` | Follower control on voxel maps (needs PokéPC Followers + Wilds) |
-| [Weather FX](https://github.com/MrKrisSatan/Weather-fx) | `Weather-fx` | Recommended. Adds dynamic weather effects (rain, snow, sandstorm, etc.) to the overworld battles for extra immersion. |
-| [Battle Cinematics](https://github.com/EnterPlayerOne/Battle-Cinematics-Stadium-Camera) | `BATTLE_CINEMATICS` | Optional. Again! / extra swings re-emit `battle.move_used` |
-| [Quality of Life](https://github.com/unxpected-uxp/pokemon-gen1-recomp-mod-qol) | `quality_of_life` | Optional HUD/XP helpers (skipped while FIELD compact UI is up) |
-| Gen 3 Inspired UI | `gen3_battle_ui` | Optional; skipped during FIELD compact UI |
+| Mod | Id | Why | Working Release |
+|-----|----|-----|-----|
+| [Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod) or [Dramaless Shape](https://github.com/artyrambles/DRAMALESS_SHAPE) | `DRAMATIC_SHAPE` / `DRAMALESS_SHAPE` | Voxel overworld under FIELD. Staging is gated so a 3D arena does not cover map fights. | n/a |
+| [Wilds of Kanto](https://github.com/YoDrehDenSwagAuf/overworld-spawn-mod) | `overworld_wild_spawns` | Visible wilds plus overworld sheets FIELD can use | n/a |
+| [PokéPC Followers (Voxel Merge)](https://github.com/mfrtechconsult/PokePCFollowers) | `PokePCFollowers_VoxelMerge` | GSC-style follower / battler sheets | n/a |
+| [Followers EX](https://github.com/masterwebx/gen1recomp-followers-ex) | `FOLLOWERS_EX` | Follower control on voxel maps (needs PokéPC Followers + Wilds) | n/a |
+| [Weather FX](https://github.com/MrKrisSatan/Weather-fx) | `Weather-fx` | Recommended. Adds dynamic weather effects (rain, snow, sandstorm, etc.) to the overworld battles for extra immersion. | 4.10.0 |
+| [Battle Cinematics](https://github.com/EnterPlayerOne/Battle-Cinematics-Stadium-Camera) | `BATTLE_CINEMATICS` | Optional. Again! / extra swings re-emit `battle.move_used` | n/a |
+| [Quality of Life](https://github.com/unxpected-uxp/pokemon-gen1-recomp-mod-qol) | `quality_of_life` | Optional HUD/XP helpers (skipped while FIELD compact UI is up) | n/a |
+| Gen 3 Inspired UI | `gen3_battle_ui` | Optional; skipped during FIELD compact UI | n/a |
 
 Leave **Stadium Overworld Models** (`STADIUM_OVERWORLD_MODELS`) and **Stadium Battle FX** (`STADIUM_BATTLE_FX`) off. FIELD owns the fight; Stadium staging and FX fight that presentation.
 
@@ -190,7 +193,7 @@ remain on their normal presentation path.
 | **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
-| **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
+| **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away, then idle 1–2 tiles off instead of returning home. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
 

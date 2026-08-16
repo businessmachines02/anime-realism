@@ -5,8 +5,8 @@
 -- back one cell. Self-hits (confusion / recoil / crash) stumble in place.
 -- Two-turn vanish moves (Dig / Fly) burrow or soar out of sight on the
 -- charge turn and emerge on the release strike.
--- With CLOSE THE GAP, physicals more than a tile away close to adjacent
--- before the punch (gait from Speed, boost from Attack, capped).
+-- With CLOSE THE GAP, physicals walk to the foe before the punch; engine
+-- damage waits for that same arrival beat (gait from Speed, Attack boost, cap).
 -- Cue dedupe prevents double-steps when multiple battle
 -- events fire for the same move beat.
 
@@ -163,6 +163,177 @@ local function restoreStepSpeed(ent)
   end
 end
 
+--- Walk feet, not draw offsets / occupancy destination.
+local function walkPx(ent)
+  if not ent then
+    return nil, nil
+  end
+  local x = ent.basePx
+  local y = ent.basePy
+  if type(x) ~= "number" then
+    x = ent.px
+    y = ent.py
+  end
+  return x, y
+end
+
+--- True while occupancy has jumped ahead and the sprite is still lerping.
+function Cues.stillWalkingToPad(ent)
+  if not ent or type(ent.targetPx) ~= "number" then
+    return false
+  end
+  local x, y = walkPx(ent)
+  if type(x) ~= "number" then
+    return false
+  end
+  local dx = ent.targetPx - x
+  local dy = (ent.targetPy or 0) - (y or 0)
+  return (dx * dx + dy * dy) > 8 * 8
+end
+
+--- True when the sprite is within one tile of the foe (pixel reach).
+--- Never use targetPx: closeGap writes that to the adjacent cell immediately.
+function Cues.inMeleeReach(ent, foe)
+  if not (ent and foe) then
+    return false
+  end
+  if Cues.stillWalkingToPad(ent) then
+    return false
+  end
+  local ax, ay = walkPx(ent)
+  local fx, fy = walkPx(foe)
+  if type(ax) == "number" and type(fx) == "number" then
+    local dx = fx - ax
+    local dy = (fy or 0) - (ay or 0)
+    -- One pad tile is 16px; a little slack so the punch lunge connects.
+    return (dx * dx + dy * dy) <= 18 * 18
+  end
+  return false
+end
+
+local function fireCloseStrike(session, side, ent)
+  if not ent then
+    return
+  end
+  local pending = ent._pendingCloseStrike
+  ent._pendingCloseStrike = nil
+  ent._closeStrikeDeadline = nil
+  ent._closeStrikeWait = nil
+  ent._closeStrikeArmedAt = nil
+  local deps = session and session._deps
+  local Projectiles = deps and deps.Projectiles
+  local Audio = deps and deps.Audio
+  local battle = session and session._battle
+  if pending and Audio and type(Audio.playMove) == "function" then
+    pcall(Audio.playMove, battle, pending.moveId, side == "player")
+  end
+  if pending and Projectiles and type(Projectiles.contact) == "function" then
+    Projectiles.contact(session, side, pending)
+  end
+  local jump = (pending and pending.jump) or ent._attackJump
+  if type(ent.play) == "function" then
+    ent:play(jump and "jump" or "attack")
+  end
+  local punch = jump and 0.56 or 0.48
+  ent._returnAt = now(session) + punch
+end
+
+--- True while CLOSE THE GAP still owns the physical beat.
+function Cues.closeGapHoldActive(session)
+  if not (session and session.live) then
+    return false
+  end
+  if not Cues.closeTheGapEnabled(session) then
+    return false
+  end
+  local p, e = session.playerMon, session.enemyMon
+  return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
+end
+
+--- True while a physical closer is still walking; engine damage must wait.
+function Cues.shouldHoldEngineHit(session, ctx)
+  if not Cues.closeGapHoldActive(session) then
+    return false
+  end
+  local user = ctx and ctx.user
+  if not user then
+    return true
+  end
+  local side = user.isPlayer and "player" or "enemy"
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  return ent and ent._pendingCloseStrike and true or false
+end
+
+--- Resume engine HP / hit that waited for the close-the-gap punch.
+function Cues.flushHeldHit(session, battle)
+  if not battle then
+    return false
+  end
+  local p, e = session and session.playerMon, session and session.enemyMon
+  if (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) then
+    return false
+  end
+  local held = battle._arCloseGapDamage
+  local stashed = battle._arCloseGapApply
+  if not held and (type(stashed) ~= "table" or #stashed == 0) then
+    return false
+  end
+  battle._arCloseGapDamage = nil
+  battle._arCloseGapApply = nil
+  battle._arCloseGapResuming = true
+  local replayedRun = held and held.ctx and true or false
+  if replayedRun then
+    -- Full effect applies HP + faint. Do not also replay applyDamage.
+    local okE, registry = pcall(require, "src.battle.EffectRegistry")
+    local run = okE and registry and registry.runDamaging
+    if type(run) == "function" then
+      pcall(run, battle, held.ctx, held.record)
+    end
+  elseif type(stashed) == "table" and type(battle.applyDamage) == "function" then
+    for i = 1, #stashed do
+      local args = stashed[i]
+      if type(args) == "table" then
+        pcall(battle.applyDamage, battle, unpack(args))
+      end
+    end
+    -- applyDamage alone does not run the engine faint script.
+    local function down(b)
+      if not b then
+        return false
+      end
+      local hp = (b.mon and b.mon.hp) or b.hp
+      return type(hp) == "number" and hp <= 0
+    end
+    if type(battle.onFaint) == "function" then
+      if down(battle.player) then
+        pcall(battle.onFaint, battle, battle.player)
+      end
+      if down(battle.enemy) then
+        pcall(battle.onFaint, battle, battle.enemy)
+      end
+    end
+  end
+  battle._arCloseGapResuming = nil
+  -- Sticky FIELD diamond must not cover faint / send-out.
+  local function down(b)
+    if not b then
+      return false
+    end
+    local hp = (b.mon and b.mon.hp) or b.hp
+    local shown = b.shownHP
+    return (type(hp) == "number" and hp <= 0)
+        or (type(shown) == "number" and shown <= 0)
+  end
+  if down(battle.player) or down(battle.enemy) then
+    battle._arFieldPreferMoves = nil
+    battle._arFieldCommandHold = true
+    if battle.phase == "moveSelect" or battle.phase == "mimicSelect" then
+      battle.phase = down(battle.player) and "menu" or "messages"
+    end
+  end
+  return true
+end
+
 --- Apply a cue kind to a side. opts.category = "physical"|"special"
 function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   if not (session and session.live and session.grid) then
@@ -317,15 +488,15 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     -- Special: hold cell; still play an in-place cast anim.
     local Projectiles = session._deps and session._deps.Projectiles
     local Audio = session._deps and session._deps.Audio
-    if Audio and type(Audio.playMove) == "function" then
-      pcall(Audio.playMove, battle or session._battle, opts.moveId,
-        side == "player")
-    end
     -- Travel FX (beams, streams, Night Shade shadow, …) fly even when the
     -- Gen1 type split marks the move physical — don't contact-lunge instead.
     local travel = Projectiles and type(Projectiles.isTravelFx) == "function"
         and Projectiles.isTravelFx(opts)
     if category == "special" or travel then
+      if Audio and type(Audio.playMove) == "function" then
+        pcall(Audio.playMove, battle or session._battle, opts.moveId,
+          side == "player")
+      end
       ent._returnAt = nil
       ent._attackStepped = nil
       if Projectiles and type(Projectiles.move) == "function" then
@@ -348,61 +519,35 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
           and Grid.pathObstructed(g, ent, foe)
       local jump = obstructed == true
       ent._attackJump = jump and true or nil
-      local fromU, fromV = ent.padU, ent.padV
-      local stepped = false
+      local closed = false
       if Cues.closeTheGapEnabled(session, opts)
           and type(Grid.closeGap) == "function" then
-        stepped = Grid.closeGap(g, ent, foe) == true
+        closed = Grid.closeGap(g, ent, foe) == true
       end
+      local stepped = closed
       if not stepped then
         stepped = Grid.attackStep(g, ent, foe) == true
       end
       ent._attackStepped = stepped
-      local steps = 0
-      if stepped and fromU ~= nil then
-        steps = math.max(
-          math.abs((ent.padU or fromU) - fromU),
-          math.abs((ent.padV or fromV) - fromV))
-      end
-      local delayStrike = stepped and steps > 1
-      if stepped then
+      -- CLOSE THE GAP owns the physical beat: the announce cue only starts
+      -- the walk. Punch + engine damage wait until the sprite is in reach.
+      local delayStrike = Cues.closeTheGapEnabled(session, opts)
+          and not opts.releaseStrike
+      if delayStrike then
         local speed = Cues.closeGapSpeed(ent, battle or session._battle, side)
         ent._savedStepSpeed = ent.stepSpeed
         ent.stepSpeed = speed
-        local distPx = 16 * math.max(1, steps)
-        if type(ent.basePx) == "number" and type(ent.targetPx) == "number" then
-          local dx = ent.targetPx - ent.basePx
-          local dy = (ent.targetPy or 0) - (ent.basePy or 0)
-          distPx = math.max(distPx, math.sqrt(dx * dx + dy * dy))
-        end
-        local travel = distPx / math.max(12, speed)
-        if travel > 1 then
-          travel = 1
-        end
-        local punch = jump and 0.56 or 0.48
-        if delayStrike then
-          ent._pendingCloseStrike = {
-            moveType = opts.moveType,
-            moveId = opts.moveId,
-            jump = jump,
-          }
-          ent._closeStrikeAt = now(session) + travel
-          ent._returnAt = now(session) + travel + punch
-          if jump and type(ent.play) == "function" then
-            ent:play("jump")
-          end
-        else
-          if Projectiles and type(Projectiles.contact) == "function" then
-            Projectiles.contact(session, side, {
-              moveType = opts.moveType,
-              moveId = opts.moveId,
-            })
-          end
-          ent._returnAt = now(session) + punch
-          if type(ent.play) == "function" then
-            ent:play(jump and "jump" or "attack")
-          end
-        end
+        ent._pendingCloseStrike = {
+          moveType = opts.moveType,
+          moveId = opts.moveId,
+          jump = jump,
+        }
+        -- Same present tick still runs tickReturns after pumpCurrent / react.
+        ent._closeStrikeWait = true
+        ent._closeStrikeArmedAt = now(session)
+        ent._returnAt = nil
+        -- After the punch, withdraw 1–2 tiles from the foe instead of home.
+        ent._withdrawAfterStrike = true
       else
         if Projectiles and type(Projectiles.contact) == "function" then
           Projectiles.contact(session, side, {
@@ -410,7 +555,15 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
             moveId = opts.moveId,
           })
         end
-        ent._returnAt = nil
+        if Audio and type(Audio.playMove) == "function" then
+          pcall(Audio.playMove, battle or session._battle, opts.moveId,
+            side == "player")
+        end
+        if stepped then
+          ent._returnAt = now(session) + (jump and 0.56 or 0.48)
+        else
+          ent._returnAt = nil
+        end
         if type(ent.play) == "function" then
           ent:play(jump and "jump" or "attack")
         end
@@ -536,7 +689,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     return true
   end
 
-  if type(ent.play) == "function" then
+  if type(ent.play) == "function" and not ent._pendingCloseStrike then
     ent:play("attack")
   end
   return true
@@ -864,28 +1017,36 @@ function Cues.tickReturns(session, Grid)
   local t = now(session)
   for _, side in ipairs({ "player", "enemy" }) do
     local ent = (side == "player") and session.playerMon or session.enemyMon
-    if ent and ent._closeStrikeAt and t >= ent._closeStrikeAt then
-      ent._closeStrikeAt = nil
-      local pending = ent._pendingCloseStrike
-      ent._pendingCloseStrike = nil
-      local Projectiles = session._deps and session._deps.Projectiles
-      if pending and Projectiles and type(Projectiles.contact) == "function" then
-        Projectiles.contact(session, side, pending)
-      end
-      if type(ent.play) == "function" then
-        local jump = (pending and pending.jump) or ent._attackJump
-        if jump then
-          if ent.anim ~= "jump" then
-            ent:play("jump")
-          end
-        else
-          ent:play("attack")
+    if ent and ent._pendingCloseStrike then
+      local foe = foeOf(session, side)
+      if foe and Grid.padDistance and Grid.padDistance(session.grid, ent, foe) > 1 then
+        if type(Grid.closeGap) == "function" then
+          Grid.closeGap(session.grid, ent, foe)
         end
       end
+      if ent._closeStrikeWait then
+        -- Cue just armed this tick (HUD confirm / announce). Walk first.
+        ent._closeStrikeWait = nil
+      elseif not Cues.stillWalkingToPad(ent) and Cues.inMeleeReach(ent, foe) then
+        fireCloseStrike(session, side, ent)
+      elseif ent._closeStrikeArmedAt
+          and (t - ent._closeStrikeArmedAt) > 2.8 then
+        fireCloseStrike(session, side, ent)
+      end
     end
-    if ent and ent._returnAt and t >= ent._returnAt then
+    if ent and ent._pendingCloseStrike then
+      -- Still closing; do not walk home yet.
+    elseif ent and ent._returnAt and t >= ent._returnAt then
       ent._returnAt = nil
-      Grid.returnHome(session.grid, ent)
+      local foe = foeOf(session, side)
+      if ent._withdrawAfterStrike then
+        ent._withdrawAfterStrike = nil
+        if foe and type(Grid.withdrawFromFoe) == "function" then
+          Grid.withdrawFromFoe(session.grid, ent, foe)
+        end
+      else
+        Grid.returnHome(session.grid, ent)
+      end
       restoreStepSpeed(ent)
     end
     if ent and ent._releaseAt and t >= ent._releaseAt then
