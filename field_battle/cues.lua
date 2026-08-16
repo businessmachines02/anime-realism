@@ -321,6 +321,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       end
       return true
     end
+    if Projectiles and type(Projectiles.lightHit) == "function" then
+      Projectiles.lightHit(session, side, opts)
+    end
     local cat = category or session._lastAttackCategory or "physical"
     -- Both can shove; physical more often / more reliably.
     local pushChance = (cat == "special") and 0.45 or 0.78

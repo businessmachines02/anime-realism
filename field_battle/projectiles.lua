@@ -107,6 +107,18 @@ local MOVE_FX = {
   ACID = { style = "stream", glitz = "blob" },
   SMOG = { style = "area", glitz = "blob", radius = 16 },
   TOXIC = { style = "status", glitz = "blob", duration = 0.55 },
+  SUPERSONIC = {
+    style = "sonic",
+    glitz = "ring",
+    duration = 0.62,
+    color = { 0.70, 0.88, 1.00 },
+  },
+  CONFUSE_RAY = {
+    style = "ray",
+    glitz = "confuse",
+    duration = 0.48,
+    color = { 0.72, 0.32, 0.98 },
+  },
   EARTHQUAKE = { style = "area", glitz = "quake", radius = 22, duration = 0.62 },
   FISSURE = { style = "area", glitz = "quake", radius = 18 },
   ROCK_SLIDE = { style = "area", glitz = "rock", radius = 20 },
@@ -152,6 +164,56 @@ local MOVE_FX = {
   MEGA_KICK = { style = "contact", glitz = "impact" },
   QUICK_ATTACK = { style = "contact", glitz = "dash" },
   EXTREMESPEED = { style = "contact", glitz = "dash" },
+  -- Weak / early physicals: still get a readable contact signature.
+  POUND = { style = "contact", glitz = "slap" },
+  SCRATCH = { style = "contact", glitz = "slash" },
+  DOUBLE_SLAP = { style = "contact", glitz = "slap" },
+  DOUBLESLAP = { style = "contact", glitz = "slap" },
+  COMET_PUNCH = { style = "contact", glitz = "punch" },
+  KARATE_CHOP = { style = "contact", glitz = "slash" },
+  DOUBLE_KICK = { style = "contact", glitz = "kick" },
+  ROLLING_KICK = { style = "contact", glitz = "kick" },
+  JUMP_KICK = { style = "contact", glitz = "kick" },
+  HI_JUMP_KICK = { style = "contact", glitz = "kick" },
+  HIGH_JUMP_KICK = { style = "contact", glitz = "kick" },
+  LOW_KICK = { style = "contact", glitz = "kick" },
+  STOMP = { style = "contact", glitz = "impact" },
+  HEADBUTT = { style = "contact", glitz = "impact" },
+  WRAP = { style = "contact", glitz = "wrap" },
+  BIND = { style = "contact", glitz = "wrap" },
+  CONSTRICT = { style = "contact", glitz = "wrap" },
+  POISON_STING = { style = "contact", glitz = "sting" },
+  TWINEEDLE = { style = "contact", glitz = "sting" },
+  PIN_MISSILE = { style = "contact", glitz = "sting" },
+  SPIKE_CANNON = { style = "contact", glitz = "pierce" },
+  LEECH_LIFE = { style = "contact", glitz = "bite" },
+  PAY_DAY = { style = "contact", glitz = "coin" },
+  RAGE = { style = "contact", glitz = "impact" },
+  SUPER_FANG = { style = "contact", glitz = "bite" },
+  WING_ATTACK = { style = "contact", glitz = "slash" },
+  GUST = { style = "contact", glitz = "dash" },
+  BARRAGE = { style = "contact", glitz = "impact" },
+  BONE_CLUB = { style = "contact", glitz = "impact" },
+  BONEMERANG = { style = "orb", glitz = "rock", arc = 14 },
+  VICEGRIP = { style = "contact", glitz = "pinch" },
+  VICE_GRIP = { style = "contact", glitz = "pinch" },
+  VISE_GRIP = { style = "contact", glitz = "pinch" },
+  CLAMP = { style = "contact", glitz = "pinch" },
+  CRABHAMMER = { style = "contact", glitz = "impact" },
+  WATERFALL = { style = "stream", glitz = "bubble" },
+  SEISMIC_TOSS = { style = "contact", glitz = "impact" },
+  FIRE_PUNCH = { style = "contact", glitz = "flame" },
+  ICE_PUNCH = { style = "contact", glitz = "frost" },
+  THUNDERPUNCH = { style = "contact", glitz = "bolt" },
+  THUNDER_PUNCH = { style = "contact", glitz = "bolt" },
+  DIZZY_PUNCH = { style = "contact", glitz = "punch" },
+  HYPER_FANG = { style = "contact", glitz = "bite" },
+  THRASH = { style = "contact", glitz = "impact" },
+  STRUGGLE = { style = "contact", glitz = "impact" },
+  SLAM = { style = "contact", glitz = "impact" },
+  SKULL_BASH = { style = "contact", glitz = "impact" },
+  COUNTER = { style = "contact", glitz = "impact" },
+  SUBMISSION = { style = "contact", glitz = "impact" },
 }
 
 local TYPE_STYLE = {
@@ -660,6 +722,8 @@ local TRAVEL_STYLES = {
   surf = true,
   razor = true,
   swift = true,
+  sonic = true,
+  ray = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -1013,6 +1077,141 @@ local function drawSeedPlant(g, x, y, ox, oy, t, age, c)
         y + 3 + math.sin(a) * dist * 0.5,
         1.2 + (1 - plantT) * 0.8)
     end
+  end
+end
+
+--- Supersonic: expanding sound rings travel caster → foe, then ring the head.
+local function drawSonicWaves(g, x, y, ox, oy, t, age, c)
+  local fade = 1
+  if t > 0.78 then
+    fade = 1 - (t - 0.78) / 0.22
+  end
+  local travelT = math.min(1, t / 0.55)
+  local landT = math.max(0, (t - 0.48) / 0.52)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+  end
+  local ang = math.atan2(fy, fx)
+  -- Traveling ")))" arcs along the path.
+  for i = 1, 5 do
+    local u = travelT - (i - 1) * 0.12
+    if u > 0.02 and u < 1.05 then
+      local along = math.min(1, u)
+      local px = ox + dx * along
+      local py = oy + dy * along
+      local open = 3.2 + i * 1.4 + math.sin((age or 0) * 10 + i) * 0.6
+      local a = (0.75 - i * 0.1) * fade * (1 - math.max(0, u - 0.85) / 0.2)
+      g.setColor(c[1], c[2], c[3], a * 0.45)
+      g.setLineWidth(2.4)
+      if g.arc then
+        g.arc("line", px, py, open, ang - 1.05, ang + 1.05)
+      else
+        g.circle("line", px, py, open)
+      end
+      g.setColor(1, 1, 1, a * 0.55)
+      g.setLineWidth(1)
+      if g.arc then
+        g.arc("line", px, py, open * 0.72, ang - 0.85, ang + 0.85)
+      end
+    end
+  end
+  -- Rings around the target once the wave arrives.
+  if landT > 0 then
+    for i = 1, 3 do
+      local r = 4 + landT * (7 + i * 3) + math.sin((age or 0) * 8 + i) * 0.8
+      g.setColor(c[1], c[2], c[3], (0.7 - i * 0.15) * fade * (1 - landT * 0.35))
+      g.setLineWidth(1.6)
+      g.ellipse("line", x, y - 2, r, r * 0.55)
+    end
+    g.setColor(1, 1, 1, 0.45 * fade * (1 - landT))
+    g.circle("fill", x, y - 3, 1.6)
+  end
+end
+
+--- Confuse Ray: short purple smog wad that drifts caster → foe.
+local function drawConfuseRay(g, x, y, ox, oy, t, age, c)
+  local fade = 1
+  if t > 0.72 then
+    fade = 1 - (t - 0.72) / 0.28
+  end
+  local travelT = math.min(1, t / 0.38)
+  local landT = math.max(0, (t - 0.32) / 0.68)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local cr, cg, cb = c[1] or 0.72, c[2] or 0.32, c[3] or 0.98
+  -- Pale glow wake behind the wad.
+  if travelT > 0.05 then
+    local wake = 0.46
+    local segs = 9
+    local prevX, prevY
+    for i = 0, segs do
+      local u = travelT - (i / segs) * wake * travelT
+      if u > 0.01 then
+        local wobble = math.sin(u * math.pi * 2.2 + (age or 0) * 8) * 1.15
+        local px = ox + dx * u + nx * wobble
+        local py = oy + dy * u + ny * wobble * 0.4
+            - math.sin(u * math.pi) * 1.2
+        local along = 1 - i / segs
+        local a = (0.16 + 0.42 * along) * fade * (1 - landT * 0.55)
+        local r = 1.1 + along * 2.6
+        g.setColor(0.82, 0.58, 1.00, a * 0.38)
+        g.circle("fill", px, py, r + 2.4)
+        g.setColor(0.96, 0.84, 1.00, a * 0.85)
+        g.circle("fill", px, py, r * 0.5)
+        if prevX then
+          g.setColor(0.88, 0.68, 1.00, a * 0.55)
+          g.setLineWidth(1.4 + along * 1.8)
+          g.line(prevX, prevY, px, py)
+        end
+        prevX, prevY = px, py
+      end
+    end
+  end
+  -- Compact wad: only a short trail behind the leading puff.
+  local trail = 0.28
+  local n = 6
+  for i = 1, n do
+    local u = travelT - (i - 1) / math.max(1, n - 1) * trail * travelT
+    if u > 0.02 then
+      local billow = math.sin((age or 0) * 5.4 + i * 1.6) * (2.8 + i * 0.35)
+      local px = ox + dx * u + nx * billow
+      local py = oy + dy * u + ny * billow * 0.45
+          - math.sin(u * math.pi) * 1.2 - (i - 1) * 0.35
+      local r = (8.2 - i * 0.55) + math.sin((age or 0) * 7 + i) * 1.6
+      local a = (0.28 - i * 0.028) * fade
+      g.setColor(cr * 0.5, cg * 0.35, cb * 0.65, a * 0.5)
+      g.circle("fill", px, py + 0.6, r + 4)
+      g.setColor(cr, cg, cb, a)
+      g.ellipse("fill", px, py, r, r * 0.7)
+      g.setColor(math.min(1, cr + 0.1), math.min(1, cg + 0.06), 1, a * 0.32)
+      g.circle("fill", px - 1.1, py - 1.4, r * 0.42)
+    end
+  end
+  -- Loose wisps around the wad.
+  for i = 1, 5 do
+    local u = travelT - 0.06 - (i % 3) * 0.05
+    if u > 0.02 then
+      local a = (age or 0) * 4.4 + i * 1.35
+      local px = ox + dx * u + math.cos(a) * (3.2 + i * 0.8)
+      local py = oy + dy * u + math.sin(a) * 2.4 - 1
+      g.setColor(cr, cg, cb, 0.16 * fade)
+      g.circle("fill", px, py, 3.4 + (i % 2) * 1.2)
+    end
+  end
+  if landT > 0 then
+    local bloom = 6 + landT * 7
+    g.setColor(cr, cg, cb, 0.22 * fade * (1 - landT * 0.45))
+    g.ellipse("fill", x, y + 1, bloom, bloom * 0.62)
+    drawPsyAura(g, x, y, x, y, math.min(1, 0.4 + landT * 0.6), age, c, {
+      confuse = true,
+    })
   end
 end
 
@@ -1492,6 +1691,83 @@ local function drawContact(g, p, x, y, t)
     return
   end
 
+  if glitz == "punch" then
+    local r = 3 + t * 6
+    g.setColor(c[1], c[2], c[3], 0.7 * fade)
+    g.circle("line", x, y, r)
+    g.setColor(1, 1, 1, 0.9 * fade)
+    g.circle("fill", x - 1, y - 1, 2.2)
+    g.setColor(c[1], c[2], c[3], fade)
+    g.setLineWidth(2)
+    g.line(x - 6, y + 4, x + 2, y - 5)
+    return
+  end
+
+  if glitz == "kick" then
+    g.setColor(c[1], c[2], c[3], fade)
+    g.setLineWidth(2.4)
+    g.line(x - 7, y + 6, x + 7, y - 5)
+    g.setLineWidth(1.4)
+    g.line(x - 3, y + 7, x + 8, y - 1)
+    g.setColor(1, 1, 1, 0.8 * fade)
+    g.circle("fill", x + 6, y - 4, 1.6)
+    return
+  end
+
+  if glitz == "slap" then
+    local reach = 4 + t * 7
+    g.setColor(c[1], c[2], c[3], fade)
+    g.setLineWidth(2.2)
+    g.line(x - reach, y - 1, x + reach, y + 2)
+    g.setColor(1, 1, 1, 0.75 * fade)
+    g.circle("fill", x + reach * 0.4, y, 1.8)
+    return
+  end
+
+  if glitz == "sting" then
+    g.setColor(c[1], c[2], c[3], fade)
+    g.setLineWidth(1.6)
+    g.line(x - 7, y + 4, x + 6, y - 5)
+    g.polygon("fill", x + 5, y - 6, x + 9, y - 3, x + 4, y - 2)
+    g.setColor(1, 1, 1, 0.8 * fade)
+    g.circle("fill", x + 6, y - 4, 1.1)
+    return
+  end
+
+  if glitz == "wrap" then
+    local r = 3 + t * 7
+    g.setColor(c[1], c[2], c[3], 0.8 * fade)
+    g.setLineWidth(1.8)
+    g.arc("line", x, y, r, t * 2, t * 2 + 4.2)
+    g.arc("line", x, y, r * 0.65, t * 2 + 1.2, t * 2 + 4.8)
+    return
+  end
+
+  if glitz == "pinch" then
+    local open = 3 + (1 - t) * 5
+    g.setColor(c[1], c[2], c[3], fade)
+    g.setLineWidth(2)
+    g.line(x - open, y - 5, x, y + 3)
+    g.line(x + open, y - 5, x, y + 3)
+    g.setColor(1, 1, 1, 0.75 * fade)
+    g.circle("fill", x, y + 2, 1.4)
+    return
+  end
+
+  if glitz == "coin" then
+    for i = 1, 4 do
+      local a = i * 1.7 + t * 3
+      local dist = 3 + t * 8
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.7 - t * 3
+      g.setColor(1.00, 0.84, 0.22, fade)
+      g.rectangle("fill", px - 1.4, py - 1.4, 2.8, 2.8)
+      g.setColor(1, 1, 0.75, 0.8 * fade)
+      g.rectangle("fill", px - 0.6, py - 0.6, 1.2, 1.2)
+    end
+    return
+  end
+
   if glitz == "flame" or glitz == "bubble" or glitz == "blob"
       or glitz == "frost" or glitz == "bolt" or glitz == "ghost"
       or glitz == "leaf" or glitz == "psy" then
@@ -1510,6 +1786,25 @@ local function drawContact(g, p, x, y, t)
   g.setLineWidth(2)
   g.line(x - reach, y + reach, x + reach, y - reach)
   g.line(x - reach * 0.6, y - reach, x + reach * 0.6, y + reach)
+end
+
+-- Compact spark burst on weak hits (contact flash is already gone by then).
+local function drawLightHit(g, p, x, y, t)
+  local c = p.color or { 0.92, 0.92, 1.00 }
+  local fade = 1 - t
+  g.setColor(1, 1, 1, 0.75 * fade)
+  g.circle("fill", x, y, 1.6 * (1 - t * 0.4))
+  for i = 1, 5 do
+    local a = i * 1.2566 + t * 2.4
+    local dist = 2.2 + t * 8
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.72 - t * 2
+    g.setColor(c[1], c[2], c[3], 0.85 * fade)
+    g.circle("fill", px, py, 1.3)
+    g.setColor(1, 1, 1, 0.55 * fade)
+    g.circle("fill", px - 0.3, py - 0.3, 0.55)
+  end
+  drawContact(g, p, x, y, math.min(1, t * 1.15))
 end
 
 local function drawEffect(g, p, x, y, ox, oy)
@@ -1714,6 +2009,10 @@ local function drawEffect(g, p, x, y, ox, oy)
     })
   elseif p.style == "seed" then
     drawSeedPlant(g, x, y, ox, oy, t, p.age, c)
+  elseif p.style == "sonic" then
+    drawSonicWaves(g, x, y, ox, oy, t, p.age, c)
+  elseif p.style == "ray" then
+    drawConfuseRay(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "stream" then
     -- Dense particle stream from caster origin → traveling tip.
     local age = p.age or 0
@@ -1821,6 +2120,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("line", x, y, 6 + t * 4)
   elseif p.style == "contact" then
     drawContact(g, p, x, y, t)
+  elseif p.style == "light_hit" then
+    drawLightHit(g, p, x, y, t)
   elseif p.style == "bonk" then
     -- Self-hit: impact ring plus popping stars.
     local r = 3 + math.sin(t * math.pi) * 8
@@ -2702,6 +3003,29 @@ function Projectiles.contact(session, side, opts)
   })
 end
 
+function Projectiles.lightHit(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local fx = resolveFx(opts)
+  local glitz = fx.glitz
+  if not glitz or (fx.style ~= "contact" and fx.style ~= "orb") then
+    glitz = TYPE_CONTACT[fx.moveType] or "slash"
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "light_hit",
+    glitz = glitz,
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.32,
+    arc = 0,
+    color = fx.color or TYPE_COLORS[fx.moveType] or TYPE_COLORS.NORMAL,
+  })
+end
+
 function Projectiles.status(session, side, opts)
   opts = opts or {}
   local fx = resolveFx(opts)
@@ -2714,19 +3038,23 @@ function Projectiles.status(session, side, opts)
   local ex, ey = center(session, targetEnt)
   if not ex then return nil end
 
-  if fx.style == "seed" then
+  if fx.style == "seed" or fx.style == "sonic" or fx.style == "ray" then
     local sx, sy = center(session, fromEnt)
     if not sx then
       sx, sy = ex, ey
     end
+    local color = fx.color
+    if not color then
+      color = (fx.style == "seed") and TYPE_COLORS.GRASS or TYPE_COLORS[fx.moveType]
+    end
     return spawn(session, {
       kind = "effect",
-      style = "seed",
-      glitz = fx.glitz or "leaf",
+      style = fx.style,
+      glitz = fx.glitz or (fx.style == "seed" and "leaf" or nil),
       sx = sx, sy = sy, ex = ex, ey = ey,
-      duration = fx.duration or 0.58,
-      arc = 8,
-      color = fx.color or TYPE_COLORS.GRASS,
+      duration = fx.duration or (fx.style == "seed" and 0.58 or 0.62),
+      arc = (fx.style == "seed") and 8 or 0,
+      color = color,
       pinTip = foeTarget and true or nil,
       followSide = foeTarget and ((side == "player") and "enemy" or "player") or nil,
       onDone = opts.onDone,
