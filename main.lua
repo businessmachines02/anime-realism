@@ -261,15 +261,6 @@ return function(mod)
             "The foe's POKéMON\nlooks tired...",
         }
 
-        -- Short party-list lines (fit the old HP row).
-        S.PARTY_HINTS = {
-            "WK-HEAL!",
-            "TRD-HEAL!",
-            "WK!",
-            "TRD!",
-            "HEAL!",
-        }
-
         local function pickLine(lines)
             local n = #lines
             if n == 0 then
@@ -279,29 +270,52 @@ return function(mod)
             return lines[r(n)]
         end
 
-        -- Stable per-mon hint so the line does not flicker every frame.
-        local partyHintFor = setmetatable({}, { __mode = "k" })
+        -- Party HP row: current HP / max HP (mon.stats.hp is fully-healed total).
+        -- Same bands as field health chips (red ≤20%, yellow ≤50%).
+        local TIRED_HP_RATIO = 0.5
+
+        local function partyMonHealth(mon)
+            if type(mon) ~= "table" then
+                return nil
+            end
+            local current = tonumber(mon.hp)
+            local maxHp = mon.stats and tonumber(mon.stats.hp)
+            if not current or not maxHp or maxHp <= 0 then
+                return nil
+            end
+            return current, maxHp, current / maxHp
+        end
+
+        local function partyHasStatus(mon)
+            local st = mon and mon.status
+            return type(st) == "string" and st ~= ""
+        end
 
         local function partyRowHint(mon)
-            if not mon or not mon.stats or not mon.stats.hp or mon.stats.hp <= 0 then
+            local current, maxHp, ratio = partyMonHealth(mon)
+            if not maxHp then
                 return nil
             end
-            local hp = mon.hp or 0
-            if hp <= 0 then
+            if current <= 0 then
                 return "FAINTED-HEAL!"
             end
-            local ratio = hp / mon.stats.hp
-            local needs = (ratio <= lowHpRatio()) or mon.status or (ratio < 1)
-            if not needs then
-                partyHintFor[mon] = nil
-                return nil
+            local hasStatus = partyHasStatus(mon)
+            local band
+            if ratio <= 0.20 then
+                band = "WK"
+            elseif ratio <= TIRED_HP_RATIO then
+                band = "TRD"
             end
-            local hint = partyHintFor[mon]
-            if not hint then
-                hint = pickLine(S.PARTY_HINTS)
-                partyHintFor[mon] = hint
+            if band and hasStatus then
+                return band .. "-HEAL!"
             end
-            return hint
+            if band then
+                return band .. "!"
+            end
+            if hasStatus then
+                return "HEAL!"
+            end
+            return nil
         end
 
         -- Per-battle: warn once per side until healed above the threshold or switched.
@@ -9829,9 +9843,18 @@ return function(mod)
                                 break
                             end
                         end
-                        local wrapped = function(x, y, w, mon, ...)
+                        local wrapped = function(...)
+                            local mon
+                            for i = 1, select("#", ...) do
+                                local v = select(i, ...)
+                                if type(v) == "table" and v.stats and v.hp ~= nil then
+                                    mon = v
+                                    break
+                                end
+                            end
                             local hint = partyRowHint(mon)
                             if hint and partyTextFn then
+                                local x, y = ...
                                 partyTextFn(hint, x, y - 2, 3, { 0.46, 0.14, 0.12, 1 })
                                 return
                             end
