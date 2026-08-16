@@ -1271,6 +1271,7 @@ return function(mod)
             end
         end)
 
+
         -- Reactive Defense damage modifiers + legacy counter +25%.
         mod.hooks:wrap("battle.damage", function(next, ctx)
             local dmg, info = next(ctx)
@@ -3778,7 +3779,6 @@ return function(mod)
         end
 
         maybeEnqueueSendBanter = function(battle, originalText)
-            print("[maybeEnqueueSendBanter] originalText: " .. originalText .. " for battle: " .. tostring(battle))
             if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
                 return
             end
@@ -3811,25 +3811,13 @@ return function(mod)
                     return
                 end
             end
-            local persona = trainerPersona(battle)
-            local pack = S.BANTER[persona] or S.BANTER.generic
-            local speaker = banterSpeaker(battle)
-            local line
-            if aboutPlayer then
-                local mon = playerMonName(battle)
-                line = pickFormatted(pack.player, speaker, mon)
-                    or (speaker .. ":\nA " .. mon .. ", huh?!")
-            else
-                local mon = enemyMonName(battle)
-                line = pickFormatted(pack.enemy, speaker, mon)
-                    or (speaker .. ":\nGo, " .. mon .. "!")
-            end
-            line = clampBanterText(line)
-            -- Don't splice the line between "Go!" and the POOF — wait until the
-            -- mon is actually on the field (sendingOut / POOF finished).
+            -- Do not bake the mon name here. The engine's "Go!" names party[1]
+            -- (often the overworld follower). choose_lead and other send-out
+            -- mods rebind battle.player after that line is queued.
             battle._arPendingSendBanter = {
-                line = line,
                 side = aboutPlayer and "player" or "enemy",
+                persona = trainerPersona(battle),
+                speaker = banterSpeaker(battle),
             }
             battle._arSendBanterArmFrames = 8
             if aboutPlayer and battle.sendingOut then
@@ -4147,6 +4135,76 @@ return function(mod)
             if not pending then
                 return
             end
+
+            local function pickerOpen()
+                local stack = battle.game and battle.game.stack
+                if not (stack and type(stack.top) == "function") then
+                    return false
+                end
+                local top = stack:top()
+                if not top or top == battle then
+                    return false
+                end
+                if top.battle ~= nil and top.battle ~= battle then
+                    return false
+                end
+                if top.forceSwitch then
+                    return true
+                end
+                local id = tostring(top.id or top.screenId or "")
+                if id == "PartyMenu" or id == "Gen2PartyMenu" then
+                    return top.forceSwitch == true or top.battle == battle
+                end
+                return false
+            end
+
+            local function queueStillHasSendOut()
+                local function match(text)
+                    if pending.side == "player" then
+                        return isPlayerSendOutText(text)
+                    end
+                    return isEnemySendOutText(text)
+                end
+                if battle.current and match(battle.current.text) then
+                    return true
+                end
+                local q = battle.queue
+                if type(q) ~= "table" then
+                    return false
+                end
+                for i = 1, #q do
+                    if q[i] and match(q[i].text) then
+                        return true
+                    end
+                end
+                return false
+            end
+
+            local function composeLine()
+                local persona = pending.persona or trainerPersona(battle)
+                local pack = S.BANTER[persona] or S.BANTER.generic
+                local speaker = pending.speaker or banterSpeaker(battle)
+                local line
+                if pending.side == "enemy" then
+                    local mon = enemyMonName(battle)
+                    line = pickFormatted(pack.enemy, speaker, mon)
+                        or (speaker .. ":\nGo, " .. mon .. "!")
+                else
+                    local mon = playerMonName(battle)
+                    line = pickFormatted(pack.player, speaker, mon)
+                        or (speaker .. ":\nA " .. mon .. ", huh?!")
+                end
+                return clampBanterText(line)
+            end
+
+            -- choose_lead opens PartyMenu before the real send. Keep waiting so
+            -- we name the mon that actually comes out, not party[1].
+            if pickerOpen() then
+                return
+            end
+            if queueStillHasSendOut() then
+                return
+            end
             local sending = (pending.side == "player" and battle.sendingOut)
                 or (pending.side == "enemy" and battle.enemySendingOut)
             if sending then
@@ -4163,7 +4221,8 @@ return function(mod)
                 battle._arSendBanterArmFrames = battle._arSendBanterArmFrames - 1
                 return
             end
-            -- Ready: send-out finished and POOF is gone.
+            -- Ready: send-out finished and POOF is gone. Name the live battler.
+            local line = composeLine()
             battle._arPendingSendBanter = nil
             battle._arSendBanterSawOut = nil
             battle._arSendBanterArmFrames = nil
@@ -4175,15 +4234,25 @@ return function(mod)
                 battle._arSendBanterCooldown = 120
                 return
             end
-            local item = { text = pending.line, arBanter = true }
-            if not markBubbleWait(item, "foe", true, battle) then
+            local item = { text = line, arBanter = true }
+            local intro = not battle._arSendBanterDidIntro
+            if intro then
+                -- Intro impression: wait for A. auto=false so FIELD toasts
+                -- do not re-arm a ~0.5s auto-advance.
+                if opt("speech_bubbles") then
+                    item.bubble = "foe"
+                end
+                item.auto = false
+                item.autoDelay = nil
+                battle._arSendBanterDidIntro = true
+            elseif not markBubbleWait(item, "foe", true, battle) then
                 item.auto = true
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, 1, item)
             -- Cover the foe-send + player-Go! SHIFT / intro wave.
             battle._arSendBanterCooldown = 120
-            BanterCameo.start(battle, pending.line)
+            BanterCameo.start(battle, line)
         end
 
         maybeEnqueueIdleBanter = function(battle)
@@ -4239,7 +4308,6 @@ return function(mod)
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, item)
-            print("[maybeEnqueueIdleBanter] line: " .. line .. " for battle: " .. tostring(battle))
             BanterCameo.start(battle, line)
         end
 
