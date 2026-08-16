@@ -1,3 +1,8 @@
+# This update to the workflow does the following:
+# - Adds a new step to generate SHA256 checksums for the ZIP artifact, placing them in a file called SHA256SUMS.
+# - Attaches the SHA256SUMS file to the GitHub release alongside the ZIP file.
+# - Includes a section in the release notes that displays the SHA256SUMS content, making it easy for users to verify downloads.
+
 name: Release
 
 on:
@@ -75,6 +80,17 @@ jobs:
       - name: Build release ZIP
         run: chmod +x ./build.sh && ./build.sh
 
+      - name: Generate SHA256SUMS for ZIP
+        id: shasum
+        env:
+          ZIP_NAME: ${{ steps.ver.outputs.zip }}
+        run: |
+          set -euo pipefail
+          sha256sum "$ZIP_NAME" > SHA256SUMS
+          cat SHA256SUMS
+        # Output is "SHA256SUMS" file containing checksums, e.g.:
+        # ef710...  anime_realism-1.2.3.zip
+
       - name: Validate ZIP structure
         env:
           ZIP_NAME: ${{ steps.ver.outputs.zip }}
@@ -106,12 +122,28 @@ jobs:
           print(f"  files: {len(names)}")
           PY
 
+      - name: Prepare SHA256SUMS for release notes
+        id: sha_note
+        run: |
+          echo "contents<<EOF" >> $GITHUB_OUTPUT
+          cat SHA256SUMS >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Anime Realism ${{ steps.ver.outputs.version }}
-          body: ${{ steps.ver.outputs.notes }}
+          body: |
+            ${{ steps.ver.outputs.notes }}
+
+            ## SHA256SUMS
+
+            ```txt
+            ${{ steps.sha_note.outputs.contents }}
+            ```
           generate_release_notes: ${{ steps.ver.outputs.notes == '' }}
-          files: ${{ steps.ver.outputs.zip }}
+          files: |
+            ${{ steps.ver.outputs.zip }}
+            SHA256SUMS
           fail_on_unmatched_files: true

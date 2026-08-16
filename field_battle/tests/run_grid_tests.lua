@@ -96,6 +96,15 @@ function tests.faint_drops_sticky_move_diamond()
   truthy(Hooks.playerMustSwitch({
     player = { shownHP = 0, mon = { hp = 4 } },
   }), "empty shown HP forces a switch")
+  truthy(not Hooks.foeIsDown({
+    enemy = { mon = { hp = 12 } },
+  }), "healthy foe does not drop the diamond")
+  truthy(Hooks.foeIsDown({
+    enemy = { mon = { hp = 0 } },
+  }), "KO'd foe drops the diamond")
+  truthy(Hooks.foeIsDown({
+    enemy = { shownHP = 0, mon = { hp = 8 } },
+  }), "empty foe bar drops the diamond")
 end
 
 function tests.supported_battle_gate()
@@ -925,6 +934,25 @@ function tests.occupancy_and_movement()
   eq(p.padU, homeU, "returned u")
   eq(p.padV, homeV, "returned v")
 
+  -- Close-the-gap: from farther than one tile, occupy a cell adjacent to the foe.
+  -- Foe is already one cell past home from the attack-step setup (distance 2).
+  truthy(Grid.padDistance(grid, p, e) > 1, "foe is more than a tile away")
+  local originU, originV = p.padU, p.padV
+  truthy(Grid.closeGap(grid, p, e), "close gap toward the foe")
+  eq(Grid.padDistance(grid, p, e), 1, "lands adjacent, not on the foe")
+  eq(p._returnU, nil, "close-gap does not stash the opening cell")
+  truthy(Grid.withdrawFromFoe(grid, p, e), "withdraw after close-gap")
+  local after = Grid.padDistance(grid, p, e)
+  truthy(after >= 1 and after <= 2, "withdraw stays one to two tiles from the foe")
+  eq(p._meleeAnchor, true, "withdraw re-anchors idle roam to the foe")
+  eq(p.homePadU, p.padU, "new home is the withdraw cell")
+  truthy(p.padU ~= originU or p.padV ~= originV or after == 2,
+    "does not snap back to the far opening cell")
+  p._meleeAnchor = nil
+  truthy(Grid.setPad(grid, p, originU, originV), "reset player for adjacent no-op")
+  truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "restore adjacent homes")
+  truthy(not Grid.closeGap(grid, p, e), "already-adjacent close-gap is a no-op")
+
   Grid.clear(grid)
   eq(next(grid.occ), nil, "clear occupancy")
 end
@@ -1046,10 +1074,128 @@ function tests.physical_jumps_cover()
   }
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
     { category = "physical", moveType = "NORMAL" }), "physical over cover")
-  eq(player.lastAnim, "jump", "attacker jumps when path is blocked")
+  eq(player.padU, 6, "close-the-gap lands adjacent to the foe")
+  eq(player.lastAnim, nil, "jump waits until the sprite is in reach")
+  eq(#(session.projectiles or {}), 0, "contact waits until the close lands")
+  truthy(not Cues.inMeleeReach(player, enemy), "still closing across the pad")
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, nil, "same tick as the cue does not punch")
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "jump", "jump plays once within one tile")
   local fx = session.projectiles and session.projectiles[1]
   truthy(fx and fx.style == "contact", "physical keeps contact-only FX")
   eq(fx.sx, fx.ex, "no traveling physical projectile")
+end
+
+function tests.close_the_gap_physicals()
+  local snorlax = Cues.closeGapSpeed({ _closeGapStats = { speed = 30, attack = 110 } })
+  local dragonite = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 134 } })
+  local weakSlow = Cues.closeGapSpeed({ _closeGapStats = { speed = 30, attack = 40 } })
+  local magikarp = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 10 } })
+  local electrode = Cues.closeGapSpeed({ _closeGapStats = { speed = 140, attack = 50 } })
+  local rocket = Cues.closeGapSpeed({ _closeGapStats = { speed = 250, attack = 250 } })
+  truthy(snorlax < dragonite, "snorlax closes slower than dragonite")
+  truthy(snorlax > weakSlow, "snorlax's attack boosts a slow gait")
+  truthy(electrode > magikarp, "higher speed closes faster")
+  truthy(rocket <= 86, "dash speed is capped")
+  truthy(snorlax >= 22, "even slow mons still close")
+
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 1, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 7, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = false,
+    _now = 5,
+    _deps = { Projectiles = Projectiles },
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "physical with gap off")
+  eq(player.padU, 2, "toggle off keeps the one-cell lunge")
+  eq(player.lastAnim, "attack", "short lunge punches immediately")
+
+  Grid.setPad(grid, player, 1, 0)
+  player._attackStepped = nil
+  player._returnAt = nil
+  player._pendingCloseStrike = nil
+  player._closeStrikeDeadline = nil
+  player.lastAnim = nil
+  Projectiles.clear(session)
+  session.closeTheGap = true
+  session._now = 8
+  session._lastCueAt = nil
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "physical with gap on")
+  eq(player.padU, 6, "toggle on occupies the adjacent approach cell")
+  eq(player.lastAnim, nil, "walk close delays the punch")
+  truthy(player._pendingCloseStrike, "strike waits for melee reach")
+  truthy(Cues.closeGapHoldActive(session), "logic clock holds during the walk")
+  truthy(Cues.shouldHoldEngineHit(session, { user = { isPlayer = true } }),
+    "engine damage waits for the walk")
+  truthy(not Cues.inMeleeReach(player, enemy), "sprite has not arrived yet")
+  -- Occupancy / draw target already sit on the approach cell; feet have not.
+  player.px, player.py = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, nil, "HUD confirm tick does not punch")
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "punch plays once within one tile")
+  eq(Cues.shouldHoldEngineHit(session, { user = { isPlayer = true } }), false,
+    "engine damage resumes after the punch")
+  truthy(player._withdrawAfterStrike, "close-in schedules a withdraw, not home")
+  eq(player._returnAt, 8.48, "withdraw waits for attack presentation")
+  session._now = player._returnAt
+  Cues.tickReturns(session, Grid)
+  local after = Grid.padDistance(grid, player, enemy)
+  truthy(after >= 1 and after <= 2, "post-strike roam stays 1–2 tiles from the foe")
+  eq(player.padU == 1, false, "does not walk back to the opening cell")
+  eq(player._meleeAnchor, true, "idle roam follows the foe after the strike")
+  eq(player._withdrawAfterStrike, nil, "withdraw flag clears")
+
+  Grid.setPad(grid, player, 1, 0)
+  player._meleeAnchor = true
+  local far = Grid.padDistance(grid, player, enemy)
+  truthy(Grid.idleWander(grid, player, "player", enemy),
+    "melee wander steps when farther than two tiles")
+  truthy(Grid.padDistance(grid, player, enemy) < far,
+    "melee wander closes back toward the 1–2 ring")
+
+  -- Adjacent + option on: announce still must not punch; the strike is the
+  -- arrival beat, not HUD confirm.
+  Grid.setPad(grid, player, 6, 0)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  player.px, player.py = player.targetPx, player.targetPy
+  player._attackStepped = nil
+  player._returnAt = nil
+  player._pendingCloseStrike = nil
+  player._closeStrikeWait = nil
+  player.lastAnim = nil
+  session._lastCueAt = nil
+  session._now = 11
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "adjacent physical with gap on")
+  eq(player.lastAnim, nil, "adjacent cue still waits one present tick")
+  truthy(player._pendingCloseStrike, "adjacent strike is still gated")
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, nil, "arming tick does not punch")
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "adjacent punch plays on the next present tick")
 end
 
 function tests.special_trajectories_track_mons()
@@ -1117,6 +1263,7 @@ function tests.cues_and_dedupe()
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
   -- Opening homes are adjacent; open one cell so the physical lunge can step.
   truthy(Grid.setPad(grid, enemy, eHome.u + 1, eHome.v), "room for attack step")
+  enemy.basePx, enemy.basePy = enemy.targetPx, enemy.targetPy
   local session = {
     live = true,
     grid = grid,
@@ -1129,9 +1276,14 @@ function tests.cues_and_dedupe()
 
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
     { category = "physical" }), "physical attack cue")
-  eq(player.lastAnim, "attack", "physical attack animation")
   truthy(player._attackStepped, "physical attack owns one grid step")
-  eq(player._returnAt, 10.48, "return waits for attack presentation")
+  eq(player.lastAnim, nil, "punch waits until the sprite is in reach")
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "physical attack animation")
+  eq(player._returnAt, 10.48, "withdraw waits for attack presentation")
+  truthy(player._withdrawAfterStrike, "physical close-in withdraws after the punch")
   truthy(Cues.shouldSkipEvent(session, "player", "attack"), "dedupe same cue")
 
   -- Night Shade is Gen1 physical (Ghost) + 0 BP, but must cast a travel shadow.
@@ -1139,6 +1291,7 @@ function tests.cues_and_dedupe()
   session._lastCueAt = nil
   player._attackStepped = nil
   player._returnAt = nil
+  player._pendingCloseStrike = nil
   player.lastAnim = nil
   Projectiles.clear(session)
   Grid.setPad(grid, player, pHome.u, pHome.v)

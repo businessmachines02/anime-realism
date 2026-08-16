@@ -147,6 +147,12 @@ return function(mod)
                 },
             },
             {
+                key = "close_the_gap",
+                type = "toggle",
+                label = "CLOSE THE GAP",
+                default = true,
+            },
+            {
                 key = "dev_overlay",
                 type = "toggle",
                 label = "DEV OVERLAY",

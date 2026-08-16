@@ -391,7 +391,7 @@ function Intercept.install(FBV, mod)
       BattleState._arFbvFinish = true
     end
 
-    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ then
+    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ24 then
       local origUQ = BattleState.updateQueue
       function BattleState:updateQueue(...)
         if self and self._arFieldStandalone and self.waitingUI then
@@ -403,9 +403,21 @@ function Intercept.install(FBV, mod)
           end
           self.waitingUI = nil
         end
+        -- CLOSE THE GAP: park the engine queue until the sprite is in range.
+        -- Skip the HUD-confirm frame (`_arFieldInstantMove`) so the move is
+        -- still accepted; later ticks wait for the walk.
+        local fbv = Intercept._fbv
+        local session = fbv and type(fbv.session) == "function" and fbv.session(self)
+        local Cues = fbv and fbv.Cues
+        if session and not self._arCloseGapResuming
+            and not self._arFieldInstantMove
+            and Cues and type(Cues.closeGapHoldActive) == "function"
+            and Cues.closeGapHoldActive(session) then
+          return true
+        end
         return origUQ(self, ...)
       end
-      BattleState._arFbvUQ = true
+      BattleState._arFbvUQ24 = true
     end
   end
 
