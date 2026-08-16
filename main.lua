@@ -1271,6 +1271,7 @@ return function(mod)
             end
         end)
 
+
         -- Reactive Defense damage modifiers + legacy counter +25%.
         mod.hooks:wrap("battle.damage", function(next, ctx)
             local dmg, info = next(ctx)
@@ -1351,295 +1352,296 @@ return function(mod)
         -- Replace "X grew to level N!" with a generic line. StatBox + move
         -- learning still queue right after via uiNext / learnMove.
         S.LEVEL_UP_LINES = {
-            "Your POKéMON has\ngrown stronger!",
-            "Your POKéMON looks\nmore powerful!",
-            "Your POKéMON's power\nhas surged!",
-            "Your POKéMON has\nbecome tougher!",
+            "Your POKéMON has grown stronger!",
+            "Your POKéMON looks more powerful!",
+            "Your POKéMON's power has surged!",
+            "Your POKéMON has become tougher!",
         }
+   
 
         -- Anime-style trainer callouts for "NAME\nused MOVE!" (not item use).
         -- Wild battles keep the vanilla line. Trainer foes use the trainer's name.
         S.PLAYER_MOVE_CALLS = {
-            "%s!\nUse %s!",
-            "%s, use\n%s!",
-            "Go! %s!\n%s!",
-            "%s!\n%s!",
-            "%s!\nNow! %s!",
-            "%s!\nQuick, %s!",
-            "OK, %s!\n%s!",
-            "%s, go!\nUse %s!",
-            "That's it!\n%s! %s!",
-            "%s!\nHit 'em! %s!",
-            "Come on!\n%s! %s!",
-            "%s!\n%s! Go!",
+            "%s! Use %s!",
+            "%s, use %s!",
+            "Go! %s! %s!",
+            "%s! %s!",
+            "%s! Now! %s!",
+            "%s! Quick, %s!",
+            "OK, %s! %s!",
+            "%s, go! Use %s!",
+            "That's it! %s! %s!",
+            "%s! Hit 'em! %s!",
+            "Come on! %s! %s!",
+            "%s! %s! Go!",
         }
         -- When the foe looks weak (same threshold as LOW HP AT).
         S.PLAYER_FINISH_CALLS = {
-            "Finish it!\n%s! %s!",
-            "%s!\nFinish it!",
-            "%s!\nFinish it! %s!",
-            "Now's our chance!\n%s! %s!",
-            "%s!\nEnd it! %s!",
-            "One more!\n%s! %s!",
-            "%s!\nTake 'em down!",
-            "Go for it!\n%s! %s!",
-            "%s!\nThis is it! %s!",
-            "Finish them!\n%s! %s!",
+            "Finish it! %s! %s!",
+            "%s! Finish it!",
+            "%s! Finish it! %s!",
+            "Now's our chance! %s! %s!",
+            "%s! End it! %s!",
+            "One more! %s! %s!",
+            "%s! Take 'em down!",
+            "Go for it! %s! %s!",
+            "%s! This is it! %s!",
+            "Finish them! %s! %s!",
         }
         -- After your move announce, when a physical counter is armed.
         -- Going second (foe already acted): announce becomes this line.
         S.AUTO_COUNTER_CALLS = {
-            "%s!\nCounter with %s!",
-            "Now, %s!\nCounter- %s!",
-            "%s!\nHit back! %s!",
-            "Counter!\n%s, use %s!",
+            "%s! Counter with %s!",
+            "Now, %s! Counter- %s!",
+            "%s! Hit back! %s!",
+            "Counter! %s, use %s!",
         }
         -- formatAutoCounterCall is defined after pickFormatted (Lua locals are
         -- not visible above their declaration — calling early binds a nil global).
         local formatAutoCounterCall
         S.PLAYER_COUNTER_CALLS = {
             AUTO = {
-                "Now, %s!\n%s!",
-                "%s!\nHit back! %s!",
-                "%s!\nCounter with %s!",
-                "That's our opening!\n%s! %s!",
+                "Now, %s! %s!",
+                "%s! Hit back! %s!",
+                "%s! Counter with %s!",
+                "That's our opening! %s! %s!",
             },
             BOLD = {
-                "%s!\nStrike back! %s!",
-                "%s!\nHit 'em hard!",
-                "Now, %s!\nSmash back!",
-                "%s!\nReturn it! %s!",
+                "%s! Strike back! %s!",
+                "%s! Hit 'em hard!",
+                "Now, %s! Smash back!",
+                "%s! Return it! %s!",
             },
             TRICKY = {
-                "%s!\nTurn it around!",
-                "Now, %s!\nCatch 'em!",
-                "%s!\nUse that opening!",
-                "%s!\nSlip in- %s!",
+                "%s! Turn it around!",
+                "Now, %s! Catch 'em!",
+                "%s! Use that opening!",
+                "%s! Slip in- %s!",
             },
             SHOWY = {
-                "Show 'em,\n%s! %s!",
-                "%s!\nMake it flashy!",
-                "That's it!\n%s! %s!",
-                "%s!\nHero time! %s!",
+                "Show 'em, %s! %s!",
+                "%s! Make it flashy!",
+                "That's it! %s! %s!",
+                "%s! Hero time! %s!",
             },
         }
         -- Style-flavored dodge / brace bases (mon name = %s).
         S.DODGE_STYLE = {
             AUTO = {
-                "%s!\nDodge it!",
+                "%s! Dodge it!",
                 "Dodge, %s!",
-                "%s!\nLook out!",
-                "Quick, %s!\nDodge!",
+                "%s! Look out!",
+                "Quick, %s! Dodge!",
             },
             BOLD = {
-                "%s!\nShrug it off!",
-                "%s!\nStand tall-dodge!",
-                "No way,\n%s! Move!",
-                "%s!\nBreak clear!",
+                "%s! Shrug it off!",
+                "%s! Stand tall-dodge!",
+                "No way, %s! Move!",
+                "%s! Break clear!",
             },
             TRICKY = {
-                "%s!\nSlip aside!",
-                "Fake 'em out,\n%s!",
-                "%s!\nWeave through!",
-                "Easy, %s!\nSidestep!",
+                "%s! Slip aside!",
+                "Fake 'em out, %s!",
+                "%s! Weave through!",
+                "Easy, %s! Sidestep!",
             },
             SHOWY = {
-                "%s!\nDance aside!",
-                "Show off,\n%s! Dodge!",
-                "%s!\nMake it clean!",
-                "Stylish,\n%s! Move!",
+                "%s! Dance aside!",
+                "Show off, %s! Dodge!",
+                "%s! Make it clean!",
+                "Stylish, %s! Move!",
             },
         }
         S.BRACE_STYLE = {
             AUTO = {
-                "%s!\nGet ready!",
-                "%s!\nBrace yourself!",
-                "Hold on,\n%s!",
-                "%s!\nWe can counter!",
+                "%s! Get ready!",
+                "%s! Brace yourself!",
+                "Hold on, %s!",
+                "%s! We can counter!",
             },
             BOLD = {
-                "%s!\nTake it head-on!",
-                "Stand firm,\n%s!",
-                "%s!\nDon't flinch!",
-                "%s!\nEat that hit!",
+                "%s! Take it head-on!",
+                "Stand firm, %s!",
+                "%s! Don't flinch!",
+                "%s! Eat that hit!",
             },
             TRICKY = {
-                "%s!\nRoll with it!",
-                "Wait for it,\n%s!",
-                "%s!\nLet 'em commit!",
-                "%s!\nThen we hit!",
+                "%s! Roll with it!",
+                "Wait for it, %s!",
+                "%s! Let 'em commit!",
+                "%s! Then we hit!",
             },
             SHOWY = {
-                "%s!\nMake it look easy!",
-                "Chin up,\n%s!",
-                "%s!\nPose-and brace!",
-                "Cool under fire,\n%s!",
+                "%s! Make it look easy!",
+                "Chin up, %s!",
+                "%s! Pose-and brace!",
+                "Cool under fire, %s!",
             },
         }
         -- Terrain lines: first %s = mon. Keep short for the text box.
         S.DODGE_SCENE = {
             cave = {
-                "%s!\nOnto that rock!",
-                "%s!\nBehind the rocks!",
-                "Dodge-jump,\n%s! That ledge!",
+                "%s! Onto that rock!",
+                "%s! Behind the rocks!",
+                "Dodge-jump, %s! That ledge!",
             },
             forest = {
-                "%s!\nBehind that tree!",
-                "%s!\nInto the brush!",
-                "Dodge-leaf,\n%s! Hide!",
+                "%s! Behind that tree!",
+                "%s! Into the brush!",
+                "Dodge-leaf, %s! Hide!",
             },
             city = {
-                "%s!\nBehind that cart!",
-                "%s!\nUse that alley!",
-                "Dodge-corner,\n%s!",
+                "%s! Behind that cart!",
+                "%s! Use that alley!",
+                "Dodge-corner, %s!",
             },
             route = {
-                "%s!\nInto the grass!",
-                "%s!\nOff the path!",
-                "Wide berth,\n%s!",
+                "%s! Into the grass!",
+                "%s! Off the path!",
+                "Wide berth, %s!",
             },
             mountain = {
-                "%s!\nUp that cliff!",
-                "%s!\nUse the ledge!",
-                "Higher ground,\n%s!",
+                "%s! Up that cliff!",
+                "%s! Use the ledge!",
+                "Higher ground, %s!",
             },
             gym = {
-                "%s!\nUse the pillars!",
-                "%s!\nAround the court!",
-                "Sidestep,\n%s! Pillar!",
+                "%s! Use the pillars!",
+                "%s! Around the court!",
+                "Sidestep, %s! Pillar!",
             },
             water = {
-                "%s!\nAlong the shore!",
-                "%s!\nSplash aside!",
-                "Over the spray,\n%s!",
+                "%s! Along the shore!",
+                "%s! Splash aside!",
+                "Over the spray, %s!",
             },
             grave = {
-                "%s!\nBehind a stone!",
-                "%s!\nInto the dark!",
-                "Fade back,\n%s!",
+                "%s! Behind a stone!",
+                "%s! Into the dark!",
+                "Fade back, %s!",
             },
             indoor = {
-                "%s!\nBehind cover!",
-                "%s!\nUse the wall!",
-                "Clear the floor,\n%s!",
+                "%s! Behind cover!",
+                "%s! Use the wall!",
+                "Clear the floor, %s!",
             },
         }
         S.BRACE_SCENE = {
             cave = {
-                "%s!\nBrace on the rock!",
-                "%s!\nDig in here!",
+                "%s! Brace on the rock!",
+                "%s! Dig in here!",
             },
             forest = {
-                "%s!\nRoot in place!",
-                "%s!\nHold the line!",
+                "%s! Root in place!",
+                "%s! Hold the line!",
             },
             city = {
-                "%s!\nHold the street!",
-                "%s!\nStand your ground!",
+                "%s! Hold the street!",
+                "%s! Stand your ground!",
             },
             route = {
-                "%s!\nHold firm!",
-                "%s!\nHold the path!",
+                "%s! Hold firm!",
+                "%s! Hold the path!",
             },
             mountain = {
-                "%s!\nBrace on stone!",
-                "%s!\nDon't slip!",
+                "%s! Brace on stone!",
+                "%s! Don't slip!",
             },
             gym = {
-                "%s!\nCenter court-hold!",
-                "%s!\nGuard the mark!",
+                "%s! Center court-hold!",
+                "%s! Guard the mark!",
             },
             water = {
-                "%s!\nBrace in the surf!",
-                "%s!\nHold the tide!",
+                "%s! Brace in the surf!",
+                "%s! Hold the tide!",
             },
             grave = {
-                "%s!\nStand your ground!",
-                "%s!\nDon't yield!",
+                "%s! Stand your ground!",
+                "%s! Don't yield!",
             },
             indoor = {
-                "%s!\nHold the room!",
-                "%s!\nBrace up!",
+                "%s! Hold the room!",
+                "%s! Brace up!",
             },
         }
         -- Type spice (checked against player curTypes).
         S.DODGE_TYPE = {
             FLYING = {
-                "%s!\nFly up high!",
-                "%s!\nTake the air!",
-                "Wing it,\n%s! Up!",
+                "%s! Fly up high!",
+                "%s! Take the air!",
+                "Wing it, %s! Up!",
             },
             WATER = {
-                "%s!\nDive aside!",
-                "%s!\nRide the splash!",
+                "%s! Dive aside!",
+                "%s! Ride the splash!",
             },
             FIRE = {
-                "%s!\nBurst aside!",
-                "%s!\nHeat-dash clear!",
+                "%s! Burst aside!",
+                "%s! Heat-dash clear!",
             },
             ELECTRIC = {
-                "%s!\nZip aside!",
-                "%s!\nSpark-step!",
+                "%s! Zip aside!",
+                "%s! Spark-step!",
             },
             GRASS = {
-                "%s!\nInto the leaves!",
-                "%s!\nBloom-step clear!",
+                "%s! Into the leaves!",
+                "%s! Bloom-step clear!",
             },
             PSYCHIC = {
-                "%s!\nSense-and move!",
-                "%s!\nBend aside!",
+                "%s! Sense-and move!",
+                "%s! Bend aside!",
             },
             GHOST = {
-                "%s!\nFade through!",
-                "%s!\nPhase aside!",
+                "%s! Fade through!",
+                "%s! Phase aside!",
             },
             BUG = {
-                "%s!\nFlutter clear!",
-                "%s!\nBuzz aside!",
+                "%s! Flutter clear!",
+                "%s! Buzz aside!",
             },
             GROUND = {
-                "%s!\nDust-dash!",
-                "%s!\nLow and aside!",
+                "%s! Dust-dash!",
+                "%s! Low and aside!",
             },
             ROCK = {
-                "%s!\nStone-step clear!",
+                "%s! Stone-step clear!",
             },
             ICE = {
-                "%s!\nSlide clear!",
+                "%s! Slide clear!",
             },
             DRAGON = {
-                "%s!\nSoar clear!",
+                "%s! Soar clear!",
             },
             POISON = {
-                "%s!\nSlip aside!",
+                "%s! Slip aside!",
             },
             FIGHTING = {
-                "%s!\nBob and weave!",
+                "%s! Bob and weave!",
             },
         }
         S.BRACE_TYPE = {
             FIGHTING = {
-                "%s!\nGuard up!",
-                "%s!\nTough it out!",
+                "%s! Guard up!",
+                "%s! Tough it out!",
             },
             ROCK = {
-                "%s!\nBe the boulder!",
-                "%s!\nRock-solid!",
+                "%s! Be the boulder!",
+                "%s! Rock-solid!",
             },
             GROUND = {
-                "%s!\nRoot down!",
+                "%s! Root down!",
             },
             STEEL = {
-                "%s!\nSteel yourself!",
+                "%s! Steel yourself!",
             },
             NORMAL = {
-                "%s!\nTough it out!",
+                "%s! Tough it out!",
             },
             WATER = {
-                "%s!\nRoll with the wave!",
+                "%s! Roll with the wave!",
             },
             FLYING = {
-                "%s!\nHover-and hold!",
+                "%s! Hover-and hold!",
             },
         }
         -- Named characters only (gym leaders, E4, etc.). Class titles like
@@ -3170,6 +3172,7 @@ return function(mod)
         end
 
         -- Build a context-weighted idle pool (ahead/behind/low HP/long fight).
+
         local function pickContextualIdleLine(battle, persona, speaker)
             local pack = S.BANTER[persona] or S.BANTER.generic
             local pools = {}
@@ -3808,25 +3811,13 @@ return function(mod)
                     return
                 end
             end
-            local persona = trainerPersona(battle)
-            local pack = S.BANTER[persona] or S.BANTER.generic
-            local speaker = banterSpeaker(battle)
-            local line
-            if aboutPlayer then
-                local mon = playerMonName(battle)
-                line = pickFormatted(pack.player, speaker, mon)
-                    or (speaker .. ":\nA " .. mon .. ", huh?!")
-            else
-                local mon = enemyMonName(battle)
-                line = pickFormatted(pack.enemy, speaker, mon)
-                    or (speaker .. ":\nGo, " .. mon .. "!")
-            end
-            line = clampBanterText(line)
-            -- Don't splice the line between "Go!" and the POOF — wait until the
-            -- mon is actually on the field (sendingOut / POOF finished).
+            -- Do not bake the mon name here. The engine's "Go!" names party[1]
+            -- (often the overworld follower). choose_lead and other send-out
+            -- mods rebind battle.player after that line is queued.
             battle._arPendingSendBanter = {
-                line = line,
                 side = aboutPlayer and "player" or "enemy",
+                persona = trainerPersona(battle),
+                speaker = banterSpeaker(battle),
             }
             battle._arSendBanterArmFrames = 8
             if aboutPlayer and battle.sendingOut then
@@ -4144,6 +4135,76 @@ return function(mod)
             if not pending then
                 return
             end
+
+            local function pickerOpen()
+                local stack = battle.game and battle.game.stack
+                if not (stack and type(stack.top) == "function") then
+                    return false
+                end
+                local top = stack:top()
+                if not top or top == battle then
+                    return false
+                end
+                if top.battle ~= nil and top.battle ~= battle then
+                    return false
+                end
+                if top.forceSwitch then
+                    return true
+                end
+                local id = tostring(top.id or top.screenId or "")
+                if id == "PartyMenu" or id == "Gen2PartyMenu" then
+                    return top.forceSwitch == true or top.battle == battle
+                end
+                return false
+            end
+
+            local function queueStillHasSendOut()
+                local function match(text)
+                    if pending.side == "player" then
+                        return isPlayerSendOutText(text)
+                    end
+                    return isEnemySendOutText(text)
+                end
+                if battle.current and match(battle.current.text) then
+                    return true
+                end
+                local q = battle.queue
+                if type(q) ~= "table" then
+                    return false
+                end
+                for i = 1, #q do
+                    if q[i] and match(q[i].text) then
+                        return true
+                    end
+                end
+                return false
+            end
+
+            local function composeLine()
+                local persona = pending.persona or trainerPersona(battle)
+                local pack = S.BANTER[persona] or S.BANTER.generic
+                local speaker = pending.speaker or banterSpeaker(battle)
+                local line
+                if pending.side == "enemy" then
+                    local mon = enemyMonName(battle)
+                    line = pickFormatted(pack.enemy, speaker, mon)
+                        or (speaker .. ":\nGo, " .. mon .. "!")
+                else
+                    local mon = playerMonName(battle)
+                    line = pickFormatted(pack.player, speaker, mon)
+                        or (speaker .. ":\nA " .. mon .. ", huh?!")
+                end
+                return clampBanterText(line)
+            end
+
+            -- choose_lead opens PartyMenu before the real send. Keep waiting so
+            -- we name the mon that actually comes out, not party[1].
+            if pickerOpen() then
+                return
+            end
+            if queueStillHasSendOut() then
+                return
+            end
             local sending = (pending.side == "player" and battle.sendingOut)
                 or (pending.side == "enemy" and battle.enemySendingOut)
             if sending then
@@ -4160,7 +4221,8 @@ return function(mod)
                 battle._arSendBanterArmFrames = battle._arSendBanterArmFrames - 1
                 return
             end
-            -- Ready: send-out finished and POOF is gone.
+            -- Ready: send-out finished and POOF is gone. Name the live battler.
+            local line = composeLine()
             battle._arPendingSendBanter = nil
             battle._arSendBanterSawOut = nil
             battle._arSendBanterArmFrames = nil
@@ -4172,15 +4234,25 @@ return function(mod)
                 battle._arSendBanterCooldown = 120
                 return
             end
-            local item = { text = pending.line, arBanter = true }
-            if not markBubbleWait(item, "foe", true, battle) then
+            local item = { text = line, arBanter = true }
+            local intro = not battle._arSendBanterDidIntro
+            if intro then
+                -- Intro impression: wait for A. auto=false so FIELD toasts
+                -- do not re-arm a ~0.5s auto-advance.
+                if opt("speech_bubbles") then
+                    item.bubble = "foe"
+                end
+                item.auto = false
+                item.autoDelay = nil
+                battle._arSendBanterDidIntro = true
+            elseif not markBubbleWait(item, "foe", true, battle) then
                 item.auto = true
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, 1, item)
             -- Cover the foe-send + player-Go! SHIFT / intro wave.
             battle._arSendBanterCooldown = 120
-            BanterCameo.start(battle, pending.line)
+            BanterCameo.start(battle, line)
         end
 
         maybeEnqueueIdleBanter = function(battle)
