@@ -104,19 +104,6 @@ Every Pokémon has a **Focus Meter** (0–100).
 - This caps Dodge's counter DPS well below Brace's, since Brace's heavier counter has no cooldown — it's balanced instead by Brace's coin-flip call mechanic and lower reduction ceiling.
 - Net effect: Dodge is the *burst/opportunist* tool (strong early, tapers off), Brace is the *sustain* tool (steady, rewards correct reads over a long fight). Gives the two archetypes distinct rhythm instead of one strictly outscaling the other.
 
-### Unreactable Signature Moves
-- Flag a small, curated set of moves as **Unreactable** — cannot be Dodged, Covered, or Braced (though normal type resistance/immunity still applies).
-- Gate them behind an existing high-stakes resource so they can't be spammed: tie to **Terastallize/Dynamax/Z-Move-style once-per-battle mechanics**, or a signature move usable only once Focus has been fully drained to 0 (a "desperation finisher" framing — mechanically and narratively fitting).
-- Telegraph clearly before use (a charge turn, a distinct animation cue, a UI warning) so the opponent has a real "oh no, brace for impact narratively but mechanically there's nothing to be done" moment — that's the anime beat you're going for, and it only lands if the player *knows* it's coming and still can't stop it.
-- Keep the list small (a handful of ace/legendary-tier moves) — if too many moves are unreactable, the whole reactive layer stops mattering.
-
-### Unreactable Moves vs. Take Cover: Durability Absorbs, Then Overflows
-- Unreactable moves do **not** fully bypass Cover — a full bypass punishes players for having invested Focus into a Durability setup, which feels bad rather than epic.
-- Instead, Unreactable moves deal **250–300% damage to Durability** (vs. the normal cover-piercing bonus damage).
-- If Durability **survives**, the player keeps their cover — a meaningful, earned payoff for a well-built tank (especially with the +20% type bonus). This is the "its cover held!?" anime beat.
-- If Durability **breaks**, any overflow damage carries through to the Pokémon directly, and cover shatters as normal (auto-exposed next turn).
-- Net effect: Unreactable moves are still rare/threatening and usually punch through unprepared defenders, but a defender who specifically built for it gets a real (if uncommon) chance to no-sell the "unstoppable" attack — without ever letting Cover be a *free*, zero-cost counter to the whole category.
-
 ### Entrench Duration Scaling
 - Duration is **tiered, not linear/unlimited**, and locked in at activation (no extending mid-Entrench):
 
@@ -173,3 +160,16 @@ Guardrails:
 ### Stacking Guardrail (critical)
 
 Mastery + Terrain + Matchup Memory are all additive modifiers to the same base success%/mitigation numbers from the core system. Without a ceiling, they compound past the point of being fun. **Hard rule: all growth-layer modifiers combined cannot push a stat's total bonus above +15** over its base-system value (e.g., Dodge's base ceiling stays 75%; a fully-grown, favorite-terrain, most-hated-rival mon can approach but never exceed 90%). This keeps a maxed-out veteran genuinely formidable in its best matchup, without ever becoming unbeatable.
+
+### Unreactable Signature Moves
+- Flag a small, curated set of moves as **Unreactable** — cannot be Dodged, Covered, or Braced (though normal type resistance/immunity still applies).
+- Gate them behind an existing high-stakes resource so they can't be spammed: tie to **Terastallize/Dynamax/Z-Move-style once-per-battle mechanics**, or a signature move usable only once Focus has been fully drained to 0 (a "desperation finisher" framing — mechanically and narratively fitting).
+- Telegraph clearly before use (a charge turn, a distinct animation cue, a UI warning) so the opponent has a real "oh no, brace for impact narratively but mechanically there's nothing to be done" moment — that's the anime beat you're going for, and it only lands if the player *knows* it's coming and still can't stop it.
+- Keep the list small (a handful of ace/legendary-tier moves) — if too many moves are unreactable, the whole reactive layer stops mattering.
+
+### Unreactable Moves vs. Take Cover: Durability Absorbs, Then Overflows
+- Unreactable moves do **not** fully bypass Cover — a full bypass punishes players for having invested Focus into a Durability setup, which feels bad rather than epic.
+- Instead, Unreactable moves deal **250–300% damage to Durability** (vs. the normal cover-piercing bonus damage).
+- If Durability **survives**, the player keeps their cover — a meaningful, earned payoff for a well-built tank (especially with the +20% type bonus). This is the "its cover held!?" anime beat.
+- If Durability **breaks**, any overflow damage carries through to the Pokémon directly, and cover shatters as normal (auto-exposed next turn).
+- Net effect: Unreactable moves are still rare/threatening and usually punch through unprepared defenders, but a defender who specifically built for it gets a real (if uncommon) chance to no-sell the "unstoppable" attack — without ever letting Cover be a *free*, zero-cost counter to the whole category.
