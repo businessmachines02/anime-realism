@@ -25,6 +25,7 @@
 --   themes      map-id → kit (cover/grass/pond colors)
 --   layout      tight adjacent-mon formation along the fight axis
 --   coords      pad ↔ world ↔ pixel conversions
+--   fx_catalog  TYPE_COLORS / MOVE_FX / TYPE_STYLE / TYPE_CONTACT
 --   spectators  nearby trainers walk in, watch, rare shoutouts
 --   wildlife    roaming OW mons scatter away from the duel
 --   compat      suppress foreign staged battles while FIELD is on
@@ -34,17 +35,20 @@
 
 return function(env)
   local loadFile = env and env.load
+  local mod = env and env.mod
   if type(loadFile) ~= "function" then
     error("field_battle/init.lua requires env.load", 2)
   end
 
   local Coords = loadFile("coords.lua")
   local Themes = loadFile("themes.lua")
+  local FxCatalog = loadFile("fx_catalog.lua")
   do
     local loaded = package and package.loaded
     if type(loaded) == "table" then
       loaded["coords"] = Coords
       loaded["themes"] = Themes
+      loaded["fx_catalog"] = FxCatalog
     end
   end
   local origRequire = require
@@ -54,6 +58,9 @@ return function(env)
     end
     if name == "themes" then
       return Themes
+    end
+    if name == "fx_catalog" then
+      return FxCatalog
     end
     return origRequire(name)
   end
@@ -283,7 +290,32 @@ return function(env)
     return FBV.enabled(mod) and FBV.supportsBattle(battle)
   end
 
+  -- Runtime FIELD predicate: intercept flags (cache) or shouldUse (policy).
+  function FBV.isFieldBattle(battle)
+    if Compat and type(Compat.isFieldBattle) == "function" then
+      return Compat.isFieldBattle(battle, FBV, mod)
+    end
+    if not battle then
+      return false
+    end
+    if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
+      return true
+    end
+    return FBV.shouldUse(mod, battle)
+  end
+
+  -- Inject cross-package services (ReactiveDefense) into the FIELD deps bag.
+  function FBV.bind(packages)
+    local RD = packages and packages.battle and packages.battle.ReactiveDefense
+    deps.ReactiveDefense = RD
+    FBV.ReactiveDefense = RD
+    return true
+  end
+
   function FBV.install(mod)
+    if mod and mod._arPackages then
+      pcall(FBV.bind, mod._arPackages)
+    end
     pcall(Intercept.install, FBV, mod)
     return Hooks.install(FBV, mod)
   end

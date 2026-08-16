@@ -91,7 +91,7 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 - **Always on:** Levels and HP numbers/classic bars are hidden in battle, party,
   summary, and related UI. FIELD uses slim proportional bars without numbers.
   Generic level-up flavor, anime move callouts, speech bubbles, trainer banter,
-  status/focus chips, underdog EXP, and effort-faint consolations are part of
+  underdog EXP, and effort-faint consolations are part of
   the same feel (not extra toggles).
 - **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
 - **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
@@ -177,9 +177,8 @@ remain on their normal presentation path.
   found.
 - Hybrid voxel mode is preserved: the voxelized map remains active while the
   Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
-  suppresses classic/Stadium battle chrome and duplicate staged arenas; Stadium
-  visuals remain available when BATTLE STAGE is not FIELD. On battle exit the
-  pre-battle voxel pipeline level is restored so the free-roam overlay resets.
+  suppresses duplicate staged arenas. On battle exit the pre-battle voxel
+  pipeline level is restored so the free-roam overlay resets.
 - Generated cover remains session-only and is kept sparse and small so the live
   map—not an artificial arena—stays visually dominant.
 - Ending by victory, capture, run, or blackout restores the original map

@@ -182,8 +182,7 @@ function Hooks.install(FBV, mod)
     local function focusEntrenched(battle)
         -- Entrench used to eat PreferMoves attacks via executeAction → holdPosition.
         -- We still avoid auto-opening the diamond so FIGHT can show ENTRENCH!.
-        local pkgs = mod and mod._arPackages
-        local RD = pkgs and pkgs.battle and pkgs.battle.ReactiveDefense
+        local RD = FBV and FBV.ReactiveDefense
         if not (RD and type(RD.sideState) == "function" and battle) then
             return false
         end

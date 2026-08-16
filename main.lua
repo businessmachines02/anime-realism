@@ -3,7 +3,7 @@
 -- Three packages (see folders):
 --   immersion/     — HP / EXP / numbers feel (hide HUD, underdog EXP, effort)
 --   battle/        — traditional battle systems (Reactive Defense, callouts,
---                    speech bubbles, banter, chips)
+--                    speech bubbles, banter)
 --   field_battle/  — standalone overworld FIELD combat (BattleState on stack,
 --                    transparent over the live map)
 --
@@ -20,6 +20,7 @@ return function(mod)
     local Battle
     local FieldBattleViewer
     local ReactiveDefense
+    local React
 
     local ModLoad
     do
@@ -56,44 +57,43 @@ return function(mod)
         local value, err = ModLoad.loadPackage("immersion")
         if type(value) == "table" then
             Immersion = value
-            pcall(Immersion.install, mod)
         else
             print("[anime_realism] immersion: " .. tostring(err))
         end
 
-        if ModLoad and type(ModLoad.loadPackage) == "function" then
-            local value, err = ModLoad.loadPackage("immersion")
-            if type(value) == "table" then
-                Immersion = value
-                pcall(Immersion.install, mod)
-            else
-                print("[anime_realism] immersion: " .. tostring(err))
-            end
-
-            value, err = ModLoad.loadPackage("battle")
-            if type(value) == "table" then
-                Battle = value
-                ReactiveDefense = Battle.ReactiveDefense
-                pcall(Battle.install, mod)
-            else
-                print("[anime_realism] battle: " .. tostring(err))
-            end
-
-            value, err = ModLoad.loadPackage("field_battle")
-            if type(value) == "table" then
-                FieldBattleViewer = value
-                pcall(FieldBattleViewer.install, mod)
-            else
-                print("[anime_realism] field_battle: " .. tostring(err))
-            end
+        value, err = ModLoad.loadPackage("battle")
+        if type(value) == "table" then
+            Battle = value
+            ReactiveDefense = Battle.ReactiveDefense
+            React = Battle.React
+        else
+            print("[anime_realism] battle: " .. tostring(err))
         end
 
-        -- Expose packages for debug / future extractions.
+        value, err = ModLoad.loadPackage("field_battle")
+        if type(value) == "table" then
+            FieldBattleViewer = value
+        else
+            print("[anime_realism] field_battle: " .. tostring(err))
+        end
+
+        -- Expose packages before install so FBV.bind can inject ReactiveDefense.
         mod._arPackages = {
             immersion = Immersion,
             battle = Battle,
             field_battle = FieldBattleViewer,
         }
+
+        if Immersion then
+            pcall(Immersion.install, mod)
+        end
+        if Battle then
+            pcall(Battle.install, mod)
+        end
+        if FieldBattleViewer then
+            pcall(FieldBattleViewer.bind, mod._arPackages)
+            pcall(FieldBattleViewer.install, mod)
+        end
 
         mod.options:define({
             {
@@ -451,7 +451,7 @@ return function(mod)
         -- Physical hit → arms counter; on your reply you pick COUNTER or HOLD.
         -- Special → dodge callout (may fail); temp buffs clear when you attack.
         local Damage = require("src.battle.Damage")
-        local momentumByBattle = setmetatable({}, { __mode = "k" })
+        -- Momentum table lives in battle/react.lua (React.state / peek).
         -- Forward decls: event handlers / pick menu close over these.
         local revealPlayerPic
         local enqueueDodgeHideAnim
@@ -475,79 +475,12 @@ return function(mod)
         local maybeQueueSameTurnCounter
         local clearAmbientStance
         local tickAmbientStance
-        local publishChipState
-
-        local function freshMomentum()
-            return {
-                mode = nil,
-                boosted = false,
-                enemyActedThisTurn = false,
-                playerActedThisTurn = false,
-                pickOfferedThisTurn = false,
-                awaitingPick = nil,
-                pendingDamage = nil,
-                -- Committed STATUS CHIP lines (updated only after callouts settle).
-                chipYou = nil,
-                chipFoe = nil,
-                chipPulseYou = 0,
-                chipPulseFoe = 0,
-                -- Temporary cover buffs from dodge/brace; cleared on your attack.
-                -- entrenched: strong brace — near-max DEF while you wait to counter;
-                -- foe can rarely "break through" and strip it before damage.
-                -- entrenchTurns: STAY count while locked in (max S.ENTRENCH_MAX_TURNS).
-                temp = {
-                    evasion = 0,
-                    defense = 0,
-                    cover = false,
-                    picHidden = false,
-                    entrenched = false,
-                    entrenchTurns = 0,
-                    -- Hid/flew to a spot (not a plain sidestep) — STAY allowed.
-                    hidAway = false,
-                    -- ROCK / TREE / DIVE / FLY UP / … — flavors deep-cover locks.
-                    coverSpot = nil,
-                    -- This turn: stuck deep in cover (no STRIKE, no dodge/brace callout).
-                    deepCover = false,
-                    deepCoverRolled = false,
-                    -- Set only on a successful dodge this swing (gates same-turn COUNTER!).
-                    dodgedOk = false,
-                },
-                -- Trainer-foe mirror: temp buffs clear when the foe attacks.
-                enemyTemp = { evasion = 0, defense = 0, cover = false },
-                enemyMode = nil,
-                enemyBoosted = false,
-                enemyReactedThisTurn = false,
-            }
-        end
 
         local function momentumState(battle)
-            local state = momentumByBattle[battle]
-            if not state then
-                state = freshMomentum()
-                momentumByBattle[battle] = state
+            if React then
+                return React.state(battle)
             end
-            if not state.temp then
-                state.temp = {
-                    evasion = 0,
-                    defense = 0,
-                    cover = false,
-                    picHidden = false,
-                    entrenched = false,
-                    entrenchTurns = 0,
-                    hidAway = false,
-                    coverSpot = nil,
-                    deepCover = false,
-                    deepCoverRolled = false,
-                    dodgedOk = false,
-                }
-            end
-            if state.temp.entrenchTurns == nil then
-                state.temp.entrenchTurns = 0
-            end
-            if not state.enemyTemp then
-                state.enemyTemp = { evasion = 0, defense = 0, cover = false }
-            end
-            return state
+            return { temp = {}, enemyTemp = {} }
         end
 
         do
@@ -592,7 +525,7 @@ return function(mod)
             dev.fmtTemp = fmtTemp
 
             dev.peek = function(battle)
-                return battle and momentumByBattle[battle] or nil
+                return React and React.peek(battle) or nil
             end
 
             function dev.stage(battler, stat)
@@ -683,55 +616,21 @@ return function(mod)
         end
 
         local function resetMomentum(battle)
-            if not battle then
-                return
+            if React then
+                React.reset(battle)
             end
-            local prev = momentumByBattle[battle]
-            local keepTemp = prev and prev.temp
-            local keepEnemyTemp = prev and prev.enemyTemp
-            -- Never carry deferred pick menus across turns — a leftover OPENING!
-            -- COUNTER/HOLD would pop at the start of the next turn before anyone acts.
-            if prev and prev.awaitingPick == "counter" then
-                prev.mode = nil
-                prev.boosted = false
-                prev.foeWhiffDamage = nil
-            end
-            -- Keep unused counters armed across the turn boundary.
-            local keepCounter = prev and prev.mode == "counter" and not prev.boosted
-            local keepEnemyCounter = prev and prev.enemyMode == "counter" and not prev.enemyBoosted
-            momentumByBattle[battle] = freshMomentum()
-            if keepTemp then
-                momentumByBattle[battle].temp = keepTemp
-            end
-            if keepEnemyTemp then
-                momentumByBattle[battle].enemyTemp = keepEnemyTemp
-            end
-            if keepCounter then
-                momentumByBattle[battle].mode = "counter"
-                momentumByBattle[battle].boosted = false
-            end
-            if keepEnemyCounter then
-                momentumByBattle[battle].enemyMode = "counter"
-                momentumByBattle[battle].enemyBoosted = false
-            end
-            -- Battle-owned latches survive hot-reload weak-table resets.
-            battle._arSuppressReactDefer = nil
-            battle._arPickOfferedThisTurn = nil
         end
 
         local function clearBattleMomentum(battle)
             if battle then
                 clearAmbientStance(battle)
-                local st = momentumByBattle[battle]
-                local cameo = st and st.banterCameo
-                if cameo and cameo.forcedTrainer then
-                    battle.showEnemyTrainer = cameo.prevShowEnemyTrainer and true or false
-                end
             end
             if not battle then
                 return
             end
-            momentumByBattle[battle] = freshMomentum()
+            if React then
+                React.clear(battle)
+            end
         end
 
         local function foeMoveIsSpecial(move)
@@ -770,10 +669,10 @@ return function(mod)
         end
 
         local function playerHasCounter(battle)
-            if not opt("momentum_counter") or not battle then
+            if not opt("momentum_counter") or not battle or not React then
                 return false
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             return state and state.mode == "counter" and not state.boosted
         end
 
@@ -877,167 +776,14 @@ return function(mod)
             return r() < 0.18
         end
 
-        -- Per-battle effort tracking (Gen 1 stat exp consolation + underdog XP).
-        local effortByBattle = setmetatable({}, { __mode = "k" })
-        local Stats = require("src.pokemon.Stats")
-
-        local function effortState(battle)
-            local state = effortByBattle[battle]
-            if not state then
-                state = { mons = {} }
-                effortByBattle[battle] = state
-            end
-            return state
-        end
-
-        local function effortRec(battle, mon)
-            if not battle or not mon then
-                return nil
-            end
-            local state = effortState(battle)
-            local rec = state.mons[mon]
-            if not rec then
-                rec = { damage = 0, moves = 0, fainted = false, effortPaid = false }
-                state.mons[mon] = rec
-            end
-            return rec
-        end
-
-        local function clearEffort(battle)
-            if battle then
-                effortByBattle[battle] = { mons = {} }
-            end
-        end
-
-        local function performedWell(rec, enemy)
-            if not rec or (rec.damage or 0) <= 0 then
-                return false
-            end
-            local maxHp = enemy and enemy.mon and enemy.mon.stats and enemy.mon.stats.hp
-            maxHp = tonumber(maxHp) or 0
-            if maxHp > 0 and rec.damage >= math.max(1, math.floor(maxHp * 0.25)) then
-                return true
-            end
-            return (rec.moves or 0) >= 2 and rec.damage >= 5
-        end
-
-        S.EFFORT_LINES = {
-            "%s grew\nfrom the effort!",
-            "%s learned\nfrom that fight!",
-            "Hard fight-\n%s grew a bit!",
-            "%s's effort\nwasn't wasted!",
-        }
-
-        local function awardEffortConsolation(battle, mon, foeDef)
-            if not mon or not foeDef or type(foeDef.baseStats) ~= "table" then
-                return false
-            end
-            if type(mon.statExp) ~= "table" then
-                mon.statExp = {}
-            end
-            local order = Stats.ORDER or { "hp", "attack", "defense", "speed", "special" }
-            local any = false
-            for i = 1, #order do
-                local key = order[i]
-                local base = tonumber(foeDef.baseStats[key]) or 0
-                -- About 1/5 of a normal undivided base-stat yield (capped effort).
-                local gain = math.max(1, math.floor(base / 5))
-                local before = mon.statExp[key] or 0
-                mon.statExp[key] = math.min(65535, before + gain)
-                if mon.statExp[key] > before then
-                    any = true
-                end
-            end
-            -- Tiny EXP crumb so the fight still "counts" without a full share.
-            if any then
-                local crumb = math.max(1, math.min(8, math.floor((foeDef.baseExp or 16) / 8)))
-                mon.exp = (mon.exp or 0) + crumb
-            end
-            if not any or not battle or type(battle.sayNext) ~= "function" then
-                return any
-            end
-            local name = mon.nickname
-            if not name or name == "" then
-                local def = battle.data and battle.data.pokemon and battle.data.pokemon[mon.species]
-                name = def and def.name or "POKéMON"
-            end
-            local line = pickLine(S.EFFORT_LINES) or "%s grew\nfrom the effort!"
-            battle:sayNext(line:format(name))
-            return true
-        end
-
-        -- Much-weaker KO → bonus EXP (exp.gain runs per receiving mon).
-        mod.hooks:wrap("exp.gain", function(next, ctx)
-            local exp = next(ctx)
-            if not opt("underdog_exp") or type(exp) ~= "number" then
-                return exp
-            end
-            local mon = ctx and ctx.mon
-            local foeLv = ctx and ctx.level
-            if not mon or not foeLv or (mon.hp or 0) <= 0 then
-                return exp
-            end
-            local gap = (tonumber(foeLv) or 0) - (tonumber(mon.level) or 0)
-            local mult = 1
-            if gap >= 8 then
-                mult = 1.5
-            elseif gap >= 4 then
-                mult = 1.25
-            else
-                return exp
-            end
-            local boosted = math.max(1, math.floor(exp * mult))
-            -- Cap: never more than +50% or +80 raw over the vanilla share.
-            return math.min(boosted, math.floor(exp * 1.5), exp + 80)
-        end)
-
-        -- Fainted mons who fought well still get Gen 1 stat exp (effort).
-        mod.hooks:wrap("battle.exp_award", function(next, ctx)
-            next(ctx)
-            if not opt("effort_faint") or not ctx or not ctx.battle then
-                return
-            end
-            local battle = ctx.battle
-            local state = effortByBattle[battle]
-            if not state or not state.mons then
-                return
-            end
-            local foeDef = battle.enemy and battle.enemy.def
-            if not foeDef then
-                return
-            end
-            for mon, rec in pairs(state.mons) do
-                if rec and rec.fainted and not rec.effortPaid
-                    and performedWell(rec, battle.enemy) then
-                    if awardEffortConsolation(battle, mon, foeDef) then
-                        rec.effortPaid = true
-                    end
-                end
-            end
-        end)
-
         mod.events:on("battle.started", function(ev)
             if ev and ev.battle then
                 lowWarned[ev.battle] = { player = false, enemy = false }
                 clearBattleMomentum(ev.battle)
-                clearEffort(ev.battle)
                 clearCalloutPickState(ev.battle)
                 if ReactiveDefense then
                     ReactiveDefense.clear(ev.battle)
                     ReactiveDefense.state(ev.battle)
-                end
-                -- DS cover stamps only. FIELD arena snapshot/restore is owned by field_battle/.
-                local fieldOn = FieldBattleViewer and type(FieldBattleViewer.enabled) == "function"
-                    and FieldBattleViewer.enabled(mod)
-                if not fieldOn then
-                    ev.battle._arRestoreMap = function()
-                        if type(dev.restoreBattleCoverProps) == "function" then
-                            pcall(dev.restoreBattleCoverProps)
-                        end
-                    end
-                    if type(dev.stampBattleCoverProps) == "function" then
-                        pcall(dev.stampBattleCoverProps, ev.battle)
-                    end
                 end
             end
         end)
@@ -1047,9 +793,6 @@ return function(mod)
                 resolvePendingDamage(ev.battle)
                 clearCalloutPickState(ev.battle)
                 clearAmbientStance(ev.battle)
-                if type(dev.restoreBattleCoverProps) == "function" then
-                    pcall(dev.restoreBattleCoverProps)
-                end
                 ev.battle._arRestoreMap = nil
                 if type(dev.clearFocusCoverVisual) == "function" then
                     dev.clearFocusCoverVisual(ev.battle, false)
@@ -1064,7 +807,7 @@ return function(mod)
             resetMomentum(ev and ev.battle)
             local battle = ev and ev.battle
             if battle then
-                local st = momentumByBattle[battle]
+                local st = React.peek(battle)
                 -- Fresh roll each turn for deep-cover lock / same-turn dodge flag.
                 if st and st.temp then
                     st.temp.deepCover = false
@@ -1076,7 +819,6 @@ return function(mod)
                     st.keepDodgeMissAnim = nil
                     st.dodgeMissName = nil
                 end
-                publishChipState(battle)
                 dev.log(battle, "TURN start",
                     string.format("keepCounter=%s youTmp=%s foeTmp=%s",
                         (st and st.mode == "counter") and "Y" or "N",
@@ -1153,14 +895,12 @@ return function(mod)
                 ms.focusCoverSpot = nil
                 ms.mode = nil
                 ms.boosted = false
-                publishChipState(battle)
             elseif side == "enemy" then
                 local ms = momentumState(battle)
                 ms.enemyTemp = { evasion = 0, defense = 0, cover = false }
                 ms.enemyMode = nil
                 ms.enemyBoosted = false
                 ms.enemyReactedThisTurn = false
-                publishChipState(battle)
             end
             -- New battler may already be low.
             checkLowHp(battle, ev.battler)
@@ -1172,11 +912,6 @@ return function(mod)
             end
             if not ev.user.isPlayer then
                 return
-            end
-            local mon = ev.user.mon
-            local rec = effortRec(ev.battle, mon)
-            if rec then
-                rec.moves = (rec.moves or 0) + 1
             end
             -- Damaging attack this turn — used for same-round counter after a dodge.
             local move = ev.move
@@ -1190,10 +925,6 @@ return function(mod)
                 return
             end
             if ev.battler.isPlayer then
-                local rec = effortRec(ev.battle, ev.battler.mon)
-                if rec then
-                    rec.fainted = true
-                end
                 -- Mid-pick faint should not leave a deferred hit hanging.
                 resolvePendingDamage(ev.battle)
                 clearCalloutPickState(ev.battle)
@@ -1207,13 +938,6 @@ return function(mod)
                 return
             end
             local user, target = ev.user, ev.target
-            if user and user.isPlayer and target and not target.isPlayer
-                and (ev.damage or 0) > 0 then
-                local rec = effortRec(ev.battle, user.mon)
-                if rec then
-                    rec.damage = (rec.damage or 0) + (ev.damage or 0)
-                end
-            end
             if not opt("momentum_counter") then
                 return
             end
@@ -1239,7 +963,7 @@ return function(mod)
             if target and (ev.damage or 0) > 0 then
                 announceCoverHit(ev.battle, target)
             elseif target and target.isPlayer then
-                local st = momentumByBattle[ev.battle]
+                local st = React.peek(ev.battle)
                 if st and st.breakthroughPending then
                     announceCoverHit(ev.battle, target)
                 end
@@ -1342,7 +1066,7 @@ return function(mod)
             -- Residual poison/burn and other non-damage_dealt drains.
             checkLowHp(battle, battle.player)
             checkLowHp(battle, battle.enemy)
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             if state then
                 state.breakthroughPending = nil
             end
@@ -1412,7 +1136,7 @@ return function(mod)
                 end
             end
 
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             if not state or dmg <= 0 then
                 return dmg, info
             end
@@ -2331,34 +2055,6 @@ return function(mod)
             gym = "PILLAR",
             indoor = "COVER",
         }
-        -- STATUS CHIPS: cover label → short English (fits under mon name).
-        S.CHIP_SPOT_PHRASE = {
-            GRASS = "in brush",
-            BRUSH = "in brush",
-            TREE = "up a tree",
-            ROCK = "behind rocks",
-            BOULDER = "behind rocks",
-            LEDGE = "on a ledge",
-            CLIFF = "on a cliff",
-            STONE = "by a stone",
-            SHADOW = "in the dark",
-            CART = "by a cart",
-            ALLEY = "in an alley",
-            PATH = "off the path",
-            PILLAR = "by pillars",
-            COURT = "on court",
-            WALL = "by a wall",
-            COVER = "in cover",
-            ["FLY UP"] = "in the air",
-            DIVE = "underwater",
-            SPLASH = "in water",
-            SHORE = "by water",
-            ZIP = "zipping by",
-            BURST = "in smoke",
-            FADE = "faded out",
-            SENSE = "out of mind",
-        }
-        S.CHIP_FALLBACK_SPOT = "in cover"
         -- Idle pulses while braced / hiding during the command menu.
         S.AMBIENT_DELAY = 2.2
         S.AMBIENT_DELAY_JITTER = 1.0
@@ -3348,7 +3044,7 @@ return function(mod)
             if not opt("momentum_counter") or not battle or not target then
                 return
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             if not state then
                 return
             end
@@ -3388,7 +3084,7 @@ return function(mod)
             if type(text) ~= "string" or not text:lower():find("attack missed", 1, true) then
                 return text, false
             end
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             if not state or not state.keepDodgeMissAnim then
                 return text, false
             end
@@ -3411,7 +3107,7 @@ return function(mod)
 
         -- Drop orphaned dodge-miss lines that somehow landed after COUNTER!.
         local function scrubLateDodgeWhiff(battle)
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             if state then
                 state.keepDodgeMissAnim = false
                 state.dodgeMissName = nil
@@ -3640,8 +3336,6 @@ return function(mod)
         -- Trainer slides on-screen while their banter line plays.
         S.BANTER_CAMEO_IN = 14
         S.BANTER_CAMEO_OUT = 12
-        -- 3D-BTL: orbit toward side-on (0..1) while the trainer talks.
-        S.BANTER_CAMEO_ORBIT = 0.38
         -- Speech bubbles: slower glyphs; after typing they wait for A/B (no auto).
         S.BUBBLE_AUTO_DELAY = 75 -- kept for non-bubble fallbacks / legacy callers
         -- Effective frames/glyph while a bubble is up (engine slow is 5).
@@ -3651,8 +3345,9 @@ return function(mod)
 
         local function fieldFlowsText(battle)
             return type(battle) == "table"
-                and (battle._arAnimeField or battle._arFieldCombat
-                    or battle._arFieldStandalone)
+                and FieldBattleViewer
+                and type(FieldBattleViewer.isFieldBattle) == "function"
+                and FieldBattleViewer.isFieldBattle(battle)
         end
 
         local function liveFieldSession(battle)
@@ -4067,102 +3762,8 @@ return function(mod)
             end
         end
         -- Banter cameo: slide the enemy trainer pic in from the right while their
-        -- line is up. Flat battles draw in battle.overlay. Under 3D-BTL the fight
-        -- is in the world — briefly show the intro trainer on the enemy billboard
-        -- and ease the camera toward that side. Packed as one table for LuaJIT.
+        -- line is up. Packed as one table for LuaJIT. 2D overlay only.
         local BanterCameo = {}
-        BanterCameo.OW_MODS = { "DRAMATIC_SHAPE", "potato_voxel" }
-
-        function BanterCameo.owLive(battle)
-            if type(battle) ~= "table" or not mod.find then
-                return false
-            end
-            for i = 1, #BanterCameo.OW_MODS do
-                local handle = mod.find(BanterCameo.OW_MODS[i])
-                local lib = handle and handle.exports and handle.exports.lib
-                if lib and type(lib.require) == "function" then
-                    local ok, OW = pcall(lib.require, "OverworldBattle")
-                    if ok and type(OW) == "table" and type(OW.enabled) == "function"
-                        and OW.enabled() then
-                        -- Only when this fight is actually staged on the map.
-                        local staged = true
-                        if type(OW.shot) == "function" then
-                            staged = OW.shot() and true or false
-                        end
-                        if staged and type(OW.battle) == "function" then
-                            local live = OW.battle()
-                            if live and live ~= battle then
-                                staged = false
-                            end
-                        end
-                        if staged then
-                            return true, lib
-                        end
-                    end
-                end
-            end
-            return false
-        end
-
-        function BanterCameo.armCam(lib, cameo)
-            if not (lib and cameo and type(lib.require) == "function") then
-                return false
-            end
-            local ok, Cam = pcall(lib.require, "BattleCam")
-            if not (ok and type(Cam) == "table") then
-                return false
-            end
-            -- BACK SPRITES pins half the composition; swinging breaks it.
-            if Cam.steerable == false then
-                return false
-            end
-            cameo.cam = Cam
-            cameo.prevOrbitGoal = tonumber(Cam.orbitGoal) or 0
-            cameo.prevPitchGoal = tonumber(Cam.pitchGoal) or 0
-            -- Mild nudge — hard side-on swung the foe/trainer out of frame.
-            local target = S.BANTER_CAMEO_ORBIT or 0.38
-            if (cameo.prevOrbitGoal or 0) < target then
-                Cam.orbitGoal = target
-            end
-            cameo.cameoOrbit = Cam.orbitGoal
-            return true
-        end
-
-        function BanterCameo.releaseCam(cameo)
-            local Cam = cameo and cameo.cam
-            if not Cam then
-                return
-            end
-            if cameo.prevOrbitGoal ~= nil then
-                Cam.orbitGoal = cameo.prevOrbitGoal
-            end
-            if cameo.prevPitchGoal ~= nil then
-                Cam.pitchGoal = cameo.prevPitchGoal
-            end
-            cameo.cam = nil
-        end
-
-        -- 3D-BTL: put the trainer on the enemy world billboard (same seam as the
-        -- battle intro).
-        function BanterCameo.showTrainer(battle, cameo)
-            if not (battle and cameo and cameo.ow) or cameo.forcedTrainer then
-                return
-            end
-            if not (battle.trainerPic or battle.enemyTrainerImage) then
-                return
-            end
-            cameo.prevShowEnemyTrainer = battle.showEnemyTrainer and true or false
-            battle.showEnemyTrainer = true
-            cameo.forcedTrainer = true
-        end
-
-        function BanterCameo.hideTrainer(battle, cameo)
-            if not (battle and cameo and cameo.forcedTrainer) then
-                return
-            end
-            battle.showEnemyTrainer = cameo.prevShowEnemyTrainer and true or false
-            cameo.forcedTrainer = false
-        end
 
         function BanterCameo.image(battle)
             if type(battle) ~= "table" then
@@ -4227,11 +3828,7 @@ return function(mod)
             if battle.showEnemyTrainer then
                 return
             end
-            local ow = BanterCameo.owLive(battle)
-            if not ow and not BanterCameo.image(battle) then
-                return
-            end
-            if ow and not (battle.trainerPic or battle.enemyTrainerImage) then
+            if not BanterCameo.image(battle) then
                 return
             end
             local state = momentumState(battle)
@@ -4242,7 +3839,7 @@ return function(mod)
             if type(battle) ~= "table" then
                 return
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             if not state then
                 return
             end
@@ -4255,34 +3852,20 @@ return function(mod)
                 and session._trainerCallouts.foe
             local overlayBanter = type(foeToasts) == "table" and #foeToasts > 0
             if not cameo and wanted and (overlayBanter or (cur and cur.arBanter)) then
-                if not battle.showEnemyTrainer then
-                    local ow, lib = BanterCameo.owLive(battle)
-                    if ow or BanterCameo.image(battle) then
-                        state.banterCameo = {
-                            mode = "in",
-                            frame = 0,
-                            line = (wanted ~= true and wanted)
-                                or (cur and cur.text) or nil,
-                            ow = ow and true or false,
-                        }
-                        cameo = state.banterCameo
-                        if ow then
-                            BanterCameo.armCam(lib, cameo)
-                            BanterCameo.showTrainer(battle, cameo)
-                        end
-                    end
+                if not battle.showEnemyTrainer and BanterCameo.image(battle) then
+                    state.banterCameo = {
+                        mode = "in",
+                        frame = 0,
+                        line = (wanted ~= true and wanted)
+                            or (cur and cur.text) or nil,
+                    }
+                    cameo = state.banterCameo
                 end
                 state.banterCameoWanted = nil
             end
 
             if not cameo then
                 return
-            end
-
-            -- Keep the banter orbit pinned while the line is up (player steer can
-            -- fight it otherwise).
-            if cameo.ow and cameo.cam and cameo.mode ~= "out" and cameo.cameoOrbit then
-                cameo.cam.orbitGoal = cameo.cameoOrbit
             end
 
             if cameo.mode == "in" then
@@ -4295,13 +3878,10 @@ return function(mod)
                 if not BanterCameo.stillShowing(battle, cameo.line) then
                     cameo.mode = "out"
                     cameo.frame = 0
-                    BanterCameo.releaseCam(cameo)
                 end
             elseif cameo.mode == "out" then
                 cameo.frame = (cameo.frame or 0) + 1
                 if cameo.frame >= (S.BANTER_CAMEO_OUT or 12) then
-                    BanterCameo.hideTrainer(battle, cameo)
-                    BanterCameo.releaseCam(cameo)
                     state.banterCameo = nil
                 end
             end
@@ -4311,13 +3891,9 @@ return function(mod)
             if not opt("trainer_banter") then
                 return
             end
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             local cameo = state and state.banterCameo
             if not cameo or not love or not love.graphics then
-                return
-            end
-            -- 3D-BTL: trainer is on the world billboard via showEnemyTrainer.
-            if cameo.ow then
                 return
             end
             if battle.showEnemyTrainer then
@@ -4632,7 +4208,7 @@ return function(mod)
 
         -- After a counter attempt resolves: sometimes snap-back on whiff.
         local function resolvePlayerCounterAttempt(battle, connected)
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             if not state then
                 return false
             end
@@ -4656,15 +4232,8 @@ return function(mod)
 
         -- Re-arm Battle Cinematics attack cameras for swings we fire
         -- outside a normal resolveTurn (Again!, same-turn COUNTER!, menu waits…).
-        -- Also clears banter orbit / trainer billboard so the attack cam can take over.
         local function resetBattleCamera(battle)
             clearAmbientStance(battle)
-            local state = battle and momentumByBattle[battle]
-            local cameo = state and state.banterCameo
-            if cameo then
-                BanterCameo.releaseCam(cameo)
-                BanterCameo.hideTrainer(battle, cameo)
-            end
             local bc = mod.find and mod.find("BATTLE_CINEMATICS")
             if bc and bc.exports and type(bc.exports.activity) == "function" then
                 pcall(bc.exports.activity)
@@ -5014,7 +4583,7 @@ return function(mod)
             end
             -- STAY re-hide / auto path: reuse the remembered cover spot.
             if label == "" and battle then
-                local st = momentumByBattle[battle]
+                local st = React.peek(battle)
                 if st and st.temp and st.temp.coverSpot then
                     label = tostring(st.temp.coverSpot):upper()
                 end
@@ -5223,7 +4792,8 @@ return function(mod)
             end
             -- FIELD combat: OW sprite tuck behind real props. Skip Dig/Fly/etc.
             -- thematic anims that stamp cover shapes onto the map stage.
-            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
+            if FieldBattleViewer and type(FieldBattleViewer.isFieldBattle) == "function"
+                and FieldBattleViewer.isFieldBattle(battle) then
                 return
             end
             if battle.animationsOn and not battle:animationsOn() then
@@ -5310,7 +4880,8 @@ return function(mod)
             end
             opts = opts or {}
             -- FIELD: brace is the OW sprite crouch — skip classic BARRIER/etc. FX.
-            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
+            if FieldBattleViewer and type(FieldBattleViewer.isFieldBattle) == "function"
+                and FieldBattleViewer.isFieldBattle(battle) then
                 return
             end
             local foeSide = opts.foe == true
@@ -5464,7 +5035,7 @@ return function(mod)
             if not battle then
                 return
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             if state then
                 state.focusCoverSpot = nil
                 state.coverHideWorld = nil
@@ -5562,7 +5133,7 @@ return function(mod)
             if not battle then
                 return
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             if not (state and state.coverTucked) then
                 return
             end
@@ -5579,22 +5150,7 @@ return function(mod)
             end
         end
 
-        -- Dramatic Shape OverworldBattle (cover stamps on staged 3D fights).
-        dev.findDsLib = function()
-            if not mod.find then
-                return nil
-            end
-            local ids = { "DRAMATIC_SHAPE", "potato_voxel" }
-            for i = 1, #ids do
-                local handle = mod.find(ids[i])
-                local lib = handle and handle.exports and handle.exports.lib
-                if lib and type(lib.require) == "function" then
-                    return lib
-                end
-            end
-            return nil
-        end
-
+        -- BATTLE STAGE preference (AUTO / FIELD).
         -- BATTLE STAGE preference (AUTO / FIELD).
         dev.battleStage = function()
             return battleStage()
@@ -5622,7 +5178,8 @@ return function(mod)
                 return
             end
             -- FIELD: OW sprites + projectiles own the react beat.
-            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone then
+            if FieldBattleViewer and type(FieldBattleViewer.isFieldBattle) == "function"
+                and FieldBattleViewer.isFieldBattle(battle) then
                 if FieldBattleViewer and type(FieldBattleViewer.react) == "function" then
                     local kind = tostring(action or "")
                     if kind == "dodge" or kind == "cover" or kind == "brace"
@@ -5713,484 +5270,11 @@ return function(mod)
             end
         end
 
-        -- Chunky 2.5D voxel cube (Dramatic Shape aesthetic) for cover props.
-        dev.drawVoxelCube = function(g, cx, cy, s, r, gg, b, a)
-            local d = math.max(2, math.floor(s * 0.42 + 0.5))
-            local h = s
-            local x0 = cx - s * 0.5
-            local y0 = cy - h * 0.5
-            g.setColor(r * 0.72, gg * 0.72, b * 0.72, a)
-            g.rectangle("fill", x0, y0, s, h)
-            g.setColor(r, gg, b, a)
-            g.polygon("fill",
-                x0, y0,
-                x0 + d, y0 - d,
-                x0 + s + d, y0 - d,
-                x0 + s, y0)
-            g.setColor(r * 0.48, gg * 0.48, b * 0.48, a)
-            g.polygon("fill",
-                x0 + s, y0,
-                x0 + s + d, y0 - d,
-                x0 + s + d, y0 + h - d,
-                x0 + s, y0 + h)
-        end
-
-        -- Voxel-style cover prop (tree / rock / splash / …) while Focus-covered.
-        -- Prefer real map stamps when 3D arena props were placed; HUD is fallback.
-        dev.drawCoverProp = function(battle)
-            if not ReactiveDefense or not battle or not (love and love.graphics) then
-                return
-            end
-            -- FIELD: never paint HUD cover cubes — tuck uses real map props only.
-            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone
-                or (FieldBattleViewer and FieldBattleViewer.enabled
-                    and FieldBattleViewer.enabled(mod)) then
-                return
-            end
-            local side = ReactiveDefense.sideState(battle, true)
-            if not side or not side.cover then
-                return
-            end
-            local state = momentumByBattle[battle]
-            if state and state.worldCoverProps then
-                -- World trees/rocks are in the shot; keep the mon visible but tucked.
-                if type(dev.applyCoverTuckVisual) == "function" then
-                    pcall(dev.applyCoverTuckVisual, battle)
-                end
-                return
-            end
-            -- Flat fallback: nudge pic behind the HUD prop instead of vanishing.
-            if battle.picFxFor and battle.player then
-                local pf = battle:picFxFor(battle.player)
-                if pf and not pf.kind then
-                    pf.hidden = nil
-                    pf.ox = (state and state.coverHidePicOx) or -12
-                    pf.oy = (state and state.coverHidePicOy) or 4
-                end
-            end
-            local spot = tostring((state and state.focusCoverSpot)
-                or (state and state.temp and state.temp.coverSpot)
-                or "ROCK"):upper()
-            local g = love.graphics
-            -- Classic player backsprite box sits lower-left; prop sits in front.
-            local ox, oy = 36, 78
-            local kind = "boulder"
-            if spot == "TREE" or spot == "GRASS" or spot == "BRUSH" then
-                kind = "tree"
-            elseif spot == "DIVE" or spot == "SPLASH" or spot == "SHORE" then
-                kind = "water"
-            elseif spot == "FLY UP" then
-                kind = "cloud"
-            elseif spot == "SHADOW" or spot == "FADE" then
-                kind = "shadow"
-            elseif spot == "BURST" then
-                kind = "ember"
-            elseif spot == "ZIP" then
-                kind = "spark"
-            end
-
-            g.push("all")
-            local pulse = ((battle.frame or 0) % 40) < 20 and 1 or 0.92
-            local a = 0.96 * pulse
-            local cube = dev.drawVoxelCube
-            if kind == "boulder" then
-                cube(g, ox + 8, oy + 6, 10, 0.42, 0.38, 0.34, a)
-                cube(g, ox + 18, oy + 4, 12, 0.52, 0.48, 0.42, a)
-                cube(g, ox + 12, oy - 2, 9, 0.58, 0.54, 0.48, a)
-                cube(g, ox + 22, oy + 8, 7, 0.36, 0.33, 0.30, a)
-            elseif kind == "tree" then
-                cube(g, ox + 14, oy + 10, 5, 0.42, 0.28, 0.14, a)
-                cube(g, ox + 14, oy + 5, 5, 0.48, 0.32, 0.16, a)
-                cube(g, ox + 10, oy - 2, 9, 0.22, 0.48, 0.24, a)
-                cube(g, ox + 18, oy - 4, 10, 0.28, 0.55, 0.28, a)
-                cube(g, ox + 14, oy - 10, 8, 0.34, 0.62, 0.32, a)
-                cube(g, ox + 6, oy + 2, 7, 0.20, 0.42, 0.22, a)
-            elseif kind == "water" then
-                cube(g, ox + 6, oy + 8, 8, 0.28, 0.48, 0.78, a * 0.75)
-                cube(g, ox + 16, oy + 6, 10, 0.35, 0.58, 0.88, a * 0.8)
-                cube(g, ox + 12, oy + 2, 7, 0.55, 0.78, 0.98, a * 0.7)
-            elseif kind == "cloud" then
-                cube(g, ox + 6, oy + 2, 8, 0.90, 0.92, 0.96, a)
-                cube(g, ox + 16, oy - 2, 10, 0.94, 0.96, 0.99, a)
-                cube(g, ox + 24, oy + 2, 7, 0.88, 0.90, 0.95, a)
-                cube(g, ox + 12, oy - 8, 5, 0.82, 0.88, 0.98, a * 0.75)
-                cube(g, ox + 20, oy - 10, 4, 0.78, 0.86, 1.00, a * 0.65)
-            elseif kind == "shadow" then
-                cube(g, ox + 10, oy + 4, 12, 0.18, 0.12, 0.28, a * 0.7)
-                cube(g, ox + 18, oy, 8, 0.32, 0.18, 0.42, a * 0.65)
-            elseif kind == "ember" then
-                cube(g, ox + 10, oy + 8, 8, 0.62, 0.16, 0.04, a)
-                cube(g, ox + 12, oy + 2, 6, 0.95, 0.40, 0.08, a)
-                cube(g, ox + 13, oy - 4, 4, 1.00, 0.78, 0.18, a)
-                cube(g, ox + 14, oy - 9, 3, 1.00, 0.95, 0.55, a * 0.9)
-            else -- spark / crate
-                cube(g, ox + 10, oy + 2, 10, 0.58, 0.42, 0.20, a)
-                cube(g, ox + 18, oy - 2, 8, 0.68, 0.52, 0.26, a)
-            end
-            g.setColor(1, 1, 1, 1)
-            g.pop()
-        end
-
-        -- Restore map blocks stamped for battle cover props.
-        dev.restoreBattleCoverProps = function()
-            local edits = dev._coverPropEdits
-            if type(edits) ~= "table" then
-                return
-            end
-            for i = #edits, 1, -1 do
-                local e = edits[i]
-                if e and e.map and type(e.map.setBlock) == "function" then
-                    pcall(function()
-                        if mod.world and type(mod.world.replaceBlock) == "function" then
-                            mod.world:replaceBlock(e.bx, e.by, e.prev)
-                        else
-                            e.map:setBlock(e.bx, e.by, e.prev)
-                        end
-                    end)
-                end
-                edits[i] = nil
-            end
-            dev._coverPropEdits = nil
-            if type(dev._coverPropBattle) == "table" then
-                local st = momentumByBattle[dev._coverPropBattle]
-                if st then
-                    st.worldCoverProps = nil
-                    st.coverPropSlots = nil
-                    st.coverHideWorld = nil
-                    st.coverTucked = nil
-                end
-                dev._coverPropBattle = nil
-            end
-        end
-
-        -- Pick a Cut-tree / rock block id from the live tileset.
-        dev.pickCoverBlockId = function(map, battle, wantTree)
-            if not (map and map.tileset and type(map.tileset.blocks) == "table") then
-                return nil
-            end
-            local blocks = map.tileset.blocks
-            local data = battle and battle.game and battle.game.data
-            if wantTree then
-                local swaps = data and data.field and data.field.cutTreeSwaps
-                if type(swaps) == "table" then
-                    for i = 1, #swaps do
-                        local sw = swaps[i]
-                        local before = sw and tonumber(sw.before)
-                        if before and type(blocks[before + 1]) == "table" then
-                            return before
-                        end
-                    end
-                end
-                -- Lone canopy / cuttable sapling tile patterns (OVERWORLD / GYM / …).
-                local treeTiles = {
-                    [42] = true,
-                    [43] = true,
-                    [58] = true,
-                    [59] = true,
-                    [45] = true,
-                    [46] = true,
-                    [61] = true,
-                    [62] = true,
-                    [4] = true,
-                    [5] = true,
-                    [6] = true,
-                    [7] = true,
-                }
-                local best, bestN = nil, 0
-                for id = 0, #blocks - 1 do
-                    local b = blocks[id + 1]
-                    if type(b) == "table" then
-                        local n = 0
-                        for t = 1, 16 do
-                            if treeTiles[b[t]] then
-                                n = n + 1
-                            end
-                        end
-                        if n > bestN then
-                            best, bestN = id, n
-                        end
-                    end
-                end
-                if bestN >= 2 then
-                    return best
-                end
-            end
-            -- Rock / boulder tiles across cavern / gym / plateau atlases.
-            local rockTiles = {
-                [7] = true,
-                [8] = true,
-                [23] = true,
-                [24] = true,
-                [12] = true,
-                [13] = true,
-                [28] = true,
-                [29] = true,
-                [44] = true,
-                [45] = true,
-                [46] = true,
-                [47] = true,
-            }
-            local best, bestN = nil, 0
-            for id = 0, #blocks - 1 do
-                local b = blocks[id + 1]
-                if type(b) == "table" then
-                    local n = 0
-                    for t = 1, 16 do
-                        if rockTiles[b[t]] then
-                            n = n + 1
-                        end
-                    end
-                    if n > bestN then
-                        best, bestN = id, n
-                    end
-                end
-            end
-            if bestN >= 2 then
-                return best
-            end
-            return nil
-        end
-
-        -- Stamp real voxel trees/rocks beside the player arena cell for Cover.
-        -- Uses Map:setBlock so Dramatic Shape remeshes; restored on battle end.
-        dev.stampBattleCoverProps = function(battle)
-            if not battle or not opt("momentum_counter") then
-                return
-            end
-            -- FIELD fights must not stamp trees/rocks into the live map.
-            if battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone
-                or (FieldBattleViewer and FieldBattleViewer.enabled
-                    and FieldBattleViewer.enabled(mod)) then
-                return
-            end
-            -- Avoid double-stamp if begin-hook and battle.started both fire.
-            if type(dev._coverPropEdits) == "table" and #dev._coverPropEdits > 0 then
-                local st = momentumState(battle)
-                st.worldCoverProps = true
-                return
-            end
-            local scene = battleScene(battle)
-            if scene == "indoor" or scene == "gym" then
-                return
-            end
-            local arena, map
-            local lib = dev.findDsLib()
-            if lib then
-                local ok, OB = pcall(lib.require, "OverworldBattle")
-                if ok and type(OB) == "table" and type(OB.arena) == "function" then
-                    arena = OB.arena()
-                end
-            end
-            if not (arena and arena.playerCell and arena.enemyCell) then
-                return
-            end
-            map = arena.map
-            if not (map and type(map.setBlock) == "function" and type(map.blockAt) == "function") then
-                local ow = battle.game and battle.game.overworld
-                map = ow and ow.map
-            end
-            if not (map and type(map.setBlock) == "function" and type(map.blockAt) == "function") then
-                return
-            end
-            local wantTree = (scene == "forest" or scene == "route" or scene == "city")
-            local blockId = dev.pickCoverBlockId(map, battle, wantTree)
-            if not blockId and wantTree then
-                blockId = dev.pickCoverBlockId(map, battle, false)
-            end
-            if not blockId then
-                return
-            end
-
-            local px, py = arena.playerCell[1], arena.playerCell[2]
-            local ex, ey = arena.enemyCell[1], arena.enemyCell[2]
-            local pbx, pby = math.floor(px / 2), math.floor(py / 2)
-            local ebx, eby = math.floor(ex / 2), math.floor(ey / 2)
-            -- Fight-lane unit (player → enemy); prefer props off that axis.
-            local ldx, ldy = (ex or px) - px, (ey or py) - py
-            local llen = math.sqrt(ldx * ldx + ldy * ldy)
-            if llen > 0.001 then
-                ldx, ldy = ldx / llen, ldy / llen
-            else
-                ldx, ldy = 0, -1
-            end
-
-            local candidates = {}
-            for ox = -4, 4 do
-                for oy = -4, 4 do
-                    if not (ox == 0 and oy == 0) then
-                        local dist = math.sqrt(ox * ox + oy * oy)
-                        if dist >= 1.2 and dist <= 4.2 then
-                            local cx, cy = px + ox, py + oy
-                            if not (map.inBounds and not map:inBounds(cx, cy)) then
-                                local bx, by = math.floor(cx / 2), math.floor(cy / 2)
-                                if not (bx == pbx and by == pby) and not (bx == ebx and by == eby) then
-                                    local okCell = true
-                                    if map.warpAtCell and map:warpAtCell(cx, cy) then
-                                        okCell = false
-                                    end
-                                    if okCell and map.isWarpTileCell and map:isWarpTileCell(cx, cy) then
-                                        okCell = false
-                                    end
-                                    if okCell then
-                                        local walk = map.isWalkableCell and map:isWalkableCell(cx, cy)
-                                        local grass = map.isGrassCell and map:isGrassCell(cx, cy)
-                                        if not (walk or grass) then
-                                            okCell = false
-                                        end
-                                    end
-                                    if okCell then
-                                        -- Score: prefer flanks over the fight lane; light jitter later.
-                                        local along = ox * ldx + oy * ldy
-                                        local side = math.abs(ox * (-ldy) + oy * ldx)
-                                        local score = side * 3 - math.abs(along) + dist
-                                        -- Slight bias toward camera side (away from enemy).
-                                        if along < 0 then
-                                            score = score + 1.5
-                                        end
-                                        candidates[#candidates + 1] = {
-                                            cx = cx,
-                                            cy = cy,
-                                            bx = bx,
-                                            by = by,
-                                            score = score,
-                                            ox = ox,
-                                            oy = oy,
-                                        }
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            if #candidates == 0 then
-                return
-            end
-            table.sort(candidates, function(a, b)
-                return (a.score or 0) > (b.score or 0)
-            end)
-            -- Take a random pick from the top-scoring half so placement varies.
-            local poolN = math.max(1, math.min(#candidates, math.ceil(#candidates * 0.55)))
-            local rr = (love and love.math and love.math.random) or math.random
-            local wantCount = rr(1, 2)
-            local edits = {}
-            local slots = {}
-            local seen = {}
-            for _ = 1, wantCount do
-                if poolN < 1 then
-                    break
-                end
-                local pickIdx = rr(1, poolN)
-                local cand = candidates[pickIdx]
-                -- Swap-remove from pool so we don't stamp the same block twice.
-                candidates[pickIdx], candidates[poolN] = candidates[poolN], candidates[pickIdx]
-                poolN = poolN - 1
-                if not cand then
-                    break
-                end
-                local key = cand.bx .. "," .. cand.by
-                if not seen[key] then
-                    seen[key] = true
-                    local prev = map:blockAt(cand.bx, cand.by)
-                    local wx = cand.cx * 16 + 8
-                    local wz = cand.cy * 16 + 8
-                    local picOx = (cand.ox >= 0) and -14 or 14
-                    local picOy = (cand.oy >= 0) and 6 or 2
-                    local wrote = false
-                    if prev ~= nil and prev ~= blockId then
-                        if mod.world and type(mod.world.replaceBlock) == "function" then
-                            wrote = mod.world:replaceBlock(cand.bx, cand.by, blockId) and true or false
-                        end
-                        if not wrote then
-                            pcall(map.setBlock, map, cand.bx, cand.by, blockId)
-                            wrote = map:blockAt(cand.bx, cand.by) == blockId
-                        end
-                        if wrote then
-                            edits[#edits + 1] = {
-                                map = map,
-                                bx = cand.bx,
-                                by = cand.by,
-                                prev = prev,
-                                wx = wx,
-                                wz = wz,
-                                cx = cand.cx,
-                                cy = cand.cy,
-                                picOx = picOx,
-                                picOy = picOy,
-                            }
-                        end
-                    elseif prev == blockId then
-                        wrote = true
-                    end
-                    if wrote then
-                        slots[#slots + 1] = {
-                            x = wx,
-                            z = wz,
-                            cx = cand.cx,
-                            cy = cand.cy,
-                            picOx = picOx,
-                            picOy = picOy,
-                        }
-                    end
-                end
-            end
-
-            if #slots == 0 then
-                return
-            end
-            dev._coverPropEdits = edits
-            dev._coverPropBattle = battle
-            local st = momentumState(battle)
-            st.worldCoverProps = true
-            st.coverPropSlots = slots
-            if type(dev.log) == "function" then
-                dev.log(battle, "COVER props",
-                    string.format("stamped=%d slots=%d block=%s scene=%s",
-                        #edits, #slots, tostring(blockId), tostring(scene)))
-            end
-        end
-
-        -- Hook OverworldBattle.begin: cover stamps.
-        dev.installCoverPropStampHooks = function()
-            local lib = dev.findDsLib()
-            if not lib then
-                return
-            end
-            local ok, OB = pcall(lib.require, "OverworldBattle")
-            if not (ok and type(OB) == "table" and type(OB.begin) == "function") then
-                return
-            end
-
-            if not OB._arCoverPropBegin then
-                local inner = OB.begin
-                OB.begin = function(state, battle)
-                    local result = inner(state, battle)
-                    if result and type(dev.stampBattleCoverProps) == "function" and battle then
-                        pcall(dev.stampBattleCoverProps, battle)
-                    end
-                    return result
-                end
-                OB._arCoverPropBegin = true
-            end
-
-            if type(OB.finish) == "function" and not OB._arCoverPropFinish then
-                local innerFinish = OB.finish
-                OB.finish = function(...)
-                    if type(dev.restoreBattleCoverProps) == "function" then
-                        pcall(dev.restoreBattleCoverProps)
-                    end
-                    return innerFinish(...)
-                end
-                OB._arCoverPropFinish = true
-            end
-            dev._coverPropStampHooks = true
-        end
-
+        -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
         -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
         -- Drives animPlayer + picFx without stealing the FIGHT / STRIKE menus.
         clearAmbientStance = function(battle)
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             local owned = battle and battle._arAmbientOwned
             if battle then
                 battle._arAmbientOwned = nil
@@ -6284,7 +5368,7 @@ return function(mod)
             if not opt("momentum_counter") or type(battle) ~= "table" then
                 return
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             local phase = battle.phase
             if phase ~= "menu" and phase ~= "moveSelect" then
                 clearAmbientStance(battle)
@@ -6385,7 +5469,7 @@ return function(mod)
 
         revealPlayerPic = function(battle, withEmerge)
             clearAmbientStance(battle)
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             local wasHidden = state and state.temp and state.temp.picHidden
             local coverSpot = state and state.temp and state.temp.coverSpot
             if state and state.temp then
@@ -6431,234 +5515,35 @@ return function(mod)
             end
         end
 
+        -- REACT pick / damage deferral lives in battle/react.lua.
         clearCalloutPickState = function(battle)
-            if not battle then
-                return
-            end
-            local state = momentumByBattle[battle]
-            if state then
-                state.awaitingPick = nil
-                state.pendingDamage = nil
-                state.pendingFoeReaction = nil
-                state.suppressReactDefer = nil
-            end
-            battle._arSuppressReactDefer = nil
-            -- Issue #6: drop the sticky FIELD diamond so PKMN is reachable.
-            battle._arFieldPreferMoves = nil
-            battle._arFieldCommandHold = true
-            if battle.phase == "moveSelect" or battle.phase == "mimicSelect" then
-                battle.phase = "menu"
-            end
-            if type(battle.queue) == "table" then
-                for i = #battle.queue, 1, -1 do
-                    local row = battle.queue[i]
-                    if type(row) == "table" and row.ui then
-                        table.remove(battle.queue, i)
-                    end
-                end
-            end
-            -- Keep _arPickOfferedThisTurn until turn_started (resetMomentum).
-        end
-
-        local function scrubReactPickRows(battle)
-            if type(battle) ~= "table" or type(battle.queue) ~= "table" then
-                return
-            end
-            for i = #battle.queue, 1, -1 do
-                local row = battle.queue[i]
-                -- Strip every queued UI row when resolving a react — older hot-reload
-                -- wraps sometimes inserted untagged { ui = ... } REACT menus.
-                if type(row) == "table" and row.ui then
-                    table.remove(battle.queue, i)
-                end
-            end
-        end
-
-        -- Foe dodge/brace stashed while COUNTER/HOLD is pending (so that menu
-        -- isn't shown after "couldn't dodge!" as if they were related).
-        local function flushPendingFoeReaction(battle)
-            if not battle then
-                return
-            end
-            local state = momentumByBattle[battle]
-            local pending = state and state.pendingFoeReaction
-            if state then
-                state.pendingFoeReaction = nil
-            end
-            if not pending or not pending.moveDef then
-                return
-            end
-            local foeLine, foeBuffs, foeTrack, failNarr =
-                tryFoeCoverReaction(battle, pending.moveDef)
-            if not foeLine and not failNarr then
-                return
-            end
-            applyCalloutBuffs(battle, foeBuffs, foeTrack)
-            -- If the real move anim is already gone from the queue, shouting / sparkles
-            -- would land after damage/faint — keep the silent buffs only.
-            if not indexOfMoveAnim(battle) then
-                return
-            end
-            -- Insert fail first, then order: each insertBeforeAnim lands before anim,
-            -- so later inserts sit earlier in the queue (order → fail → anim).
-            if failNarr then
-                local failItem = {
-                    text = failNarr,
-                    auto = true,
-                    autoDelay = S.CALLOUT_AUTO_DELAY,
-                }
-                tagFieldCue(failItem, "enemy", "hit")
-                insertBeforeAnim(battle, failItem)
-            end
-            if foeLine then
-                local cue = fieldCueForFoeCover(foeBuffs, foeLine)
-                local bubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
-                if not enqueueReactWithAttack(battle, foeLine, S.CALLOUT_AUTO_DELAY,
-                    bubble, cue) then
-                    local item = {
-                        text = foeLine,
-                        auto = true,
-                        autoDelay = S.CALLOUT_AUTO_DELAY,
-                    }
-                    markBubbleWait(item, bubble, true, battle)
-                    tagFieldCue(item, cue.side, cue.kind)
-                    insertBeforeAnim(battle, item)
-                end
-            end
-            -- Physical brace: Harden-style sparkle on the foe before your hit.
-            if foeTrack and foeBuffs then
-                local braced = false
-                for i = 1, #foeBuffs do
-                    if foeBuffs[i].stat == "defense" then
-                        braced = true
-                        break
-                    end
-                end
-                if braced then
-                    enqueueBraceAnim(battle, { foe = true, beforeAnim = true })
-                end
+            if React then
+                React.clearPick(battle)
             end
         end
 
         resolvePendingDamage = function(battle)
-            if not battle then
-                return
+            if React then
+                React.resolvePending(battle)
             end
-            local state = momentumByBattle[battle]
-            if not state or not state.pendingDamage then
-                return
-            end
-            local pending = state.pendingDamage
-            local wasCounter = state.awaitingPick == "counter"
-            state.awaitingPick = nil
-            state.pendingDamage = nil
-            if wasCounter then
-                -- Abandoned menu counts as HOLD.
-                state.mode = nil
-                state.boosted = false
-            end
-            if not pending.ctx then
-                state.pendingFoeReaction = nil
-                return
-            end
-            -- Strip any leftover pick UI rows so the hit can finish.
-            if type(battle.queue) == "table" then
-                for i = #battle.queue, 1, -1 do
-                    local row = battle.queue[i]
-                    if type(row) == "table" and row.ui then
-                        table.remove(battle.queue, i)
-                    end
-                end
-            end
-            flushPendingFoeReaction(battle)
-            if type(battle.queue) == "table" then
-                battle.nextInsert = resumeInsertIndex(battle)
-            end
-            origRunDamaging(battle, pending.ctx, pending.record)
         end
 
-        local function threatWantsPick(battle, move)
-            if calloutPickMode() == "ALWAYS" then
-                return true
+        maybeQueueSameTurnCounter = function(battle)
+            if React then
+                React.maybeQueueSameTurnCounter(battle)
             end
-            if calloutPickMode() ~= "THREAT" then
-                return false
+        end
+
+        local function newCalloutPickModal(game, opts)
+            if React then
+                return React.newPickModal(game, opts)
             end
-            local player = battle and battle.player
-            local mon = player and player.mon
-            if mon and mon.stats and mon.stats.hp and mon.stats.hp > 0 then
-                if (mon.hp or 0) / mon.stats.hp <= lowHpRatio() then
-                    return true
-                end
-            end
-            local power = move and (move.power or 0) or 0
-            if power >= 80 then
-                return true
-            end
-            if power >= 40 and foeMoveIsSpecial(move) then
-                return true
-            end
-            local foeLv = battle and battle.enemy and battle.enemy.mon and battle.enemy.mon.level
-            local myLv = mon and mon.level
-            if foeLv and myLv and (foeLv - myLv) >= 5 then
-                return true
-            end
-            -- First meaningful foe hit this turn still opens the menu once.
-            local state = momentumState(battle)
-            if not state.pickOfferedThisTurn then
-                return power >= 40
-            end
-            return false
         end
 
         local function shouldOfferCalloutPick(battle, move)
-            if calloutPickMode() == "OFF" or not opt("momentum_counter") then
-                return false
-            end
-            if not battle or not move then
-                return false
-            end
-            if (move.power or 0) <= 0 or move.category == "status" then
-                return false
-            end
-            -- Frozen / asleep: can't dodge, brace, or take orders.
-            if playerStatusLocked(battle) then
-                return false
-            end
-            -- Battle-owned latches: survive hot-reload weak momentum tables and
-            -- older chained runDamaging wraps that still call shouldOffer.
-            if battle._arPickOfferedThisTurn or battle._arSuppressReactDefer then
-                return false
-            end
-            local state = momentumState(battle)
-            -- One REACT! per turn. finishCalloutPick → origRunDamaging used to
-            -- re-offer under ALWAYS (especially after TAKE COVER soaks the hit).
-            if state.pickOfferedThisTurn or state.suppressReactDefer then
-                return false
-            end
-            -- Focus trench: auto-hold in runDamaging (no REACT menu).
-            if ReactiveDefense then
-                local side = ReactiveDefense.sideState(battle, true)
-                if side and side.entrenched and (side.entrenchTurns or 0) > 0 then
-                    return false
-                end
-                return threatWantsPick(battle, move)
-            end
-            -- Legacy path (no Focus module).
-            if playerInDeepCover(battle) then
-                return false
-            end
-            if playerHoldingHide(battle) then
-                return false
-            end
-            local st = momentumByBattle[battle]
-            if st and st.temp and st.temp.entrenched then
-                return false
-            end
-            return threatWantsPick(battle, move)
+            return React and React.shouldOffer(battle, move)
         end
 
-        -- Random EVADE stages for a successful dodge (menu or auto).
         local function rollPlayerDodgeEvasion(isHide)
             local pools = S.DODGE_EVADE_ROLL or {}
             local pool = isHide and pools.hide or pools.basic
@@ -6703,970 +5588,6 @@ return function(mod)
             enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, nil)
         end
 
-        local function finishCalloutPick(battle, me, moveName, action, braceCall)
-            local state = momentumState(battle)
-            -- Latch BEFORE resolving so a nested runDamaging / sticky pad press
-            -- cannot queue another REACT! for this same hit.
-            state.pickOfferedThisTurn = true
-            state.suppressReactDefer = true
-            -- Also on the battle object so hot-reload / chained wraps see it.
-            battle._arPickOfferedThisTurn = true
-            battle._arSuppressReactDefer = true
-            state.awaitingPick = nil
-            -- Invalidate any leftover REACT ui rows still sitting in the queue.
-            state.reactEpoch = (state.reactEpoch or 0) + 1
-            local pending = state.pendingDamage
-            state.pendingDamage = nil
-            state.enemyActedThisTurn = true
-
-            -- Drop any leftover REACT! ui rows so the menu can't pop twice.
-            scrubReactPickRows(battle)
-
-            if action == "entrench_break" and ReactiveDefense then
-                local ok = ReactiveDefense.earlyExitEntrench(battle, true)
-                if ok then
-                    enqueueAutoAfter(battle, "Broke entrench!", S.CALLOUT_AUTO_DELAY, "player")
-                end
-                action = "commit"
-            end
-
-            local result = { lines = {}, damageMult = 1, forceMiss = false }
-            if ReactiveDefense and pending and pending.ctx then
-                result = ReactiveDefense.resolveIncoming(battle, action, braceCall, pending.ctx)
-                    or result
-                ReactiveDefense.state(battle).hitMod = {
-                    damageMult = result.damageMult or 1,
-                    forceMiss = result.forceMiss == true,
-                    coverSoak = result.coverSoak == true,
-                    coverDurMult = result.coverDurMult or 1,
-                }
-            end
-
-            -- Dodge / cover / brace FX before the foe's swing (or instead of it).
-            if type(dev.playFocusReactFx) == "function" then
-                dev.playFocusReactFx(battle, result.action or action, result)
-            end
-
-            for i = 1, #(result.lines or {}) do
-                local line = result.lines[i]
-                local item = { text = line, auto = true, autoDelay = S.CALLOUT_AUTO_DELAY }
-                markBubbleWait(item, "player", true, battle)
-                table.insert(battle.queue, 1, item)
-            end
-
-            dev.log(battle, "REACT " .. tostring(action),
-                string.format("mult=%.2f miss=%s focus=%s",
-                    tonumber(result.damageMult) or 1,
-                    result.forceMiss and "Y" or "N",
-                    ReactiveDefense and ReactiveDefense.focusLabel(battle, true) or "-"))
-
-            if pending and pending.ctx then
-                battle.nextInsert = resumeInsertIndex(battle)
-                local okDmg, errDmg = pcall(function()
-                    if result.forceMiss then
-                        if type(battle.cancelMoveAnim) == "function" then
-                            pcall(battle.cancelMoveAnim, battle)
-                        end
-                        if type(battle.waitNext) == "function" then
-                            pcall(battle.waitNext, battle, 20)
-                        end
-                        -- Clear hitMod so a later hit isn't zeroed.
-                        if ReactiveDefense then
-                            ReactiveDefense.state(battle).hitMod = nil
-                        end
-                    else
-                        -- REACT menu / cover FX can outlive BC's original arm — re-arm now so
-                        -- the foe's swing still gets the attack camera.
-                        signalAttackPresentation(
-                            battle, pending.ctx.user, pending.ctx.target, pending.ctx.move,
-                            { presentationOnly = true })
-                        origRunDamaging(battle, pending.ctx, pending.record)
-                    end
-                    -- Lightweight reactive counters (Focus Dodge/Brace).
-                    if result.counter and pending.ctx.user and battle.player then
-                        local frac = result.counter.powerFrac or 0.35
-                        if result.counter.absorbScale and result.counter.reduction then
-                            frac = 0.25 + (result.counter.reduction or 0) * 0.5
-                        end
-                        local dealt = math.max(1, math.floor(
-                            ((pending.ctx.move and pending.ctx.move.power) or 40) * frac * 0.4))
-                        battle.nextInsert = resumeInsertIndex(battle)
-                        if type(battle.sayNext) == "function" then
-                            battle:sayNext(string.format("%s countered!", playerMonName(battle) or "Your Pokémon"))
-                        end
-                        if type(battle.applyDamage) == "function" then
-                            local foe = battle.enemy
-                            if foe and foe.mon and (foe.mon.hp or 0) > 0 then
-                                battle:applyDamage(foe, dealt)
-                                if foe.mon.hp <= 0 and type(battle.onFaint) == "function" then
-                                    battle:onFaint(foe)
-                                end
-                            end
-                        end
-                    end
-                end)
-                if not okDmg then
-                    -- Keep suppressReactDefer latched for the rest of the turn;
-                    -- turn_started / clearCalloutPickState clear it.
-                    error(errDmg, 0)
-                end
-            end
-            -- Keep suppressReactDefer true until turn_started so sticky D-pad /
-            -- multi-hit follow-ups cannot re-open REACT! this turn.
-            state.pickOfferedThisTurn = true
-            publishChipState(battle)
-        end
-
-        local function newCalloutPickModal(game, opts)
-            local Font = require("src.render.Font")
-            local Sound = require("src.core.Sound")
-            local choices = opts.choices or {}
-            local start = tonumber(opts.index) or 1
-            if start < 1 then
-                start = 1
-            end
-            if #choices > 0 and start > #choices then
-                start = #choices
-            end
-            -- D-pad picks instantly when there are few options (REACT / BRACE / STAY).
-            -- Long lists (COUNTER move pick) keep cursor + A.
-            local usePad = opts.pad
-            if usePad == nil then
-                usePad = #choices > 0 and #choices <= 5
-            end
-
-            local function ensurePadDirs()
-                if not usePad then
-                    return
-                end
-                for i = 1, #choices do
-                    if choices[i].dir then
-                        return
-                    end
-                end
-                local byId = {}
-                for i = 1, #choices do
-                    local id = choices[i].id
-                    if id then
-                        byId[id] = choices[i]
-                    end
-                end
-                if byId.dodge or byId.commit or byId.entrench then
-                    if byId.dodge then
-                        byId.dodge.dir = "up"
-                    end
-                    if byId.cover then
-                        byId.cover.dir = "left"
-                    end
-                    if byId.brace then
-                        byId.brace.dir = "right"
-                    end
-                    if byId.entrench then
-                        byId.entrench.dir = "down"
-                    end
-                    if byId.commit then
-                        byId.commit.dir = "a"
-                    end
-                    if byId.entrench_hold then
-                        byId.entrench_hold.dir = "down"
-                    end
-                    if byId.entrench_break then
-                        byId.entrench_break.dir = "up"
-                    end
-                    return
-                end
-                local n = #choices
-                if n == 1 then
-                    choices[1].dir = "a"
-                elseif n == 2 then
-                    choices[1].dir = "up"
-                    choices[2].dir = "down"
-                elseif n == 3 then
-                    choices[1].dir = "up"
-                    choices[2].dir = "left"
-                    choices[3].dir = "right"
-                elseif n == 4 then
-                    choices[1].dir = "up"
-                    choices[2].dir = "left"
-                    choices[3].dir = "right"
-                    choices[4].dir = "down"
-                else
-                    choices[1].dir = "up"
-                    choices[2].dir = "left"
-                    choices[3].dir = "right"
-                    choices[4].dir = "down"
-                    choices[5].dir = "a"
-                end
-            end
-            ensurePadDirs()
-
-            local self = {
-                game = game,
-                title = tostring(opts.title or "DODGE!"),
-                subtitle = opts.subtitle and tostring(opts.subtitle) or nil,
-                choices = choices,
-                index = start,
-                usePad = usePad,
-                cancelable = opts.cancelable == true,
-                onPick = opts.onPick,
-                onCancel = opts.onCancel,
-                -- Instant D-pad picks must not fire on the same press that opened
-                -- this modal (or a leftover held direction from the prior menu).
-                _padArmed = not usePad,
-                _resolved = false,
-            }
-
-            local function hintFor(choice)
-                if not choice then
-                    return ""
-                end
-                if choice.hint then
-                    return tostring(choice.hint)
-                end
-                local line = tostring(choice.line or "")
-                line = line:gsub("%%s", ""):gsub("!", ""):gsub("\n", " ")
-                line = line:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
-                if #line > 16 then
-                    line = line:sub(1, 15) .. "."
-                end
-                return line
-            end
-
-            local function choiceForDir(dir)
-                for i = 1, #self.choices do
-                    if self.choices[i].dir == dir then
-                        return self.choices[i]
-                    end
-                end
-                return nil
-            end
-
-            local function anyPadDown(input)
-                local down = input.isDown or input.down
-                if type(down) ~= "function" then
-                    return false
-                end
-                return down(input, "up") or down(input, "down")
-                    or down(input, "left") or down(input, "right")
-                    or down(input, "a")
-            end
-
-            local function confirm(choice)
-                if self._resolved or not choice then
-                    return
-                end
-                self._resolved = true
-                Sound.play(self.game.data, "Press_AB")
-                self.game.stack:pop()
-                if self.onPick then
-                    self.onPick(choice)
-                end
-            end
-
-            -- Filled triangle arrows so D-pad mapping reads at a glance.
-            local function drawPadArrow(dir, cx, cy, enabled)
-                local g = love.graphics
-                local s = 3.5
-                if enabled == false then
-                    g.setColor(0.45, 0.45, 0.45, 1)
-                else
-                    g.setColor(0, 0, 0, 1)
-                end
-                if dir == "up" then
-                    g.polygon("fill", cx, cy - s, cx - s, cy + s * 0.55, cx + s, cy + s * 0.55)
-                elseif dir == "down" then
-                    g.polygon("fill", cx, cy + s, cx - s, cy - s * 0.55, cx + s, cy - s * 0.55)
-                elseif dir == "left" then
-                    g.polygon("fill", cx - s, cy, cx + s * 0.55, cy - s, cx + s * 0.55, cy + s)
-                elseif dir == "right" then
-                    g.polygon("fill", cx + s, cy, cx - s * 0.55, cy - s, cx - s * 0.55, cy + s)
-                end
-            end
-
-            local function drawAKey(cx, cy, enabled)
-                local g = love.graphics
-                if enabled == false then
-                    g.setColor(0.45, 0.45, 0.45, 1)
-                else
-                    g.setColor(0, 0, 0, 1)
-                end
-                -- Compact R/B/Y-style key hint (no filled disc).
-                g.rectangle("line", cx - 5, cy - 5, 10, 10)
-                g.setColor(0, 0, 0, 1)
-                Font.draw("A", cx - 3, cy - 4)
-            end
-
-            function self:update(dt)
-                local input = self.game.input
-                local n = #self.choices
-                if n < 1 or self._resolved then
-                    return
-                end
-                if self.cancelable
-                    and (input:wasPressed("b") or input:wasPressed("start")) then
-                    self._resolved = true
-                    Sound.play(self.game.data, "Press_AB")
-                    self.game.stack:pop()
-                    if self.onCancel then
-                        self.onCancel()
-                    end
-                    return
-                end
-                if self.usePad then
-                    -- Wait until every direction/A is released once so a held
-                    -- press from opening / the previous modal cannot auto-pick.
-                    if not self._padArmed then
-                        if not anyPadDown(input) then
-                            self._padArmed = true
-                        end
-                        return
-                    end
-                    local dir = nil
-                    if input:wasPressed("up") then
-                        dir = "up"
-                    elseif input:wasPressed("down") then
-                        dir = "down"
-                    elseif input:wasPressed("left") then
-                        dir = "left"
-                    elseif input:wasPressed("right") then
-                        dir = "right"
-                    elseif input:wasPressed("a") then
-                        dir = "a"
-                    end
-                    if dir then
-                        confirm(choiceForDir(dir))
-                    end
-                    return
-                end
-                if input:wasPressed("up") then
-                    self.index = self.index > 1 and self.index - 1 or n
-                elseif input:wasPressed("down") then
-                    self.index = self.index < n and self.index + 1 or 1
-                elseif input:wasPressed("a") then
-                    confirm(self.choices[self.index])
-                end
-            end
-
-            function self:draw()
-                local n = #self.choices
-                if n < 1 then
-                    return
-                end
-                local g = love.graphics
-
-                if self.usePad then
-                    -- Spatial D-pad compass (same language as the FIELD move diamond).
-                    -- Compact bottom panel keeps mons / HP / weather readable above.
-                    local function shortLabel(choice)
-                        local name = tostring(choice and choice.label or "")
-                        if name == "TAKE COVER" then
-                            return "COVER"
-                        end
-                        if name == "STAY COVER" then
-                            return "STAY"
-                        end
-                        if name == "PHYSICAL" then
-                            return "PHYS"
-                        end
-                        if name == "SPECIAL" then
-                            return "SPEC"
-                        end
-                        return name
-                    end
-                    local function textW(label)
-                        if type(Font.width) == "function" then
-                            return Font.width(label)
-                        end
-                        return #Font.split(label) * 8
-                    end
-                    local preferred = self.choices[self.index]
-                    local slots = {
-                        up = { x = 56, y = 92, w = 48, h = 12 },
-                        left = { x = 8, y = 108, w = 52, h = 12 },
-                        right = { x = 100, y = 108, w = 52, h = 12 },
-                        down = { x = 56, y = 124, w = 48, h = 12 },
-                        a = { x = 56, y = 136, w = 48, h = 11 },
-                    }
-                    -- Cream panel across the lower third only.
-                    g.setColor(0.96, 0.92, 0.82, 0.96)
-                    g.rectangle("fill", 0, 78, 160, 66)
-                    g.setColor(0.10, 0.07, 0.06, 1)
-                    g.rectangle("line", 0.5, 78.5, 159, 65)
-                    g.rectangle("line", 1.5, 79.5, 157, 63)
-                    -- Title + tiny subtitle on one header row.
-                    local title = self.title or "REACT!"
-                    g.setColor(0.08, 0.06, 0.05, 1)
-                    Font.draw(title, 6, 80)
-                    if self.subtitle then
-                        local sub = tostring(self.subtitle)
-                        if #sub > 10 then
-                            sub = sub:sub(1, 9) .. "."
-                        end
-                        g.setColor(0.40, 0.34, 0.28, 1)
-                        local subX = 160 - 6 - math.floor(textW(sub) * 0.75)
-                        g.push()
-                        g.translate(math.max(70, subX), 81)
-                        g.scale(0.75, 0.75)
-                        Font.draw(sub, 0, 0)
-                        g.pop()
-                    end
-                    for _, dir in ipairs({ "up", "left", "right", "down", "a" }) do
-                        local choice = choiceForDir(dir)
-                        local slot = slots[dir]
-                        if choice and slot then
-                            local selected = preferred == choice
-                            local label = shortLabel(choice)
-                            if choice.disabled then
-                                label = "(" .. label .. ")"
-                            end
-                            if selected then
-                                g.setColor(0.16, 0.30, 0.55, 1)
-                            else
-                                g.setColor(0.99, 0.96, 0.88, 1)
-                            end
-                            g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
-                            g.setColor(0.10, 0.08, 0.06, 1)
-                            g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
-                                slot.w - 1, slot.h - 1)
-                            local glyphX = slot.x + 7
-                            local glyphY = slot.y + 6
-                            if dir == "a" then
-                                drawAKey(glyphX, glyphY, not choice.disabled)
-                            else
-                                drawPadArrow(dir, glyphX, glyphY, not choice.disabled)
-                            end
-                            local scale = (#label > 6) and 0.72 or 0.85
-                            if selected then
-                                g.setColor(1, 1, 1, 1)
-                            else
-                                g.setColor(0.08, 0.06, 0.05, 1)
-                            end
-                            g.push()
-                            g.translate(slot.x + 14, slot.y + 2)
-                            g.scale(scale, scale)
-                            Font.draw(label, 0, 0)
-                            g.pop()
-                        end
-                    end
-                    g.setColor(1, 1, 1, 1)
-                    return
-                end
-
-                local widest = #Font.split(self.title)
-                if self.subtitle then
-                    widest = math.max(widest, #Font.split(self.subtitle))
-                end
-                for i = 1, n do
-                    local label = tostring(self.choices[i].label or "")
-                    widest = math.max(widest, #Font.split(label) + 2)
-                end
-                local tw = math.min(16, math.max(10, widest + 2))
-                local head = self.subtitle and 2 or 1
-                local th = head + n + 2
-                local tx = 1
-                local ty = math.max(1, 13 - th)
-                if ty + th > 13 then
-                    th = 13 - ty
-                end
-
-                Font.drawBox(tx, ty, tw, th)
-                love.graphics.setColor(0, 0, 0, 1)
-                Font.draw(self.title, (tx + 1) * 8, (ty + 1) * 8)
-                local row = ty + 2
-                if self.subtitle then
-                    Font.draw(self.subtitle, (tx + 1) * 8, row * 8)
-                    row = row + 1
-                end
-                for i = 1, n do
-                    local choice = self.choices[i]
-                    local y = row * 8
-                    if i == self.index then
-                        Font.drawCode(0xED, tx * 8 + 2, y)
-                    end
-                    Font.draw(tostring(choice.label or ""), (tx + 2) * 8, y)
-                    row = row + 1
-                    if row >= ty + th - 1 then
-                        break
-                    end
-                end
-                love.graphics.setColor(1, 1, 1, 1)
-            end
-
-            return self
-        end
-
-        -- Serious hits: Focus menu — Dodge / Cover / Brace / Entrench / Commit.
-        local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
-            if not ReactiveDefense then
-                -- Fallback: commit through immediately.
-                finishCalloutPick(battle, me, moveName, "commit", nil)
-                return
-            end
-            local function openReactMenu()
-                local pendingMove = nil
-                do
-                    local st = momentumState(battle)
-                    pendingMove = st.pendingDamage and st.pendingDamage.ctx
-                        and st.pendingDamage.ctx.move
-                end
-                local actions = ReactiveDefense.menuActions(battle, pendingMove)
-                local choices = {}
-                local index = 1
-                for i = 1, #actions do
-                    local a = actions[i]
-                    -- menuActions already omits unaffordable reacts.
-                    choices[#choices + 1] = {
-                        label = a.label,
-                        hint = a.hint,
-                        id = a.id,
-                        afford = true,
-                    }
-                    if preferredKind and a.id == preferredKind then
-                        index = #choices
-                    end
-                end
-                if #choices == 0 then
-                    choices[1] = { label = "COMMIT", hint = "Take the hit", id = "commit" }
-                end
-                return newCalloutPickModal(battle.game, {
-                    title = "REACT!",
-                    subtitle = me,
-                    index = index,
-                    pad = true,
-                    choices = choices,
-                    cancelable = false,
-                    onPick = function(choice)
-                        local id = choice and choice.id or "commit"
-                        -- Brace used to open a second D-pad (PHYS/SPEC/STAT) that
-                        -- felt like REACT! repeating — auto-match the incoming hit.
-                        if id == "brace" then
-                            local call = foeMoveIsSpecial(pendingMove) and "special"
-                                or "physical"
-                            if pendingMove and pendingMove.category == "status" then
-                                call = "status"
-                            end
-                            finishCalloutPick(battle, me, moveName, "brace", call)
-                            return
-                        end
-                        finishCalloutPick(battle, me, moveName, id, nil)
-                    end,
-                })
-            end
-            scrubReactPickRows(battle)
-            local reactEpoch = (momentumState(battle).reactEpoch or 0) + 1
-            momentumState(battle).reactEpoch = reactEpoch
-            insertBeforeAnim(battle, {
-                arReactPick = true,
-                arReactEpoch = reactEpoch,
-                ui = function()
-                    local st = momentumState(battle)
-                    -- Stale / duplicate rows after a pick already resolved.
-                    if not st.pendingDamage or st.suppressReactDefer
-                        or (st.reactEpoch or 0) ~= reactEpoch then
-                        return {
-                            game = battle.game,
-                            update = function(self)
-                                if self.game and self.game.stack then
-                                    self.game.stack:pop()
-                                end
-                            end,
-                            draw = function() end,
-                        }
-                    end
-                    return openReactMenu()
-                end,
-            })
-        end
-
-        local function finishSameTurnCounter(battle, choice)
-            local state = momentumState(battle)
-            state.sameTurnCounterQueued = nil
-            local replacing = state.replaceQueuedPlayerAction
-            -- Miss text belongs before COUNTER!; never replay it after the strike.
-            scrubLateDodgeWhiff(battle)
-            if not choice or choice.hold or tostring(choice.label or "") == "HOLD" then
-                state.mode = nil
-                state.boosted = false
-                state.foeWhiffDamage = nil
-                state.replaceQueuedPlayerAction = nil
-                dev.log(battle, "COUNTER! pick",
-                    replacing and "HOLD keep-plan" or "HOLD skip")
-                publishChipState(battle)
-                -- Going second + HOLD: keep the move you picked at turn start.
-                return
-            end
-            local moveInst = choice.moveInst
-            if not moveInst or not battle.player or not battle.enemy then
-                state.mode = nil
-                state.boosted = false
-                state.replaceQueuedPlayerAction = nil
-                publishChipState(battle)
-                return
-            end
-            if (battle.player.mon and battle.player.mon.hp or 0) <= 0
-                or (battle.enemy.mon and battle.enemy.mon.hp or 0) <= 0 then
-                state.mode = nil
-                state.boosted = false
-                state.replaceQueuedPlayerAction = nil
-                publishChipState(battle)
-                return
-            end
-            -- Keep opening armed; announce becomes "Counter with X!" + boosted damage.
-            state.mode = "counter"
-            state.boosted = false
-            state.sameTurnCounterStrike = true
-            local moveName = tostring(choice.label or moveInst.id or "MOVE")
-            if replacing then
-                -- Swap the queued turn action for the move you just picked.
-                state.overridePlayerAction = moveInst
-                state.replaceQueuedPlayerAction = nil
-                dev.log(battle, "COUNTER! pick", "replace→" .. moveName)
-                publishChipState(battle)
-                return
-            end
-            -- You already attacked this turn: fire an extra counter strike now.
-            dev.log(battle, "COUNTER! pick", "extra→" .. moveName)
-            table.insert(battle.queue, 1, {
-                arFx = true,
-                fn = function()
-                    if not battle.player or not battle.enemy then
-                        return
-                    end
-                    if (battle.player.mon.hp or 0) <= 0 or (battle.enemy.mon.hp or 0) <= 0 then
-                        state.mode = nil
-                        publishChipState(battle)
-                        return
-                    end
-                    -- Idle BC camera often takes over during the COUNTER! menu — snap it
-                    -- back; performMove wrap + engine move_used re-arm the attack cam.
-                    resetBattleCamera(battle)
-                    battle:performMove(battle.player, battle.enemy, moveInst)
-                end,
-            })
-            publishChipState(battle)
-        end
-
-        maybeQueueSameTurnCounter = function(battle)
-            if not opt("momentum_counter") or not battle then
-                return
-            end
-            local state = momentumByBattle[battle]
-            if not state or not state.offerSameTurnCounter then
-                return
-            end
-            state.offerSameTurnCounter = nil
-            if playerStatusLocked(battle) then
-                dev.log(battle, "COUNTER! skip", "status-locked")
-                return
-            end
-            if state.sameTurnCounterQueued or not playerHasCounter(battle) then
-                dev.log(battle, "COUNTER! skip",
-                    state.sameTurnCounterQueued and "already-queued"
-                    or "not-armed")
-                return
-            end
-            if (battle.player and battle.player.mon and battle.player.mon.hp or 0) <= 0 then
-                state.mode = nil
-                return
-            end
-            if (battle.enemy and battle.enemy.mon and battle.enemy.mon.hp or 0) <= 0 then
-                state.mode = nil
-                return
-            end
-            state.sameTurnCounterQueued = true
-            local me = playerMonName(battle)
-            local replacing = state.replaceQueuedPlayerAction
-            local moves = battle.player and battle.player.curMoves or {}
-            local choices = {}
-            for i = 1, #moves do
-                local mv = moves[i]
-                if mv and not mv.struggle and (mv.pp or 0) > 0 then
-                    local def = nil
-                    if type(battle.moveDef) == "function" then
-                        def = battle:moveDef(mv)
-                    end
-                    if not def then
-                        def = findMoveByName(battle, mv.id or mv.name)
-                    end
-                    if def and (def.power or 0) > 0 and def.category ~= "status" then
-                        choices[#choices + 1] = {
-                            label = tostring(def.name or mv.id or "MOVE"),
-                            hint = "PP " .. tostring(mv.pp),
-                            moveInst = mv,
-                            moveDef = def,
-                        }
-                    end
-                end
-            end
-            choices[#choices + 1] = {
-                label = "HOLD",
-                hint = replacing and "Keep plan" or "Skip counter",
-                hold = true,
-            }
-            -- After miss anim + dodge-whiff text — never before the foe's swing.
-            dev.log(battle, "COUNTER! menu",
-                replacing and "re-pick after miss anim" or "extra strike after miss anim")
-            insertAfterMissAnim(battle, {
-                ui = function()
-                    return newCalloutPickModal(battle.game, {
-                        title = "COUNTER!",
-                        subtitle = replacing and "Pick a move" or me,
-                        choices = choices,
-                        pad = false,
-                        cancelable = false,
-                        onPick = function(choice)
-                            finishSameTurnCounter(battle, choice)
-                        end,
-                    })
-                end,
-            })
-            -- Opening is live after "dodged aside!" — chip can show ready-to-counter.
-            publishChipState(battle)
-        end
-
-        local function finishCounterPick(battle, me, moveName, doCounter)
-            local state = momentumState(battle)
-            state.awaitingPick = nil
-            local pending = state.pendingDamage
-            state.pendingDamage = nil
-
-            if doCounter then
-                -- Leave mode=counter so battle.damage still applies +25%.
-                state.mode = "counter"
-                state.boosted = false
-                local line, drop = pickCallEntry("counter", battle, me, moveName)
-                line = line or ("Now, " .. me .. "!\nHit back!")
-                drop = drop or 1
-                do
-                    local item = {
-                        text = line,
-                        auto = true,
-                        autoDelay = S.CALLOUT_AUTO_DELAY,
-                    }
-                    markBubbleWait(item, "player", true, battle)
-                    tagFieldCue(item, "player", "attack", "physical")
-                    table.insert(battle.queue, 1, item)
-                end
-                battle.nextInsert = 1
-                applyCalloutBuffs(battle, {
-                    { who = "enemy", stat = "defense", delta = -drop, fromEnemy = true },
-                }, false)
-                dev.log(battle, "OPENING! pick",
-                    "COUNTER " .. tostring(moveName) .. " foeDF-" .. tostring(drop))
-            else
-                state.mode = nil
-                state.boosted = false
-                state.foeWhiffDamage = nil
-                dev.log(battle, "OPENING! pick", "HOLD (clear arm)")
-            end
-
-            if pending and pending.ctx then
-                -- Foe dodge/brace after your COUNTER/HOLD choice, before the hit.
-                flushPendingFoeReaction(battle)
-                battle.nextInsert = resumeInsertIndex(battle)
-                origRunDamaging(battle, pending.ctx, pending.record)
-                if doCounter then
-                    local connected = state.boosted
-                    -- Damage hook should have consumed the boost; clear arming either way.
-                    state.mode = nil
-                    if resolvePlayerCounterAttempt(battle, connected) then
-                        -- Foe snap-back queued; skip Again!
-                    elseif connected then
-                        -- Anime follow-through: true second hit if the foe is still up.
-                        tryAgainStrike(battle, pending.ctx, me, false)
-                    end
-                end
-            elseif doCounter then
-                state.mode = nil
-                state.pendingFoeReaction = nil
-                state.foeWhiffDamage = nil
-            end
-        end
-
-        local function queueCounterPickMenu(battle, me, moveName)
-            insertBeforeAnim(battle, {
-                ui = function()
-                    return newCalloutPickModal(battle.game, {
-                        title = "OPENING!",
-                        subtitle = me,
-                        choices = {
-                            {
-                                label = "COUNTER",
-                                hint = "Hit back harder",
-                                line = "",
-                            },
-                            {
-                                label = "HOLD",
-                                hint = "Save the opening",
-                                line = "",
-                            },
-                        },
-                        cancelable = false,
-                        onPick = function(choice)
-                            local doCounter = choice and tostring(choice.label) == "COUNTER"
-                            finishCounterPick(battle, me, moveName, doCounter)
-                        end,
-                    })
-                end,
-            })
-        end
-
-        local function shouldDeferForCalloutPick(battle, ctx)
-            if not battle or not ctx then
-                return false
-            end
-            local user, target, move = ctx.user, ctx.target, ctx.move
-            if not user or user.isPlayer or not target or not target.isPlayer then
-                return false
-            end
-            if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn then
-                return false
-            end
-            if not shouldOfferCalloutPick(battle, move) then
-                return false
-            end
-            local state = momentumState(battle)
-            -- Already resolved this hit (finishCalloutPick → origRunDamaging), or
-            -- a pick is already open / pending.
-            if state.suppressReactDefer or state.awaitingPick or state.pendingDamage then
-                return false
-            end
-            return true
-        end
-
-        -- Any armed opening + your damaging attack: auto "Counter with X!" (+25%).
-        -- No OPENING! COUNTER/HOLD menu — that used to pop at turn-start before
-        -- anyone acted whenever a prior-turn opening was still armed.
-        local function shouldAutoCounter(battle, ctx)
-            if not opt("momentum_counter") or not battle or not ctx then
-                return false
-            end
-            local user, target, move = ctx.user, ctx.target, ctx.move
-            if not user or not user.isPlayer or not target or target.isPlayer then
-                return false
-            end
-            if not move or (move.power or 0) <= 0 or move.category == "status" then
-                return false
-            end
-            -- Frozen / asleep: can't take a counter order.
-            if playerStatusLocked(battle) then
-                return false
-            end
-            if not playerHasCounter(battle) then
-                return false
-            end
-            local state = momentumState(battle)
-            if state.awaitingPick or state.pendingDamage then
-                return false
-            end
-            return true
-        end
-
-        function EffectRegistry.runDamaging(battle, ctx, record)
-            -- Focus trench: soak the hit with entrench mitigation (no REACT menu).
-            if ReactiveDefense and opt("momentum_counter") and battle and ctx
-                and ctx.user and not ctx.user.isPlayer
-                and ctx.target and ctx.target.isPlayer then
-                local side = ReactiveDefense.sideState(battle, true)
-                local state = momentumState(battle)
-                if side and side.entrenched and (side.entrenchTurns or 0) > 0
-                    and not state.awaitingPick and not state.pendingDamage then
-                    local move = ctx.move
-                    local me = playerMonName(battle)
-                    local moveName = tostring((move and (move.name or move.id)) or "MOVE")
-                    state.awaitingPick = "react"
-                    state.pendingDamage = { ctx = ctx, record = record }
-                    do
-                        local animIdx = indexOfMoveAnim(battle)
-                        local row = animIdx and battle.queue[animIdx]
-                        if row and row.anim then
-                            battle.moveAnimRow = row
-                        end
-                    end
-                    dev.log(battle, "AUTO entrench_hold", tostring(moveName))
-                    finishCalloutPick(battle, me, moveName, "entrench_hold", nil)
-                    return
-                end
-            end
-            if shouldDeferForCalloutPick(battle, ctx) then
-                local state = momentumState(battle)
-                local move = ctx.move
-                -- Cursor default only — menu always offers Focus options.
-                local preferred = foeMoveIsSpecial(move) and "dodge" or "brace"
-                state.awaitingPick = "react"
-                state.pendingDamage = { ctx = ctx, record = record }
-                state.pickOfferedThisTurn = true
-                battle._arPickOfferedThisTurn = true
-                -- Pin the engine's attack anim so finishCalloutPick resumes after it
-                -- (not before endOfTurn). Without this, REACT! landed after the swing.
-                do
-                    local animIdx = indexOfMoveAnim(battle)
-                    local row = animIdx and battle.queue[animIdx]
-                    if row and row.anim then
-                        battle.moveAnimRow = row
-                    end
-                end
-                local me = playerMonName(battle)
-                local moveName = tostring(move.name or move.id or "MOVE")
-                dev.log(battle, "MENU react",
-                    tostring(moveName) .. " prefer=" .. preferred .. " (defer hit)")
-                queueCalloutPickMenu(battle, me, moveName, preferred)
-                return
-            end
-            -- Armed opening: auto counter (no OPENING! menu — same-turn COUNTER!
-            -- after a dodge miss is the interactive pick).
-            if shouldAutoCounter(battle, ctx) then
-                local state = momentumState(battle)
-                local me = playerMonName(battle)
-                local move = ctx.move
-                local moveName = tostring(move.name or move.id or "MOVE")
-                state.mode = "counter"
-                state.boosted = false
-                local drop = 1
-                local style = calloutStyle()
-                if style == "SHOWY" or style == "BOLD" then
-                    drop = 2
-                end
-                dev.log(battle, "AUTO counter",
-                    tostring(moveName) .. " foeDF-" .. tostring(drop)
-                    .. (state.enemyActedThisTurn and " (2nd)" or " (1st)"))
-                applyCalloutBuffs(battle, {
-                    { who = "enemy", stat = "defense", delta = -drop, fromEnemy = true },
-                }, false)
-                flushPendingFoeReaction(battle)
-                local result = origRunDamaging(battle, ctx, record)
-                local connected = state.boosted
-                state.mode = nil
-                publishChipState(battle)
-                if resolvePlayerCounterAttempt(battle, connected) then
-                    return result
-                end
-                if connected then
-                    tryAgainStrike(battle, ctx, me, false)
-                end
-                return result
-            end
-            local state = battle and momentumState(battle)
-            local enemyCounterArmed = state
-                and ctx and ctx.user and not ctx.user.isPlayer
-                and state.enemyMode == "counter" and not state.enemyBoosted
-            -- If COUNTER/HOLD wasn't needed, still play any stashed foe reaction.
-            flushPendingFoeReaction(battle)
-            local result = origRunDamaging(battle, ctx, record)
-            -- Trainer foe mirror: after their counter lands, sometimes Again!
-            if enemyCounterArmed and state.enemyBoosted and trainerFoeReactionsOn(battle)
-                and rollEnemyAgain() then
-                tryAgainStrike(battle, ctx, enemyMonName(battle), true)
-            end
-            if enemyCounterArmed then
-                state.enemyMode = nil
-                publishChipState(battle)
-            end
-            -- Same-turn COUNTER! waits for dodge-whiff text in wrapBattleSay.
-            return result
-        end
-
-        EffectRegistry._arReactRunDamaging = EffectRegistry.runDamaging
 
         local function silentStageDelta(who, stat, delta)
             if not who or not who.stages or not stat or not delta or delta == 0 then
@@ -7741,13 +5662,13 @@ return function(mod)
             if not battle then
                 return false
             end
-            local state = momentumByBattle[battle]
+            local state = React.peek(battle)
             local t = state and state.temp
             return t and t.hidAway and (t.cover or t.picHidden)
         end
 
         playerInDeepCover = function(battle)
-            local state = battle and momentumByBattle[battle]
+            local state = battle and React.peek(battle)
             return state and state.temp and state.temp.deepCover == true
         end
 
@@ -7811,7 +5732,6 @@ return function(mod)
                 end
                 dev.log(battle, "DEEP cover",
                     "lock spot=" .. tostring(t.coverSpot or "?"))
-                publishChipState(battle)
                 return true
             end
             return false
@@ -7862,7 +5782,6 @@ return function(mod)
             -- Frozen / asleep: no trainer shout.
             if not opt("callout_buffs") or not hadHide or not player
                 or playerStatusLocked(battle) then
-                publishChipState(battle)
                 return nil
             end
             -- Leaving cover to strike first is riskier.
@@ -7872,13 +5791,11 @@ return function(mod)
             -- If COUNTER/HOLD is about to open, skip the leave-cover shout so the
             -- two don't stack into one confusing beat.
             if playerHasCounter(battle) then
-                publishChipState(battle)
                 return true
             end
             local line = pickFormatted(S.LEAVE_COVER_CALLS, monName)
                 or (monName .. "!\nComing out!")
             enqueueAutoAfter(battle, line, nil, "player")
-            publishChipState(battle)
             return true
         end
 
@@ -7899,7 +5816,6 @@ return function(mod)
             state.enemyTemp = { evasion = 0, defense = 0, cover = false }
             if not opt("callout_buffs") or not hadCover or not enemy
                 or enemyStatusLocked(battle) then
-                publishChipState(battle)
                 return nil
             end
             local line = pickFoeTrainerLine(
@@ -7908,7 +5824,6 @@ return function(mod)
                 S.FOE_LEAVE_COVER_CALLS,
                 monName or enemyMonName(battle))
             enqueueNpcFlavor(battle, line, S.CALLOUT_AUTO_DELAY)
-            publishChipState(battle)
             return true
         end
 
@@ -8501,273 +6416,56 @@ return function(mod)
             return next(who)
         end)
 
-        -- Short mon name so chips stay readable on 160×144.
-        hud.chipMonName = function(name)
-            name = tostring(name or "POKéMON")
-            if #name <= 9 then
-                return name
-            end
-            return name:sub(1, 8) .. "+"
-        end
 
-        hud.chipSpotPhrase = function(spot)
-            spot = tostring(spot or ""):upper()
-            if spot == "" then
-                return S.CHIP_FALLBACK_SPOT or "in cover"
-            end
-            local map = S.CHIP_SPOT_PHRASE or {}
-            return map[spot] or (S.CHIP_FALLBACK_SPOT or "in cover")
-        end
-
-        hud.chipLinesKey = function(lines)
-            if type(lines) ~= "table" then
-                return ""
-            end
-            return tostring(lines[1] or "") .. "\n" .. tostring(lines[2] or "")
-        end
-
-        -- Build narrative chip lines from live momentum (no numbers, no menu prompts).
-        hud.buildChipNarrative = function(battle, foeSide)
-            local state = battle and momentumByBattle[battle]
-            if not state then
-                return nil
-            end
-            local name = hud.chipMonName(
-                foeSide and enemyMonName(battle) or playerMonName(battle))
-            local temp = foeSide and (state.enemyTemp or {}) or (state.temp or {})
-            local counterArmed = (foeSide
-                    and state.enemyMode == "counter" and not state.enemyBoosted)
-                or ((not foeSide) and state.mode == "counter" and not state.boosted)
-
-            -- Frozen / asleep: chips reflect helplessness (player side only for FRZ/SLP).
-            if not foeSide then
-                local mon = battle.player and battle.player.mon
-                local st = mon and mon.status
-                if st == "FRZ" then
-                    return { name .. " is", "frozen solid!" }
-                end
-                if st == "SLP" then
-                    return { name .. " is", "fast asleep!" }
-                end
-            end
-
-            if counterArmed then
-                return { name .. " is", "ready to counter!" }
-            end
-
-            -- Focus Reactive Defense chips (player for now).
-            if ReactiveDefense and not foeSide then
-                local side = ReactiveDefense.sideState(battle, true)
-                if side then
-                    if side.entrenched then
-                        local t = side.entrenchTurns or 0
-                        if t > 0 then
-                            return { name .. " is", "entrenched (" .. t .. ")!" }
-                        end
-                        return { name .. " is", "holding the trench!" }
+        -- Bind presentation callbacks and wrap EffectRegistry once helpers exist.
+        if React then
+            React.bind({
+                RD = ReactiveDefense,
+                opt = opt,
+                S = S,
+                runDamaging = origRunDamaging,
+                log = function(battle, ...)
+                    return dev.log(battle, ...)
+                end,
+                playFocusReactFx = function(battle, action, result)
+                    if type(dev.playFocusReactFx) == "function" then
+                        return dev.playFocusReactFx(battle, action, result)
                     end
-                    if side.cover then
-                        return { name .. " is", "in cover!" }
-                    end
-                    local focus = math.floor(side.focus or 0)
-                    local cap = ReactiveDefense.focusCap(battle.player)
-                    if focus <= 20 then
-                        return { name .. " is", "low on Focus!" }
-                    end
-                    if focus >= (cap or 100) - 5 then
-                        return { name .. " is", "fully focused!" }
-                    end
-                end
-            end
-
-            if not foeSide and temp.deepCover then
-                local spot = hud.chipSpotPhrase(temp.coverSpot)
-                if spot and spot ~= "in cover" and #spot <= 12 then
-                    return { name .. " is", "stuck " .. spot }
-                end
-                return { name .. " is", "stuck deep!" }
-            end
-
-            if not foeSide and temp.entrenched then
-                return { name .. " is", "holding the trench!" }
-            end
-
-            if temp.hidAway then
-                return { name .. " is", "hiding " .. hud.chipSpotPhrase(temp.coverSpot) }
-            end
-
-            if (temp.evasion or 0) >= 3 then
-                return { name .. " is", "hard to pin down!" }
-            end
-            if (temp.evasion or 0) > 0 or temp.cover then
-                return { name .. " is", "on guard!" }
-            end
-            if (temp.defense or 0) > 0 then
-                return { name .. " is", "bracing hard!" }
-            end
-            return nil
-        end
-
-        -- Commit chip text after callouts/state settle (never from awaitingPick).
-        publishChipState = function(battle)
-            if not battle or not opt("momentum_chips") or not opt("momentum_counter") then
-                return
-            end
-            local state = momentumState(battle)
-            local you = hud.buildChipNarrative(battle, false)
-            local foe = hud.buildChipNarrative(battle, true)
-            if hud.chipLinesKey(you) ~= hud.chipLinesKey(state.chipYou) then
-                state.chipPulseYou = 18
-            end
-            if hud.chipLinesKey(foe) ~= hud.chipLinesKey(state.chipFoe) then
-                state.chipPulseFoe = 18
-            end
-            state.chipYou = you
-            state.chipFoe = foe
-        end
-
-        hud.drawMomentumChip = function(battle, foeSide)
-            if not opt("momentum_chips") or not opt("momentum_counter") then
-                return
-            end
-            if not (love and love.graphics) then
-                return
-            end
-            -- Skip while a big speech bubble owns that corner.
-            local bubble = hud.bubbleSideActive(battle)
-            if bubble == (foeSide and "foe" or "player") then
-                return
-            end
-            local state = battle and momentumByBattle[battle]
-            -- Don't use `foe and chipFoe or chipYou` — nil chipFoe would fall through
-            -- to the player chip and draw a second SEADRA in foe colors.
-            local raw = state and (foeSide and state.chipFoe or (not foeSide and state.chipYou))
-            if not raw then
-                return
-            end
-            local g = love.graphics
-            local lineH = 8
-            local padX, padY = 2, 1
-            local maxBox = 72
-            local maxPx = maxBox - padX * 2 - 2
-            local function fitChipLine(s)
-                s = tostring(s or "")
-                if s == "" or Font.width(s) <= maxPx then
-                    return s
-                end
-                local cut = #s
-                while cut > 1 and Font.width(s:sub(1, cut) .. "+") > maxPx do
-                    cut = cut - 1
-                end
-                return s:sub(1, cut) .. "+"
-            end
-            local lines = {}
-            if #raw >= 2 then
-                lines[1] = fitChipLine(raw[1])
-                lines[2] = fitChipLine(raw[2])
-            else
-                local wrapped = hud.wrapBubbleText(raw[1], maxPx)
-                for j = 1, math.min(2, #wrapped) do
-                    lines[j] = wrapped[j]
-                end
-            end
-            if #lines == 0 then
-                return
-            end
-            local widest = 0
-            for i = 1, #lines do
-                widest = math.max(widest, Font.width(lines[i]))
-            end
-            local bw = math.min(maxBox, widest + padX * 2 + 2)
-            local bh = padY * 2 + #lines * lineH
-            local x = foeSide and (160 - bw - 1) or 1
-            local y = 1
-            -- Leave room for the slim Focus bar under the top-left corner.
-            if not foeSide and dev.focusBarVisible() and ReactiveDefense then
-                y = 1 + 9
-            end
-            local pulse = foeSide and (state.chipPulseFoe or 0) or (state.chipPulseYou or 0)
-            if pulse > 0 then
-                if foeSide then
-                    state.chipPulseFoe = pulse - 1
-                else
-                    state.chipPulseYou = pulse - 1
-                end
-            end
-            -- Classic R/B/Y: white box, black border, no tinted accents.
-            g.push("all")
-            g.setColor(1, 1, 1, 1)
-            g.rectangle("fill", x, y, bw, bh)
-            g.setColor(0, 0, 0, 1)
-            g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
-            g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
-            local textX = x + padX + 1
-            local ty = y + padY
-            for i = 1, #lines do
-                Font.draw(lines[i], textX, ty)
-                ty = ty + lineH
-            end
-            g.setColor(1, 1, 1, 1)
-            g.pop()
-        end
-
-        -- Slim Focus meter — top-left, optional (classic battles; FIELD uses
-        -- the purple bar above each world HP chip).
-        -- Stored on `dev` to stay under LuaJIT's 200-local limit.
-        dev.drawFocusChip = function(battle)
-            if not dev.focusBarVisible() or not opt("momentum_counter") then
-                return
-            end
-            if not ReactiveDefense or not battle then
-                return
-            end
-            if not (love and love.graphics) then
-                return
-            end
-            -- Player speech bubble owns the top-left corner.
-            if hud.bubbleSideActive(battle) == "player" then
-                return
-            end
-            local side = ReactiveDefense.sideState(battle, true)
-            if not side then
-                return
-            end
-            local cap = math.max(1, ReactiveDefense.focusCap(battle.player) or 100)
-            local focus = math.max(0, math.min(cap, math.floor(side.focus or 0)))
-            local state = momentumState(battle)
-            if state.focusChipLast ~= focus then
-                state.focusChipLast = focus
-                state.focusChipPulse = 18
-            end
-            local pulse = state.focusChipPulse or 0
-            if pulse > 0 then
-                state.focusChipPulse = pulse - 1
-            end
-
-            local g = love.graphics
-            -- Tiny strip: "F" + soft purple fill on a light track.
-            local barW, barH = 28, 3
-            local bw, bh = 7 + barW + 3, 8
-            local x, y = 1, 1
-
-            g.push("all")
-            g.setColor(1, 1, 1, 1)
-            g.rectangle("fill", x, y, bw, bh)
-            g.setColor(0, 0, 0, 1)
-            g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
-            Font.draw("F", x + 1, y)
-            local barX, barY = x + 8, y + 2
-            g.setColor(0.90, 0.84, 0.94, 1)
-            g.rectangle("fill", barX, barY, barW, barH)
-            local filled = math.floor(barW * (focus / cap) + 0.5)
-            if filled > 0 then
-                g.setColor(0.62, 0.40, 0.82, 0.92)
-                g.rectangle("fill", barX, barY, filled, barH)
-            end
-            g.setColor(0, 0, 0, 1)
-            g.rectangle("line", barX + 0.5, barY + 0.5, barW - 1, barH - 1)
-            g.setColor(1, 1, 1, 1)
-            g.pop()
+                end,
+                pickMode = calloutPickMode,
+                calloutStyle = calloutStyle,
+                lowHpRatio = lowHpRatio,
+                foeMoveIsSpecial = foeMoveIsSpecial,
+                playerStatusLocked = playerStatusLocked,
+                playerHasCounter = playerHasCounter,
+                playerInDeepCover = playerInDeepCover,
+                playerHoldingHide = playerHoldingHide,
+                playerMonName = playerMonName,
+                enemyMonName = enemyMonName,
+                trainerFoeReactionsOn = trainerFoeReactionsOn,
+                rollEnemyAgain = rollEnemyAgain,
+                pickCallEntry = pickCallEntry,
+                findMoveByName = findMoveByName,
+                insertBeforeAnim = insertBeforeAnim,
+                insertAfterMissAnim = insertAfterMissAnim,
+                indexOfMoveAnim = indexOfMoveAnim,
+                resumeInsertIndex = resumeInsertIndex,
+                enqueueAutoAfter = enqueueAutoAfter,
+                markBubbleWait = markBubbleWait,
+                tagFieldCue = tagFieldCue,
+                applyCalloutBuffs = applyCalloutBuffs,
+                enqueueBraceAnim = enqueueBraceAnim,
+                signalAttackPresentation = signalAttackPresentation,
+                tryAgainStrike = tryAgainStrike,
+                resolvePlayerCounterAttempt = resolvePlayerCounterAttempt,
+                tryFoeCoverReaction = tryFoeCoverReaction,
+                enqueueReactWithAttack = enqueueReactWithAttack,
+                fieldCueForFoeCover = fieldCueForFoeCover,
+                isDodgeFailNarrator = isDodgeFailNarrator,
+                resetBattleCamera = resetBattleCamera,
+                scrubLateDodgeWhiff = scrubLateDodgeWhiff,
+            })
+            pcall(React.install, mod)
         end
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
@@ -8792,17 +6490,6 @@ return function(mod)
                 return
             end
             BanterCameo.draw(battle)
-            -- FIELD: no HUD cover cubes (field_battle uses map props / grid cover).
-            if type(dev.drawCoverProp) == "function"
-                and not (FieldBattleViewer and FieldBattleViewer.enabled
-                    and FieldBattleViewer.enabled(mod)) then
-                dev.drawCoverProp(battle)
-            end
-            hud.drawMomentumChip(battle, false)
-            hud.drawMomentumChip(battle, true)
-            if type(dev.drawFocusChip) == "function" then
-                dev.drawFocusChip(battle)
-            end
             local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
             if side then
                 hud.drawSpeechBubble(battle, side)
@@ -8923,7 +6610,6 @@ return function(mod)
                 temp.entrenched = false
                 temp.entrenchTurns = 0
                 state.temp = temp
-                publishChipState(battle)
             end
 
             local function openStrikeOrStayMenu(battle)
@@ -9061,7 +6747,6 @@ return function(mod)
                             end
                             clearAmbientStance(battle)
                             goMoveSelect(battle)
-                            publishChipState(battle)
                         else
                             clearAmbientStance(battle)
                             goMoveSelect(battle)
@@ -9102,7 +6787,6 @@ return function(mod)
                             end
                             tagQueueBubble(battle, "player")
                             goMoveSelect(battle)
-                            publishChipState(battle)
                             dev.log(battle, "FOCUS entrench break", "refund=" .. tostring(refund))
                         end
                     end,
@@ -9120,7 +6804,7 @@ return function(mod)
                     local side = ReactiveDefense.sideState(battle, true)
                     return side and side.entrenched == true and (side.entrenchTurns or 0) > 0
                 end
-                local state = momentumByBattle[battle]
+                local state = React.peek(battle)
                 return state and state.temp and state.temp.entrenched == true
             end
 
@@ -9171,7 +6855,7 @@ return function(mod)
                     -- Exception: a real move pick is an intentional BREAK + attack
                     -- (FIELD PreferMoves used to skip ENTRENCH! and get eaten here).
                     if user and user.isPlayer and action and action.special ~= "holdPosition" then
-                        local state = momentumByBattle[self]
+                        local state = React.peek(self)
                         local isRealMove = action.id ~= nil or action.struggle == true
                         if state and state.temp and state.temp.deepCover then
                             action = { special = "holdPosition" }
@@ -9182,7 +6866,6 @@ return function(mod)
                                 if isRealMove then
                                     clearAmbientStance(self)
                                     ReactiveDefense.earlyExitEntrench(self, true)
-                                    publishChipState(self)
                                     dev.log(self, "FOCUS entrench break", "attack leaves trench")
                                 else
                                     action = { special = "holdPosition" }
@@ -9272,13 +6955,12 @@ return function(mod)
                                 and "cover" or "brace"
                             tagLatestQueueFieldCue(self, "player", stayKind)
                         end
-                        publishChipState(self)
                         -- Cover / brace / entrench buffs stay (unless max just cleared).
                         return
                     end
                     -- After a dodge opening going second: use the counter move you picked.
                     if user and user.isPlayer then
-                        local state = momentumByBattle[self]
+                        local state = React.peek(self)
                         if state and state.overridePlayerAction then
                             action = state.overridePlayerAction
                             state.overridePlayerAction = nil
@@ -9318,7 +7000,7 @@ return function(mod)
             if type(origResetPicFx) == "function" then
                 function BattleState.resetPicFx(self)
                     origResetPicFx(self)
-                    local state = self and momentumByBattle[self]
+                    local state = self and React.peek(self)
                     if not (state and state.temp and state.temp.picHidden) then
                         return
                     end
@@ -9340,7 +7022,7 @@ return function(mod)
             local origCancelMoveAnim = BattleState.cancelMoveAnim
             if type(origCancelMoveAnim) == "function" then
                 function BattleState.cancelMoveAnim(self)
-                    local state = self and momentumByBattle[self]
+                    local state = self and React.peek(self)
                     if state and state.keepDodgeMissAnim then
                         return
                     end
@@ -9466,7 +7148,6 @@ return function(mod)
                 elseif type(text) == "string"
                     and text:lower():find("attack missed", 1, true) then
                     -- Foe whiff without dodge cover still arms next-turn openings.
-                    publishChipState(self)
                 end
                 -- Route every battle line into a bubble so the classic box can stay hidden.
                 -- Frozen / asleep: narrator bubble (no trainer voice), not the bottom box.
@@ -9553,7 +7234,6 @@ return function(mod)
                                         enqueueBraceAnim(self, { foe = true })
                                     end
                                 end
-                                publishChipState(self)
                             end
                             if failNarr then
                                 -- Narrator only — never a trainer speech bubble.
@@ -9571,7 +7251,7 @@ return function(mod)
                     end
                     enqueueReactWithAttack(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
                     applyCalloutBuffs(self, buffs, trackTemp)
-                    local st = momentumByBattle[self]
+                    local st = React.peek(self)
                     if isEnemy and st and st.temp and trackTemp then
                         if st.temp.cover then
                             if st.temp.hidAway then
@@ -9584,7 +7264,6 @@ return function(mod)
                             })
                         end
                     end
-                    publishChipState(self)
                 end
                 return result
             end
@@ -9782,52 +7461,11 @@ return function(mod)
 
         -- Dramatic Shape snaps HUD bands + frosted panels outside drawHUDs.
         hud.installDramaticShapeHide = function()
-            if type(dev.installCoverPropStampHooks) == "function" then
-                pcall(dev.installCoverPropStampHooks)
-            end
             if type(dev.installFieldFightSpriteHook) == "function" then
                 pcall(dev.installFieldFightSpriteHook)
             end
             if FieldBattleViewer and type(FieldBattleViewer.install) == "function" then
                 pcall(FieldBattleViewer.install, mod)
-            end
-            local handle = mod.find and mod.find("DRAMATIC_SHAPE")
-            local lib = handle and handle.exports and handle.exports.lib
-            if not (lib and type(lib.require) == "function") then
-                return
-            end
-            local ok, OverworldBattle = pcall(lib.require, "OverworldBattle")
-            if not ok or type(OverworldBattle) ~= "table" then
-                return
-            end
-
-            -- Frosted name/HP panels follow hudLive; returning false skips those
-            -- boxes while leaving the dialogue panel alone.
-            if type(OverworldBattle.hudLive) == "function" and not hud.patched[OverworldBattle.hudLive] then
-                local origLive = OverworldBattle.hudLive
-                OverworldBattle.hudLive = function(battle, slide)
-                    if hideAllHud() then
-                        return false, false
-                    end
-                    return origLive(battle, slide)
-                end
-                hud.patched[origLive] = true
-                hud.patched[OverworldBattle.hudLive] = true
-            end
-
-            -- Drop the frosted glass slab under the battle text box while bubbles speak.
-            if type(OverworldBattle.textRects) == "function"
-                and not hud.patched[OverworldBattle.textRects] then
-                local origRects = OverworldBattle.textRects
-                OverworldBattle.textRects = function(battle)
-                    local out = origRects(battle)
-                    if hud.bubblesOwnDialogue(battle) and type(out) == "table" then
-                        out.box = nil
-                    end
-                    return out
-                end
-                hud.patched[origRects] = true
-                hud.patched[OverworldBattle.textRects] = true
             end
         end
 

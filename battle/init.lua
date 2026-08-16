@@ -1,9 +1,9 @@
 -- Battle systems — traditional battle layer
 --
--- Reactive Defense (Focus), anime move callouts, speech bubbles, trainer
--- banter, status/focus chips. Works on CLASSIC battles and under FIELD for
--- menus/logic. Presentation of FIELD itself is field_battle/; this package
--- is the fight systems on top of BattleState.
+-- Reactive Defense (Focus) math + REACT pipeline (menus, momentum,
+-- EffectRegistry wrap). Speech bubbles and trainer banter still live
+-- in main.lua until the next extract. FIELD presentation is
+-- field_battle/; this package is the fight systems on top of BattleState.
 --
 --   immersion/     → HP/EXP hide + rewards
 --   battle/        → this package
@@ -26,6 +26,7 @@ return function(env)
     }
 
     local ReactiveDefense
+    local React
     if type(loadFile) == "function" then
         local ok, value = pcall(loadFile, "reactive_defense.lua")
         if ok and type(value) == "table" then
@@ -33,8 +34,15 @@ return function(env)
         else
             print("[anime_realism] battle/reactive_defense: " .. tostring(value))
         end
+        ok, value = pcall(loadFile, "react.lua")
+        if ok and type(value) == "table" then
+            React = value
+        else
+            print("[anime_realism] battle/react: " .. tostring(value))
+        end
     end
     Battle.ReactiveDefense = ReactiveDefense
+    Battle.React = React
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do
@@ -45,6 +53,8 @@ return function(env)
         return false
     end
 
+    -- Engine wraps (EffectRegistry) are installed from main after host
+    -- presentation callbacks exist. See React.bind / React.install.
     function Battle.install(_mod)
         return true
     end
