@@ -31,6 +31,10 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 
 FIELD sits on the live overworld. This is the companion stack and Dramatic Shape / Dramaless settings currently used with this mod. Anime Realism itself has no hard deps; without the mods below you still get hidden numbers and REACT, but FIELD battlers and the voxel map will be missing or flat.
 
+## General Settings for Optimized Play
+
+`battle speed`: 2x
+
 ### Companion mods
 
 Enable **one** voxel world mod only — Dramatic Shape, Dramaless Shape, and Potato Voxel conflict.
@@ -49,6 +53,10 @@ Enable **one** voxel world mod only — Dramatic Shape, Dramaless Shape, and Pot
 Leave **Stadium Overworld Models** (`STADIUM_OVERWORLD_MODELS`) and **Stadium Battle FX** (`STADIUM_BATTLE_FX`) off. FIELD owns the fight; Stadium staging and FX fight that presentation.
 
 On this install, Anime Realism is **BATTLE STAGE = FIELD** and **FIELD SPRITES = HGSS**.
+
+If you didn't catch it above: 
+
+> Set your `battle speed`: `2x` to make the battles flow more nicely.
 
 ### Dramatic Shape / Dramaless settings
 
