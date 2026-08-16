@@ -355,6 +355,7 @@ function Lifecycle.drawWorldOverlay(battle)
     end
     stampAnchor(session.playerMon)
     stampAnchor(session.enemyMon)
+    stampAnchor(session.foe)
     -- Battlers that were kept off ow.entities (no voxel-safe sprite.def) still
     -- need a 2D stamp so send-out is visible without aborting the 3D pass.
     local function onOwList(ent)
@@ -1777,6 +1778,9 @@ function Lifecycle.tick(battle, dt, deps)
         deps.Projectiles.syncCoverHold(session, battle, dt)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
+    if deps.Callouts and type(deps.Callouts.tick) == "function" then
+        deps.Callouts.tick(session, dt, battle)
+    end
     Lifecycle.watchHpFaint(battle, deps)
     deps.Cues.tickReturns(session, deps.Grid)
     if type(deps.Cues.syncSemiInvuln) == "function" then
@@ -1926,6 +1930,9 @@ function Lifecycle.finish(battle, deps)
     end
     if deps and deps.Projectiles and type(deps.Projectiles.clear) == "function" then
         deps.Projectiles.clear(session)
+    end
+    if deps and deps.Callouts and type(deps.Callouts.finish) == "function" then
+        pcall(deps.Callouts.finish, session)
     end
     if session._arFieldAudio and deps and deps.Audio
         and type(deps.Audio.leaveField) == "function" then

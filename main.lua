@@ -3571,6 +3571,81 @@ return function(mod)
                     or battle._arFieldStandalone)
         end
 
+        local function liveFieldSession(battle)
+            if not (FieldBattleViewer and type(FieldBattleViewer.session) == "function") then
+                return nil
+            end
+            local session = FieldBattleViewer.session(battle)
+            if session and session.live then
+                return session
+            end
+            return nil
+        end
+
+        -- FIELD NPC shouts (banter, move orders) ride the reaction overlay.
+        -- The engine text box keeps vanilla narrative only.
+        local function isNpcTrainerSpeech(text)
+            local Callouts = FieldBattleViewer and FieldBattleViewer.Callouts
+            if Callouts and type(Callouts.isTrainerSpeech) == "function" then
+                return Callouts.isTrainerSpeech(text)
+            end
+            return tostring(text or ""):match("^[%w%.%s']+:") ~= nil
+        end
+
+        local function pushNpcCallout(battle, text, force, opts)
+            if not fieldFlowsText(battle) then
+                return false
+            end
+            text = tostring(text or ""):match("^%s*(.-)%s*$") or ""
+            if text == "" then
+                return false
+            end
+            if not force and not isNpcTrainerSpeech(text) then
+                return false
+            end
+            local Callouts = FieldBattleViewer and FieldBattleViewer.Callouts
+            local session = liveFieldSession(battle)
+            if not (Callouts and session and type(Callouts.push) == "function") then
+                return false
+            end
+            return Callouts.push(session, "foe", text, opts) == true
+        end
+
+        -- original() may promote the announce to battle.current and leave
+        -- nextInsert pointing at the next hole. Find the row we just submitted.
+        local function stampNpcOrderOnAnnounce(battle, narrative, order)
+            if type(battle) ~= "table" or not order then
+                return false
+            end
+            local function stamp(item)
+                if type(item) ~= "table" then
+                    return false
+                end
+                item.arNpcCallout = order
+                item.arNpcCalloutKind = "order"
+                return true
+            end
+            local want = tostring(narrative or "")
+            local function matches(item)
+                return type(item) == "table" and tostring(item.text or "") == want
+            end
+            if matches(battle.queue and battle.queue[battle.nextInsert]) then
+                return stamp(battle.queue[battle.nextInsert])
+            end
+            if matches(battle.current) then
+                return stamp(battle.current)
+            end
+            local q = battle.queue
+            if type(q) == "table" then
+                for i = 1, #q do
+                    if matches(q[i]) then
+                        return stamp(q[i])
+                    end
+                end
+            end
+            return false
+        end
+
         local function applyFieldToastAuto(item)
             if type(item) ~= "table" then
                 return
@@ -3598,6 +3673,11 @@ return function(mod)
             end
             local mon = parseUsedMoveText(s)
             if mon then
+                -- FIELD: "Enemy X used Y!" is narrator. Trainer orders go on
+                -- the tinted foe strip so the same event is not painted twice.
+                if fieldFlowsText(battle) then
+                    return "narrator"
+                end
                 local _, isEnemy = stripEnemyPrefix(mon)
                 if isEnemy then
                     return enemyStatusLocked(battle) and "narrator" or "foe"
@@ -3614,6 +3694,7 @@ return function(mod)
                 "burn", "attack missed", "doesn't affect", "critical",
                 "effective", "dodged", "whiffed", "came to", "woke up",
                 "too slow", "couldn't dodge", "found ", "hit through",
+                "about to use", "change pok",
             }
             for i = 1, #narrHints do
                 if lower:find(narrHints[i], 1, true) then
@@ -3724,6 +3805,79 @@ return function(mod)
                 tagFieldCue(item, fieldCue.side, fieldCue.kind, fieldCue.category)
             end
             table.insert(battle.queue, battle.nextInsert, item)
+        end
+
+        -- FIELD: pin a dodge/brace/cover onto the live attack toast so cues.lua
+        -- can play it on the same beat (issue #10). Classic battles stay queued.
+        local function attachOverlapReact(battle, react)
+            if not fieldFlowsText(battle) or type(react) ~= "table" then
+                return false
+            end
+            local function isAttackRow(row)
+                local cue = row and row.arFieldCue
+                if not cue then
+                    return false
+                end
+                return cue.kind == "attack" or cue.kind == "status"
+            end
+            local row = battle.queue and battle.queue[battle.nextInsert]
+            if not isAttackRow(row) then
+                row = battle.current
+            end
+            if not isAttackRow(row) then
+                local q = battle.queue
+                if type(q) == "table" then
+                    for i = 1, #q do
+                        if isAttackRow(q[i]) then
+                            row = q[i]
+                            break
+                        end
+                    end
+                end
+            end
+            if not isAttackRow(row) then
+                return false
+            end
+            row.arOverlapReact = row.arOverlapReact or {}
+            row.arOverlapReact[#row.arOverlapReact + 1] = react
+            return true
+        end
+
+        local function enqueueReactWithAttack(battle, text, delay, bubble, fieldCue)
+            local kind = fieldCue and fieldCue.kind
+            local foeOrder = fieldCue and fieldCue.side == "enemy"
+                and isNpcTrainerSpeech(text)
+            if fieldFlowsText(battle) and fieldCue
+                and (kind == "dodge" or kind == "cover" or kind == "hide"
+                    or kind == "brace") then
+                if foeOrder and attachOverlapReact(battle, {
+                    side = fieldCue.side,
+                    kind = kind,
+                    text = text,
+                    bubble = bubble,
+                }) then
+                    return true
+                end
+                if not foeOrder then
+                    -- Player / narrator reacts stay in the vanilla box.
+                    attachOverlapReact(battle, {
+                        side = fieldCue.side,
+                        kind = kind,
+                    })
+                    enqueueAutoAfter(battle, text, delay, "narrator")
+                    return true
+                end
+            end
+            enqueueAutoAfter(battle, text, delay, bubble, fieldCue)
+            return false
+        end
+
+        local function enqueueNpcFlavor(battle, text, delay, fieldCue)
+            if pushNpcCallout(battle, text, true, { kind = "react", urgent = true }) then
+                return true
+            end
+            enqueueAutoAfter(battle, text, delay, "foe", fieldCue)
+            return false
         end
 
         local function queueHasPoof(battle)
@@ -3947,6 +4101,11 @@ return function(mod)
             if type(battle) ~= "table" then
                 return false
             end
+            local session = liveFieldSession(battle)
+            local overlays = session and session._trainerCallouts
+            if overlays and overlays.foe and #overlays.foe > 0 then
+                return true
+            end
             local cur = battle.current
             if cur and cur.arBanter then
                 return true
@@ -4007,14 +4166,19 @@ return function(mod)
             local wanted = state.banterCameoWanted
             local cur = battle.current
 
-            if not cameo and wanted and cur and cur.arBanter then
+            local session = liveFieldSession(battle)
+            local foeToasts = session and session._trainerCallouts
+                and session._trainerCallouts.foe
+            local overlayBanter = type(foeToasts) == "table" and #foeToasts > 0
+            if not cameo and wanted and (overlayBanter or (cur and cur.arBanter)) then
                 if not battle.showEnemyTrainer then
                     local ow, lib = BanterCameo.owLive(battle)
                     if ow or BanterCameo.image(battle) then
                         state.banterCameo = {
                             mode = "in",
                             frame = 0,
-                            line = cur.text or (wanted ~= true and wanted) or nil,
+                            line = (wanted ~= true and wanted)
+                                or (cur and cur.text) or nil,
                             ow = ow and true or false,
                         }
                         cameo = state.banterCameo
@@ -4234,24 +4398,18 @@ return function(mod)
                 battle._arSendBanterCooldown = 120
                 return
             end
+            battle._arSendBanterDidIntro = true
+            battle._arSendBanterCooldown = 120
+            if pushNpcCallout(battle, line, true, { kind = "banter" }) then
+                BanterCameo.start(battle, line)
+                return
+            end
             local item = { text = line, arBanter = true }
-            local intro = not battle._arSendBanterDidIntro
-            if intro then
-                -- Intro impression: wait for A. auto=false so FIELD toasts
-                -- do not re-arm a ~0.5s auto-advance.
-                if opt("speech_bubbles") then
-                    item.bubble = "foe"
-                end
-                item.auto = false
-                item.autoDelay = nil
-                battle._arSendBanterDidIntro = true
-            elseif not markBubbleWait(item, "foe", true, battle) then
+            if not markBubbleWait(item, "foe", true, battle) then
                 item.auto = true
                 item.autoDelay = S.CALLOUT_AUTO_DELAY
             end
             table.insert(battle.queue, 1, item)
-            -- Cover the foe-send + player-Go! SHIFT / intro wave.
-            battle._arSendBanterCooldown = 120
             BanterCameo.start(battle, line)
         end
 
@@ -4302,6 +4460,10 @@ return function(mod)
             line = clampBanterText(line)
             ms.lastIdleBanterTurn = turn
             ms.lastIdleBanterLine = line
+            if pushNpcCallout(battle, line, true, { kind = "banter" }) then
+                BanterCameo.start(battle, line)
+                return
+            end
             local item = { text = line, arBanter = true }
             if not markBubbleWait(item, "foe", true, battle) then
                 item.auto = true
@@ -4343,14 +4505,16 @@ return function(mod)
             local line = pickFoeTrainerLine(
                     battle, S.TRAINER_FOE_COUNTER_BACK_CALLS, S.FOE_COUNTER_BACK_CALLS, foe)
                 or ("Too slow!\n" .. foe .. " counters!")
-            battle.nextInsert = (battle.nextInsert or 0) + 1
-            do
-                local item = { text = line }
-                if not markBubbleWait(item, "foe", true, battle) then
-                    item.auto = true
-                    item.autoDelay = S.CALLOUT_AUTO_DELAY
+            if not enqueueNpcFlavor(battle, line, S.CALLOUT_AUTO_DELAY) then
+                battle.nextInsert = (battle.nextInsert or 0) + 1
+                do
+                    local item = { text = line }
+                    if not markBubbleWait(item, "foe", true, battle) then
+                        item.auto = true
+                        item.autoDelay = S.CALLOUT_AUTO_DELAY
+                    end
+                    table.insert(battle.queue, battle.nextInsert, item)
                 end
-                table.insert(battle.queue, battle.nextInsert, item)
             end
             battle.nextInsert = (battle.nextInsert or 0) + 1
             table.insert(battle.queue, battle.nextInsert, {
@@ -6246,19 +6410,19 @@ return function(mod)
                 insertBeforeAnim(battle, failItem)
             end
             if foeLine then
-                local item = {
-                    text = foeLine,
-                    auto = true,
-                    autoDelay = S.CALLOUT_AUTO_DELAY,
-                }
-                if not isDodgeFailNarrator(foeLine) then
-                    markBubbleWait(item, "foe", true, battle)
-                else
-                    markBubbleWait(item, "narrator", true, battle)
-                end
                 local cue = fieldCueForFoeCover(foeBuffs, foeLine)
-                tagFieldCue(item, cue.side, cue.kind)
-                insertBeforeAnim(battle, item)
+                local bubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
+                if not enqueueReactWithAttack(battle, foeLine, S.CALLOUT_AUTO_DELAY,
+                    bubble, cue) then
+                    local item = {
+                        text = foeLine,
+                        auto = true,
+                        autoDelay = S.CALLOUT_AUTO_DELAY,
+                    }
+                    markBubbleWait(item, bubble, true, battle)
+                    tagFieldCue(item, cue.side, cue.kind)
+                    insertBeforeAnim(battle, item)
+                end
             end
             -- Physical brace: Harden-style sparkle on the foe before your hit.
             if foeTrack and foeBuffs then
@@ -7642,7 +7806,7 @@ return function(mod)
                 S.TRAINER_FOE_LEAVE_COVER_CALLS,
                 S.FOE_LEAVE_COVER_CALLS,
                 monName or enemyMonName(battle))
-            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, "foe")
+            enqueueNpcFlavor(battle, line, S.CALLOUT_AUTO_DELAY)
             publishChipState(battle)
             return true
         end
@@ -7743,7 +7907,7 @@ return function(mod)
                     if not rollPlayerReactSuccess(battle, "dodge") then
                         state.temp.dodgedOk = false
                         if enemyCounterLine then
-                            enqueueAutoAfter(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY, "foe",
+                            enqueueNpcFlavor(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY,
                                 foeAttackCue)
                         end
                         return reactFailLine(battle, "dodge"), nil, false,
@@ -7776,7 +7940,7 @@ return function(mod)
                 if not rollPlayerReactSuccess(battle, "brace") then
                     state.temp.dodgedOk = false
                     if enemyCounterLine then
-                        enqueueAutoAfter(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY, "foe",
+                        enqueueNpcFlavor(battle, enemyCounterLine, S.CALLOUT_AUTO_DELAY,
                             foeAttackCue)
                     end
                     return reactFailLine(battle, "brace"), nil, false,
@@ -7993,6 +8157,27 @@ return function(mod)
             if text == "" then
                 return
             end
+            -- FIELD: trainer speech belongs on the tinted foe strip, not here.
+            if hud.fieldCompactActive(battle) then
+                local Callouts = FieldBattleViewer and FieldBattleViewer.Callouts
+                local session = liveFieldSession(battle)
+                local raw = (battle.current and battle.current.text)
+                    or battle._arLastBubbleText or text
+                if Callouts and type(Callouts.isTrainerSpeech) == "function"
+                    and Callouts.isTrainerSpeech(raw) then
+                    -- Already shown (or about to show) on the attack/react beat.
+                    return
+                end
+                if session and type(Callouts) == "table"
+                    and type(Callouts.ownsText) == "function"
+                    and (Callouts.ownsText(session, raw)
+                        or Callouts.ownsText(session, text)) then
+                    return
+                end
+                if side == "foe" then
+                    side = "narrator"
+                end
+            end
             local g = love.graphics
             local narrator = (side == "narrator")
             local fieldToast = hud.fieldCompactActive(battle)
@@ -8028,6 +8213,7 @@ return function(mod)
                 x = math.floor((160 - bw) / 2)
                 y = floorY - bh
                 if y < 1 then y = 1 end
+                battle._arNarratorTop = y
             elseif hud.fieldCompactActive(battle) and not narrator then
                 local wanted = (side == "foe") and "enemy" or "player"
                 local ow = battle.game and battle.game.overworld
@@ -8072,9 +8258,12 @@ return function(mod)
             end
 
             -- Classic text-box look: white fill, double black border.
-            -- Incoming foe attack: soft reddish fill so the threat reads instantly.
-            local threat = battle._arLastBubbleThreat == true
+            -- FIELD: the tinted foe strip owns threat red. This slab stays white
+            -- so "Enemy used X!" / switch prompts are not a second red order.
+            local threat = not fieldToast and (
+                battle._arLastBubbleThreat == true
                 or (battle.current and battle.current.arThreatToast == true)
+            )
             local fillR, fillG, fillB = 1, 1, 1
             if threat then
                 fillR, fillG, fillB = 1.00, 0.78, 0.74
@@ -8479,12 +8668,16 @@ return function(mod)
             if hud.fieldCompactActive(battle) then
                 local side = hud.bubbleSideActive(battle)
                 battle._arFieldBubbleDialogue = side and true or nil
+                battle._arNarratorTop = nil
                 if FieldBattleViewer and type(FieldBattleViewer.drawUI) == "function" then
                     FieldBattleViewer.drawUI(battle)
                 end
                 battle._arFieldBubbleDialogue = nil
                 if side then
                     hud.drawSpeechBubble(battle, side)
+                end
+                if FieldBattleViewer and type(FieldBattleViewer.drawCallouts) == "function" then
+                    FieldBattleViewer.drawCallouts(battle)
                 end
                 return
             end
@@ -8534,7 +8727,11 @@ return function(mod)
                                         self._arFieldToastPaused = false
                                     end
                                 end
-                                if self._arFieldToastPaused and curItem then
+                                if curItem and curItem._arOverlapShown then
+                                    -- Already played as an overlay during the attack.
+                                    curItem.auto = true
+                                    curItem.autoDelay = 0
+                                elseif self._arFieldToastPaused and curItem then
                                     curItem.auto = nil
                                     curItem.autoDelay = nil
                                 elseif curItem and curItem.text and curItem.auto ~= false then
@@ -9105,7 +9302,18 @@ return function(mod)
                 -- Dodge cover miss: keep anim + replace vanilla "attack missed!".
                 local dodgeWhiff
                 text, dodgeWhiff = rewriteDodgeMissText(self, text)
-                local result = original(self, rewriteBattleText(self, text), ...)
+                local displayText = rewriteBattleText(self, text)
+                -- FIELD: NPC move orders ride the attack cue so they open on
+                -- the same beat as the FX (issue #10). The box keeps narrative.
+                local pendingNpcOrder
+                if fieldFlowsText(self) and mon and isEnemy then
+                    local narrative = rewriteLevelUpText(text)
+                    if displayText ~= narrative then
+                        pendingNpcOrder = displayText
+                        displayText = narrative
+                    end
+                end
+                local result = original(self, displayText, ...)
                 -- Move announce → physical step-in or special cast-in-place on FIELD.
                 if mon and moveName then
                     local moveDef = findMoveByName(self, moveName)
@@ -9118,6 +9326,16 @@ return function(mod)
                             or tostring(moveName):upper():gsub("[^A-Z0-9]+", "_")
                         tagLatestQueueFieldCue(self, isEnemy and "enemy" or "player",
                             kind, damaging and cat or nil, moveDef.type, moveId)
+                    end
+                end
+                if pendingNpcOrder then
+                    if not stampNpcOrderOnAnnounce(self, displayText, pendingNpcOrder) then
+                        -- Announce row was not findable; still show the order
+                        -- so it is not dropped. Cue pump will refresh it.
+                        pushNpcCallout(self, pendingNpcOrder, true, {
+                            kind = "order",
+                            urgent = true,
+                        })
                     end
                 end
                 if dodgeWhiff then
@@ -9142,7 +9360,8 @@ return function(mod)
                     if mon then
                         local locked = isEnemy and enemyStatusLocked(self)
                             or ((not isEnemy) and playerStatusLocked(self))
-                        if locked then
+                        if locked or (fieldFlowsText(self) and isEnemy) then
+                            -- FIELD: engine "Enemy used X!" stays narrative.
                             tagQueueBubble(self, "narrator")
                         else
                             tagQueueBubble(self, isEnemy and "foe" or "player")
@@ -9205,7 +9424,8 @@ return function(mod)
                             if foeLine then
                                 local foeBubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
                                 local foeCue = fieldCueForFoeCover(foeBuffs, foeLine)
-                                enqueueAutoAfter(self, foeLine, S.CALLOUT_AUTO_DELAY, foeBubble, foeCue)
+                                enqueueReactWithAttack(self, foeLine, S.CALLOUT_AUTO_DELAY,
+                                    foeBubble, foeCue)
                                 applyCalloutBuffs(self, foeBuffs, foeTrack)
                                 if foeTrack and foeBuffs then
                                     local braced = false
@@ -9235,7 +9455,7 @@ return function(mod)
                     if not isDodgeFailNarrator(reaction) then
                         bubbleSide = isEnemy and "foe" or "player"
                     end
-                    enqueueAutoAfter(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
+                    enqueueReactWithAttack(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
                     applyCalloutBuffs(self, buffs, trackTemp)
                     local st = momentumByBattle[self]
                     if isEnemy and st and st.temp and trackTemp then

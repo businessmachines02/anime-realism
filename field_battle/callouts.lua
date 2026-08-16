@@ -1,126 +1,165 @@
--- Field battle — async trainer callout bubbles (UI overlay).
+-- Field battle — standalone foe dialogue box (UI overlay).
 --
--- Queue-synced narrator toasts still paint from main.lua; player/foe trainer
--- lines push here on enqueue so they can linger while the battle queue advances.
+-- Move orders and react shouts live on their own queue so they linger after
+-- the white narrator box advances. Banter uses the same box. Engine prompts
+-- ("about to use" / switch) stay in the white box only.
 
 local Callouts = {}
 
-Callouts.HOLD = 2.0
+Callouts.HOLD = 3.6
+Callouts.HOLD_ORDER = 3.6
+Callouts.HOLD_REACT = 3.6
+Callouts.HOLD_BANTER = 2.4
 Callouts.FADE = 0.35
 Callouts.POP = 0.14
-Callouts.MAX_PER_SIDE = 2
+Callouts.MAX_QUEUE = 4
+Callouts.MAX_PER_SIDE = 4
+
+Callouts.BOX_X = 4
+Callouts.BOX_W = 152
+Callouts.VANILLA_Y = 119
+Callouts.GAP = 2
+Callouts.UI_W = 160
+Callouts.UI_H = 144
 
 local function font()
   local ok, Font = pcall(require, "src.render.Font")
   return ok and Font or nil
 end
 
-function Callouts.anchor(session, side, ow, battle)
-  if not (session and side and side ~= "narrator") then
-    return nil, nil
-  end
-  local ent
-  if side == "player" then
-    ent = ow and ow.player
-  else
-    ent = session.foe or session.enemyMon
-  end
-  if not ent then
-    return nil, nil
-  end
-  if ent._fieldScreenX and ent._fieldScreenY then
-    return ent._fieldScreenX, ent._fieldScreenY
-  end
-  -- Fallback when overlay draw order skipped a world stamp this frame.
-  local cam = ow and ow.camera
-  if not (cam and ent.px) then
-    return nil, nil
-  end
-  local Coords = (session._deps and session._deps.Coords)
-    or (package and package.loaded and package.loaded["coords"])
-  if not Coords or type(Coords.worldViewToUi) ~= "function" then
-    local ok, mod = pcall(require, "coords")
-    Coords = ok and mod or nil
-  end
-  if not Coords then
-    return nil, nil
-  end
-  local lift = ent._fieldBarLift or 14
-  local wx = (ent.px or 0) - (cam.x or 0) + 8
-  local wy = (ent.py or 0) - (cam.y or 0) - lift
-  local ren = battle and battle.game and battle.game.renderer
-  if type(Coords.worldViewToUi) == "function" then
-    return Coords.worldViewToUi(wx, wy, ren)
-  end
-  return wx, wy
+function Callouts.norm(text)
+  local flat = tostring(text or ""):lower():gsub("\v", " "):gsub("\n", " ")
+  flat = flat:gsub("%s+", " ")
+  return flat:match("^%s*(.-)%s*$") or ""
 end
 
-function Callouts.verticalAxis(session, side, ow)
-  local ent
-  if side == "player" then
-    ent = ow and ow.player
-  else
-    ent = session and (session.foe or session.enemyMon)
+-- Engine / narrator lines belong in the vanilla box, not the foe strip.
+function Callouts.isTrainerSpeech(text)
+  local raw = tostring(text or "")
+  if raw == "" then
+    return false
   end
-  local f = ent and ent.facing
-  if f == "up" or f == "down" then
+  -- "BROCK: …" is always the trainer, even if the body says "too slow".
+  if raw:match("^[%w%.%s']+:") then
     return true
   end
-  local plan = session and session.plan
-  if plan and type(plan.sx) == "number" and type(plan.sy) == "number" then
-    if plan.sx == 0 and plan.sy ~= 0 then
-      return true
+  local flat = Callouts.norm(raw)
+  local narr = {
+    "dodged", "whiffed", "attack missed", "too slow",
+    "fainted", "hurt itself", "super effective", "not very effective",
+    "critical hit", "sent out", "recoil",
+    "about to use", "change pok",
+  }
+  for i = 1, #narr do
+    if flat:find(narr[i], 1, true) then
+      return false
     end
-    if math.abs(plan.sy) > math.abs(plan.sx) then
+  end
+  if flat:match("^go! ") then
+    return false
+  end
+  if flat:find(" used ", 1, true) or flat:match("%w used ") then
+    return false
+  end
+  if flat:find("will ", 1, true) and flat:find("change", 1, true) then
+    return false
+  end
+  if flat:find("use ", 1, true) or flat:find("move!", 1, true)
+      or flat:find("dodge", 1, true) or flat:find("brace", 1, true)
+      or flat:find("get aside", 1, true) or flat:find("hit back", 1, true)
+      or flat:find("counter", 1, true) or flat:find("hold firm", 1, true)
+      or flat:find("dig in", 1, true) or flat:find("stand firm", 1, true)
+      or flat:find("break cover", 1, true) or flat:find("come out", 1, true)
+      or flat:find("now!", 1, true) or flat:find("go,", 1, true)
+      or flat:find("come on", 1, true) or flat:find("quick,", 1, true)
+      or flat:find("strike", 1, true) then
+    return true
+  end
+  -- Generic youngster orders: "Onix! Surf!" / "Onix! Surf, now!"
+  if flat:match("^[%w%-']+!%s+[%w%-']+") then
+    return true
+  end
+  return false
+end
+
+function Callouts.isEnginePrompt(text)
+  local flat = Callouts.norm(text)
+  if flat == "" then
+    return false
+  end
+  if flat:find("about to use", 1, true) or flat:find("change pok", 1, true) then
+    return true
+  end
+  return flat:find("will ", 1, true) ~= nil and flat:find("change", 1, true) ~= nil
+end
+
+function Callouts.ownsText(session, text)
+  local n = Callouts.norm(text)
+  if n == "" then
+    return false
+  end
+  local q = session and session._trainerCallouts and session._trainerCallouts.foe
+  if not q then
+    return false
+  end
+  for i = 1, #q do
+    if Callouts.norm(q[i].text) == n then
       return true
     end
   end
   return false
 end
 
--- Returns x, y, anchorX, anchorY, placement ("above" | "left" | "right").
-function Callouts.bubbleRect(session, side, ow, battle, bw, bh)
-  local ax, ay = Callouts.anchor(session, side, ow, battle)
-  if not ax then
-    return nil
+function Callouts.holdFor(kind)
+  if kind == "react" then
+    return Callouts.HOLD_REACT
   end
-  bw = bw or 48
-  bh = bh or 16
-  local vertical = Callouts.verticalAxis(session, side, ow)
-  local gap = 6
-  local x, y, placement
+  if kind == "order" then
+    return Callouts.HOLD_ORDER
+  end
+  if kind == "banter" then
+    return Callouts.HOLD_BANTER
+  end
+  return Callouts.HOLD
+end
 
-  if vertical then
-    y = math.floor(ay - bh * 0.5)
-    -- Vertical duels: open bubbles to the sides of each trainer column.
-    if side == "player" then
-      x = ax - bw - gap
-      placement = "left"
-      if x < 1 then
-        x = ax + gap
-        placement = "right"
-      end
-    else
-      x = ax + gap
-      placement = "right"
-      if x + bw > 159 then
-        x = ax - bw - gap
-        placement = "left"
-      end
-    end
+-- Standalone dialogue box. Sits in the vanilla slot when the white box is
+-- down; lifts just above it when both are up.
+-- Returns x, y, w, h, placement ("above_box"|"slot").
+function Callouts.dockRect(bh, vanillaTop)
+  bh = math.max(23, tonumber(bh) or 23)
+  local top = tonumber(vanillaTop)
+  local y, place
+  if top then
+    y = math.floor(top - Callouts.GAP - bh)
+    place = "above_box"
   else
-    placement = "above"
-    x = math.floor(ax - bw / 2)
-    y = math.floor(ay - bh - 8)
+    y = Callouts.VANILLA_Y
+    if y + bh > 142 then
+      y = 142 - bh
+    end
+    place = "slot"
   end
+  if y < 2 then
+    y = 2
+  end
+  return Callouts.BOX_X, y, Callouts.BOX_W, bh, place
+end
 
-  x = math.max(1, math.min(159 - bw, x))
-  y = math.max(1, math.min(144 - bh, y))
-  return x, y, ax, ay, placement
+-- Older tests / callers used world-anchored placement. The strip is docked now.
+function Callouts.bubbleRect(_session, _side, _ow, _battle, bw, bh)
+  local _, y, w, h, place = Callouts.dockRect(bh or 16, Callouts.VANILLA_Y)
+  local width = tonumber(bw) or w
+  local x = math.floor((Callouts.UI_W - width) / 2)
+  return x, y, nil, nil, place
 end
 
 function Callouts.push(session, side, text, opts)
   if not (session and side and side ~= "narrator") then
+    return false
+  end
+  -- Player lines stay in the white box; this box is foe-only.
+  if side ~= "foe" then
     return false
   end
   text = tostring(text or ""):gsub("\v", "\n"):match("^%s*(.-)%s*$") or ""
@@ -129,36 +168,67 @@ function Callouts.push(session, side, text, opts)
   end
   opts = type(opts) == "table" and opts or {}
   session._trainerCallouts = session._trainerCallouts or {}
-  local q = session._trainerCallouts[side]
+  local q = session._trainerCallouts.foe
   if not q then
     q = {}
-    session._trainerCallouts[side] = q
+    session._trainerCallouts.foe = q
   end
-  q[#q + 1] = {
+  local n = Callouts.norm(text)
+  for i = 1, #q do
+    if Callouts.norm(q[i].text) == n then
+      if i == 1 then
+        q[i].age = 0
+      end
+      if opts.threat == true then
+        q[i].threat = true
+      end
+      if opts.urgent == true and i > 1 then
+        local item = table.remove(q, i)
+        item.age = 0
+        table.insert(q, 1, item)
+      end
+      return true
+    end
+  end
+  local item = {
     text = text,
     age = 0,
-    hold = Callouts.HOLD,
+    hold = tonumber(opts.hold) or Callouts.holdFor(opts.kind),
     threat = opts.threat == true,
+    kind = opts.kind,
   }
-  while #q > Callouts.MAX_PER_SIDE do
-    table.remove(q, 1)
+  if opts.urgent == true and #q > 0 then
+    table.insert(q, 1, item)
+  else
+    q[#q + 1] = item
+  end
+  while #q > Callouts.MAX_QUEUE do
+    table.remove(q)
   end
   return true
 end
 
-function Callouts.tick(session, dt)
+function Callouts.tick(session, dt, battle)
   local all = session and session._trainerCallouts
   if not all then
     return
   end
+  local live = (battle and battle.current and battle.current.text)
+    or (battle and battle._arLastBubbleText)
+  if Callouts.isEnginePrompt(live) then
+    return
+  end
   dt = dt or (1 / 60)
   for side, q in pairs(all) do
-    for i = #q, 1, -1 do
-      local toast = q[i]
+    local toast = q[1]
+    if toast then
       toast.age = (toast.age or 0) + dt
       local total = (toast.hold or Callouts.HOLD) + Callouts.FADE
       if toast.age >= total then
-        table.remove(q, i)
+        table.remove(q, 1)
+        if q[1] then
+          q[1].age = 0
+        end
       end
     end
     if #q == 0 then
@@ -228,18 +298,18 @@ local function toastAlpha(age, hold)
   return 1
 end
 
-local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
+local function drawBox(g, Font, text, vanillaTop, alpha)
   if alpha <= 0 then
     return
   end
-  local maxInner = 96
-  local padX, padY = 4, 3
+  local padX, padY = 6, 4
   local lineH = 8
+  local maxInner = Callouts.BOX_W - padX * 2
   local lines = wrapText(Font, text, maxInner)
   if #lines == 0 then
     lines[1] = ""
   end
-  local maxLines = 4
+  local maxLines = 3
   if #lines > maxLines then
     local trimmed = {}
     for i = 1, maxLines - 1 do
@@ -248,48 +318,21 @@ local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
     trimmed[maxLines] = "..."
     lines = trimmed
   end
-  local contentW = 0
-  for i = 1, #lines do
-    contentW = math.max(contentW, Font.width(lines[i]))
-  end
-  contentW = math.max(32, math.min(maxInner, contentW))
-  local bw = contentW + padX * 2
-  local bh = padY * 2 + #lines * lineH
-  local x = math.floor(anchorX - bw / 2)
-  local y = math.floor(anchorY - bh - 9)
-  x = math.max(1, math.min(159 - bw, x))
-  if y < 1 then
-    y = 1
-  end
-
-  local fillR, fillG, fillB = 1, 1, 1
-  if threat then
-    fillR, fillG, fillB = 1.00, 0.78, 0.74
-  end
+  local bh = math.max(23, padY * 2 + #lines * lineH)
+  local x, y, bw = Callouts.dockRect(bh, vanillaTop)
 
   g.push("all")
-  g.setColor(fillR, fillG, fillB, alpha)
+  g.setColor(0.84, 0.84, 0.86, alpha)
   g.rectangle("fill", x, y, bw, bh)
   g.setColor(0, 0, 0, alpha)
   g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
   g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
 
-  local tailX = math.max(x + 5, math.min(x + bw - 5, anchorX))
-  g.setColor(fillR, fillG, fillB, alpha)
-  g.polygon("fill", tailX - 4, y + bh - 1,
-    tailX + 4, y + bh - 1, anchorX, math.min(anchorY - 2, y + bh + 6))
   g.setColor(0, 0, 0, alpha)
-  g.line(tailX - 4, y + bh - 1,
-    anchorX, math.min(anchorY - 2, y + bh + 6))
-  g.line(anchorX, math.min(anchorY - 2, y + bh + 6),
-    tailX + 4, y + bh - 1)
-
-  g.setColor(0, 0, 0, alpha)
-  local textX = x + padX
   local ty = y + padY
   for i = 1, #lines do
     local codes = Font.encode(lines[i])
-    local tx = textX
+    local tx = x + padX
     for j = 1, #codes do
       Font.drawCode(codes[j], tx, ty)
       tx = tx + (Font.advanceOf(codes[j]) or 8)
@@ -300,45 +343,29 @@ local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
   g.pop()
 end
 
-local function looksThreat(text, side, flagged)
-  if flagged then
-    return true
-  end
-  if side ~= "foe" then
-    return false
-  end
-  local s = tostring(text or ""):upper()
-  return s:find("\nUSE ", 1, true) ~= nil
-    or s:find(", USE ", 1, true) ~= nil
-    or s:find("\nGO! ", 1, true) ~= nil
-end
-
 function Callouts.draw(session, battle)
   if not (session and session._trainerCallouts and love and love.graphics) then
+    return
+  end
+  -- Switch / "about to use" pages own the white box; pause this one.
+  local live = (battle and battle.current and battle.current.text)
+    or (battle and battle._arLastBubbleText)
+  if Callouts.isEnginePrompt(live) then
+    return
+  end
+  local q = session._trainerCallouts.foe
+  if not q or #q == 0 then
     return
   end
   local Font = font()
   if not Font then
     return
   end
-  local ow = battle and battle.game and battle.game.overworld
+  local vanillaTop = battle and battle._arNarratorTop or nil
   local g = love.graphics
-  for si = 1, 2 do
-    local side = (si == 1) and "player" or "foe"
-    local q = session._trainerCallouts[side]
-    if q then
-      local ax, ay = Callouts.anchor(session, side, ow, battle)
-      if ax then
-        for i = 1, #q do
-          local toast = q[i]
-          local alpha = toastAlpha(toast.age, toast.hold)
-          local stackLift = (#q - i) * 14
-          drawBubble(g, Font, toast.text, ax, ay - stackLift, alpha,
-            looksThreat(toast.text, side, toast.threat))
-        end
-      end
-    end
-  end
+  local toast = q[1]
+  local alpha = toastAlpha(toast.age, toast.hold)
+  drawBox(g, Font, toast.text, vanillaTop, alpha)
 end
 
 return Callouts

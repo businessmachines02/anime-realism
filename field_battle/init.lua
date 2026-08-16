@@ -59,7 +59,7 @@ return function(env)
   end
   local Layout, Sprites, Arena, Survey, Grid, Cast, Cues, Projectiles
   local Audio, Anims, Lifecycle, Spectators, Wildlife, Compat
-  local Hooks, Intercept, Debug, UI
+  local Hooks, Intercept, Debug, UI, Callouts
   local loadOk, loadErr = pcall(function()
     Layout = loadFile("layout.lua")
     Sprites = loadFile("sprites.lua")
@@ -79,6 +79,7 @@ return function(env)
     Intercept = loadFile("intercept.lua")
     Debug = loadFile("debug.lua")
     UI = loadFile("ui.lua")
+    Callouts = loadFile("callouts.lua")
   end)
   require = origRequire
   if not loadOk then
@@ -104,6 +105,7 @@ return function(env)
     Compat = Compat,
     Debug = Debug,
     UI = UI,
+    Callouts = Callouts,
   }
 
   local FBV = {
@@ -127,6 +129,7 @@ return function(env)
     Compat = Compat,
     Debug = Debug,
     UI = UI,
+    Callouts = Callouts,
     Intercept = Intercept,
     OPTION_KEYS = { "battle_stage", "field_sprites" },
   }
@@ -217,6 +220,14 @@ return function(env)
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
     if session and Projectiles and type(Projectiles.drawUi) == "function" then
       pcall(Projectiles.drawUi, session, battle)
+    end
+  end
+
+  -- After the white narrator toast so the foe strip can sit above it.
+  function FBV.drawCallouts(battle)
+    local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
+    if session and Callouts and type(Callouts.draw) == "function" then
+      pcall(Callouts.draw, session, battle)
     end
   end
 
