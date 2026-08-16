@@ -153,8 +153,8 @@ remain on their normal presentation path.
   popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
   `MISSED!`) and speaker bubbles track the active Pokémon. Lines auto-advance
   about every 1.5 seconds so fights flow into the directional move grid. On the
-  move diamond (end of turn), **Right Shift** pauses into FIGHT / PKMN / ITEM /
-  RUN; Right Shift again returns to moves. During dialogue, **B** pauses a
+  move diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
+  Pick FIGHT to return to moves. During dialogue, **B** pauses a
   toast; **A** or **B** again resumes.
 - FIELD move selection is a diamond `U/R/L/D` compass (covers the classic
   TYPE/PP panel). Pressing that direction immediately casts the matching move.

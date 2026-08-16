@@ -287,7 +287,7 @@ Water-types can swap to a swim sheet on surveyed water cells.
 
 `BattleState` still owns phases, cursors, and input. FIELD paints a small
 command menu and U/R/L/D move diamond, then injects **A** for instant cast.
-**Right Shift** pauses back to FIGHT/PKMN/ITEM/RUN. Classic anim paint is
+**B** pauses back to FIGHT/PKMN/ITEM/RUN. Classic anim paint is
 suppressed; engine anim *rows* still advance for timing. HP is a tiny bar
 over each mon (world→UI mapped). Party/Bag stay engine screens.
 

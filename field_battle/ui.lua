@@ -407,7 +407,7 @@ local function drawMoves(g, Font, battle)
     g.rectangle("line", 1.5, 65.5, 157, 77)
     if Font and type(Font.draw) == "function" then
         g.setColor(0.35, 0.30, 0.25, 1)
-        Font.draw("R-SHIFT PAUSE", 4, 68)
+        Font.draw("B PAUSE", 4, 68)
     end
     for s = 1, #slots do
         local slot = slots[s]
