@@ -207,11 +207,11 @@ function Cues.closeGapSpeed(ent, battle, side)
   end
   local speedU = math.max(0, math.min(1, spe / 120))
   local atkU = math.max(0, math.min(1, (atk - 40) / 100))
-  local gait = 22 + 48 * speedU
+  local gait = 26 + 54 * speedU   -- Raise base gait & speed scaling for faster minimums
   local boost = 1 + 0.4 * atkU
   local px = gait * boost
-  if px < 22 then
-    px = 22
+  if px < 28 then                  -- Raise the minimum a bit from 22 to 28
+    px = 28
   elseif px > 86 then
     px = 86
   end
