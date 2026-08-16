@@ -32,7 +32,7 @@ A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style im
 FIELD sits on the live overworld. This is the companion stack and Dramatic Shape / Dramaless settings currently used with this mod. Anime Realism itself has no hard deps; without the mods below you still get hidden numbers and REACT, but FIELD battlers and the voxel map will be missing or flat.
 
 > **📣 Note:**
-> **Minimum Required gen1recomp Version:** `0.1.86`
+> **Latest Working gen1recomp Version:** `0.1.86`
 
 ## General Settings for Optimized Play
 
