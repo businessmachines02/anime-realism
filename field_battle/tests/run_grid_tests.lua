@@ -2706,6 +2706,31 @@ function tests.camera_mouse_look_then_returns()
   truthy(peekedX ~= restX, "look-around actually moved the camera")
 end
 
+function tests.camera_look_zone_skips_touch_chrome()
+  local sw, sh = 160, 144
+  truthy(Lifecycle.mouseLookInZone(80, 72, sw, sh), "center is in the look zone")
+  truthy(not Lifecycle.mouseLookInZone(8, 136, sw, sh),
+    "bottom-left d-pad corner is outside the look zone")
+  truthy(not Lifecycle.mouseLookInZone(152, 136, sw, sh),
+    "bottom-right A/B corner is outside the look zone")
+  truthy(Lifecycle.mouseLookAllowed(8, 136, sw, sh),
+    "desktop may look from a corner")
+  truthy(not Lifecycle.mouseLookAllowed(8, 136, sw, sh, { touchConstrained = true }),
+    "touch overlay blocks look from the d-pad corner")
+  truthy(Lifecycle.mouseLookAllowed(80, 72, sw, sh, { touchConstrained = true }),
+    "touch overlay still allows look in the center")
+  truthy(not Lifecycle.mouseLookAllowed(80, 72, sw, sh, { touchHit = true }),
+    "a virtual-pad hit blocks look even at center")
+
+  local session = {}
+  eq(Lifecycle.tryMouseLook(session, 8, 136, sw, sh, 20, 0, { touchConstrained = true }),
+    false, "d-pad corner motion does not arm look")
+  eq(session.mouseLookT, nil, "look timer stays idle after a d-pad tap")
+  truthy(Lifecycle.tryMouseLook(session, 80, 72, sw, sh, 20, 0, { touchConstrained = true }),
+    "center motion arms look while the pad is up")
+  truthy((session.mouseLookT or 0) > 0, "look timer is held from the inner viewport")
+end
+
 function tests.sprite_cast_and_animation()
   local grid, plan = sampleGrid()
   local overworld = { entities = {} }

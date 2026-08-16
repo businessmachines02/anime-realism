@@ -1,4 +1,4 @@
-# FIELD combat SPEC (v4.5.34)
+# FIELD combat SPEC (v4.5.35)
 
 Overworld FIELD battle presentation owned by `field_battle/`.
 
@@ -188,7 +188,10 @@ Dedupe by wall time (`_lastPresentAt`, ~8ms) so multiple drivers don’t double-
 - `Cast.tick` → entity `tick` (bob, idle foot-swap, animT, lerp to pad target)
 - `Cues.tickReturns` (physical attack return-home)
 - soft camera follow of the **live fight** (throttled; clamped to the envelope;
-  mouse look-around while the cursor is moving, auto resume on idle)
+  mouse look-around while the cursor is moving, auto resume on idle.
+  Desktop may peek from anywhere in the window. While the on-screen pad is
+  up, only the inner viewport may peek, and a d-pad / A / B / START / SELECT
+  hit never pans)
 - `Anims.cache` while `animPlaying` or moving
 
 ### What present tick must NOT depend on
