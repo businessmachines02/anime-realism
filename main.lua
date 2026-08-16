@@ -3726,6 +3726,60 @@ return function(mod)
             table.insert(battle.queue, battle.nextInsert, item)
         end
 
+        -- FIELD: pin a dodge/brace/cover onto the live attack toast so cues.lua
+        -- can play it on the same beat (issue #10). Classic battles stay queued.
+        local function attachOverlapReact(battle, react)
+            if not fieldFlowsText(battle) or type(react) ~= "table" then
+                return false
+            end
+            local function isAttackRow(row)
+                local cue = row and row.arFieldCue
+                if not cue then
+                    return false
+                end
+                return cue.kind == "attack" or cue.kind == "status"
+            end
+            local row = battle.queue and battle.queue[battle.nextInsert]
+            if not isAttackRow(row) then
+                row = battle.current
+            end
+            if not isAttackRow(row) then
+                local q = battle.queue
+                if type(q) == "table" then
+                    for i = 1, #q do
+                        if isAttackRow(q[i]) then
+                            row = q[i]
+                            break
+                        end
+                    end
+                end
+            end
+            if not isAttackRow(row) then
+                return false
+            end
+            row.arOverlapReact = row.arOverlapReact or {}
+            row.arOverlapReact[#row.arOverlapReact + 1] = react
+            return true
+        end
+
+        local function enqueueReactWithAttack(battle, text, delay, bubble, fieldCue)
+            local kind = fieldCue and fieldCue.kind
+            if fieldFlowsText(battle) and fieldCue
+                and (kind == "dodge" or kind == "cover" or kind == "hide"
+                    or kind == "brace") then
+                if attachOverlapReact(battle, {
+                    side = fieldCue.side,
+                    kind = kind,
+                    text = text,
+                    bubble = bubble,
+                }) then
+                    return true
+                end
+            end
+            enqueueAutoAfter(battle, text, delay, bubble, fieldCue)
+            return false
+        end
+
         local function queueHasPoof(battle)
             if type(battle) ~= "table" or type(battle.queue) ~= "table" then
                 return false
@@ -6246,19 +6300,19 @@ return function(mod)
                 insertBeforeAnim(battle, failItem)
             end
             if foeLine then
-                local item = {
-                    text = foeLine,
-                    auto = true,
-                    autoDelay = S.CALLOUT_AUTO_DELAY,
-                }
-                if not isDodgeFailNarrator(foeLine) then
-                    markBubbleWait(item, "foe", true, battle)
-                else
-                    markBubbleWait(item, "narrator", true, battle)
-                end
                 local cue = fieldCueForFoeCover(foeBuffs, foeLine)
-                tagFieldCue(item, cue.side, cue.kind)
-                insertBeforeAnim(battle, item)
+                local bubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
+                if not enqueueReactWithAttack(battle, foeLine, S.CALLOUT_AUTO_DELAY,
+                    bubble, cue) then
+                    local item = {
+                        text = foeLine,
+                        auto = true,
+                        autoDelay = S.CALLOUT_AUTO_DELAY,
+                    }
+                    markBubbleWait(item, bubble, true, battle)
+                    tagFieldCue(item, cue.side, cue.kind)
+                    insertBeforeAnim(battle, item)
+                end
             end
             -- Physical brace: Harden-style sparkle on the foe before your hit.
             if foeTrack and foeBuffs then
@@ -8534,7 +8588,11 @@ return function(mod)
                                         self._arFieldToastPaused = false
                                     end
                                 end
-                                if self._arFieldToastPaused and curItem then
+                                if curItem and curItem._arOverlapShown then
+                                    -- Already played as an overlay during the attack.
+                                    curItem.auto = true
+                                    curItem.autoDelay = 0
+                                elseif self._arFieldToastPaused and curItem then
                                     curItem.auto = nil
                                     curItem.autoDelay = nil
                                 elseif curItem and curItem.text and curItem.auto ~= false then
@@ -9205,7 +9263,8 @@ return function(mod)
                             if foeLine then
                                 local foeBubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
                                 local foeCue = fieldCueForFoeCover(foeBuffs, foeLine)
-                                enqueueAutoAfter(self, foeLine, S.CALLOUT_AUTO_DELAY, foeBubble, foeCue)
+                                enqueueReactWithAttack(self, foeLine, S.CALLOUT_AUTO_DELAY,
+                                    foeBubble, foeCue)
                                 applyCalloutBuffs(self, foeBuffs, foeTrack)
                                 if foeTrack and foeBuffs then
                                     local braced = false
@@ -9235,7 +9294,7 @@ return function(mod)
                     if not isDodgeFailNarrator(reaction) then
                         bubbleSide = isEnemy and "foe" or "player"
                     end
-                    enqueueAutoAfter(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
+                    enqueueReactWithAttack(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
                     applyCalloutBuffs(self, buffs, trackTemp)
                     local st = momentumByBattle[self]
                     if isEnemy and st and st.temp and trackTemp then

@@ -477,35 +477,109 @@ function Cues.shouldSkipEvent(session, side, kind, opts)
   return false
 end
 
+function Cues.isReactKind(kind)
+  kind = tostring(kind or "")
+  return kind == "dodge" or kind == "cover" or kind == "hide" or kind == "brace"
+end
+
+-- Foe "Move!" / dodge is queued after "Surf!", so pumpCurrent would wait for
+-- the attack toast to finish. Issue #10: play the react on the same beat as
+-- the attack FX, and push the trainer line as an overlay callout.
+function Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
+  if not (session and session.live and battle) then
+    return false
+  end
+  local cur = battle.current
+  local attack = cur and cur.arFieldCue
+  if not attack then
+    return false
+  end
+  local attackKind = tostring(attack.kind or "")
+  if attackKind ~= "attack" and attackKind ~= "status" then
+    return false
+  end
+
+  local applied = false
+  local function fire(react, row)
+    if not react or react._arOverlapDone then
+      return
+    end
+    if not Cues.isReactKind(react.kind) then
+      return
+    end
+    react._arOverlapDone = true
+    if row then
+      row._arFieldCueDone = true
+      row._arOverlapShown = true
+    end
+    Cues.apply(session, react.side, react.kind, Grid, nudgeCamera, battle, react)
+    local Callouts = session._deps and session._deps.Callouts
+    if Callouts and type(Callouts.push) == "function" and react.text
+        and react.bubble ~= "narrator" then
+      local toastSide = (react.bubble == "player" or react.side == "player")
+        and "player" or "foe"
+      pcall(Callouts.push, session, toastSide, react.text)
+    end
+    applied = true
+  end
+
+  local attached = cur.arOverlapReact
+  if type(attached) == "table" then
+    for i = 1, #attached do
+      fire(attached[i], nil)
+    end
+  end
+
+  local opposite = (attack.side == "player") and "enemy" or "player"
+  local q = battle.queue
+  if type(q) == "table" then
+    for i = 1, math.min(6, #q) do
+      local row = q[i]
+      local cue = row and row.arFieldCue
+      if cue and not row._arFieldCueDone and cue.side == opposite
+          and Cues.isReactKind(cue.kind) then
+        fire({
+          side = cue.side,
+          kind = cue.kind,
+          text = row.text,
+          bubble = row.bubble,
+        }, row)
+      elseif cue and (cue.kind == "attack" or cue.kind == "status") then
+        break
+      end
+    end
+  end
+  return applied
+end
+
 --- Drain one-shot cue from battle.current when it becomes active.
 -- Faint / recall are HP-bar events (`shownHP` → 0), not dialogue. The
 -- "fainted!" line often becomes current after the sprite is gone — applying
 -- it then would replay the laser on the replacement mon.
+-- Dodge / brace / cover attached to this attack (or sitting in the next
+-- queue rows) fire on the same beat so they overlap the travel FX.
 function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   local cur = battle and battle.current
   local cue = cur and cur.arFieldCue
-  if not (cur and cue and not cur._arFieldCueDone) then
-    return false
+  local applied = false
+  if cur and cue and not cur._arFieldCueDone then
+    cur._arFieldCueDone = true
+    local kind = tostring(cue.kind or "")
+    if kind ~= "faint" and kind ~= "recall"
+        and not Cues.shouldSkipEvent(session, cue.side, kind, cue) then
+      applied = Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, {
+        category = cue.category,
+        moveType = cue.moveType,
+        moveId = cue.moveId,
+        vanish = cue.vanish,
+        again = cue.again,
+        isCalled = cue.isCalled,
+        releaseStrike = cue.releaseStrike,
+      }) and true or false
+    end
   end
-  cur._arFieldCueDone = true
-  local kind = tostring(cue.kind or "")
-  if kind == "faint" or kind == "recall" then
-    return false
-  end
-  -- Mark done even when skipped so a late toast cannot replay after the
-  -- 1.25s window (announce + move_used + REACT re-arm).
-  if Cues.shouldSkipEvent(session, cue.side, kind, cue) then
-    return false
-  end
-  return Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, {
-    category = cue.category,
-    moveType = cue.moveType,
-    moveId = cue.moveId,
-    vanish = cue.vanish,
-    again = cue.again,
-    isCalled = cue.isCalled,
-    releaseStrike = cue.releaseStrike,
-  })
+  local overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
+  return applied or overlapped
 end
 
 local function flattenText(text)

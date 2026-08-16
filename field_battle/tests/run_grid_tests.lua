@@ -25,6 +25,7 @@ local Layout = load("layout.lua")
 local Arena = load("arena.lua")
 local Survey = load("survey.lua")
 local Cues = load("cues.lua")
+local Callouts = load("callouts.lua")
 local Projectiles = load("projectiles.lua")
 local UI = load("ui.lua")
 local Lifecycle = load("lifecycle.lua")
@@ -1231,6 +1232,90 @@ function tests.self_damage_tags_field_cue()
   truthy(Cues.tagFaint(battle, battle.queue[1].text), "tags foe faint")
   eq(battle.queue[1].arFieldCue.side, "enemy", "Enemy faint uses foe side")
   eq(Cues.tagFaint(battle, "A critical hit!"), false, "non-faint text is ignored")
+end
+
+function tests.attack_overlap_fires_foe_dodge()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 30,
+    _deps = { Projectiles = Projectiles, Callouts = Callouts },
+  }
+
+  local battle = {
+    current = {
+      text = "SURF!",
+      arFieldCue = {
+        side = "player", kind = "attack",
+        category = "special", moveId = "SURF", moveType = "WATER",
+      },
+      arOverlapReact = {
+        { side = "enemy", kind = "dodge", text = "BROCK:\nOnix, dodge!", bubble = "foe" },
+      },
+    },
+    queue = {},
+  }
+  truthy(Cues.pumpCurrent(session, battle, Grid, nil), "attack + dodge pump")
+  eq(player.lastAnim, "cast", "surf casts in place")
+  eq(enemy.lastAnim, "dodge", "foe dodges on the same beat")
+  truthy(session._trainerCallouts and session._trainerCallouts.foe
+      and session._trainerCallouts.foe[1], "Move! overlay is up")
+  eq(session._trainerCallouts.foe[1].text, "BROCK:\nOnix, dodge!", "overlay text")
+
+  -- Lookahead: queued dodge toast after the announce.
+  session._now = 32
+  session._lastCueAt = nil
+  session._lastCueMoveId = nil
+  player.lastAnim = nil
+  enemy.lastAnim = nil
+  session._trainerCallouts = nil
+  Projectiles.clear(session)
+  local queued = {
+    text = "MOVE!",
+    bubble = "foe",
+    arFieldCue = { side = "enemy", kind = "dodge" },
+  }
+  battle = {
+    current = {
+      text = "SURF!",
+      arFieldCue = {
+        side = "player", kind = "attack",
+        category = "special", moveId = "HYDRO_PUMP", moveType = "WATER",
+      },
+    },
+    queue = { queued },
+  }
+  truthy(Cues.pumpCurrent(session, battle, Grid, nil), "lookahead dodge pumps")
+  eq(enemy.lastAnim, "dodge", "queued dodge plays with the attack")
+  eq(queued._arOverlapShown, true, "queued toast is consumed")
+  eq(queued._arFieldCueDone, true, "queued cue will not replay")
+
+  -- Late attach after the attack cue already fired (choose-lead / flush).
+  session._now = 34
+  enemy.lastAnim = nil
+  session._trainerCallouts = nil
+  battle.current._arFieldCueDone = true
+  battle.current.arOverlapReact = {
+    { side = "enemy", kind = "dodge", text = "Move!", bubble = "foe" },
+  }
+  battle.queue = {}
+  truthy(Cues.pumpCurrent(session, battle, Grid, nil), "late overlap still fires")
+  eq(enemy.lastAnim, "dodge", "dodge plays after a late attach")
 end
 
 function tests.dig_fly_vanish_and_emerge()
