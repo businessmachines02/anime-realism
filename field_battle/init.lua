@@ -221,6 +221,11 @@ return function(env)
     if session and Projectiles and type(Projectiles.drawUi) == "function" then
       pcall(Projectiles.drawUi, session, battle)
     end
+  end
+
+  -- After the white narrator toast so the foe strip can sit above it.
+  function FBV.drawCallouts(battle)
+    local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
     if session and Callouts and type(Callouts.draw) == "function" then
       pcall(Callouts.draw, session, battle)
     end

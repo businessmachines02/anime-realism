@@ -515,10 +515,13 @@ function Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
     Cues.apply(session, react.side, react.kind, Grid, nudgeCamera, battle, react)
     local Callouts = session._deps and session._deps.Callouts
     if Callouts and type(Callouts.push) == "function" and react.text
-        and react.bubble ~= "narrator" then
-      local toastSide = (react.bubble == "player" or react.side == "player")
-        and "player" or "foe"
-      pcall(Callouts.push, session, toastSide, react.text)
+        and react.side == "enemy" and react.bubble ~= "narrator"
+        and (type(Callouts.isTrainerSpeech) ~= "function"
+          or Callouts.isTrainerSpeech(react.text)) then
+      pcall(Callouts.push, session, "foe", react.text, {
+        kind = "react",
+        urgent = true,
+      })
     end
     applied = true
   end
@@ -558,10 +561,29 @@ end
 -- it then would replay the laser on the replacement mon.
 -- Dodge / brace / cover attached to this attack (or sitting in the next
 -- queue rows) fire on the same beat so they overlap the travel FX.
+local function pushPinnedCallout(session, text, kind)
+  local Callouts = session and session._deps and session._deps.Callouts
+  if not (Callouts and type(Callouts.push) == "function" and text) then
+    return
+  end
+  -- Pinned orders are already known NPC speech; do not re-filter.
+  pcall(Callouts.push, session, "foe", text, {
+    kind = kind or "order",
+    urgent = true,
+  })
+end
+
 function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   local cur = battle and battle.current
   local cue = cur and cur.arFieldCue
   local applied = false
+  local called = false
+  -- Open the foe order first so the gray box is up a beat before the FX.
+  if cur and cur.arNpcCallout and not cur._arNpcCalloutDone then
+    cur._arNpcCalloutDone = true
+    called = true
+    pushPinnedCallout(session, cur.arNpcCallout, cur.arNpcCalloutKind or "order")
+  end
   if cur and cue and not cur._arFieldCueDone then
     cur._arFieldCueDone = true
     local kind = tostring(cue.kind or "")
@@ -579,7 +601,7 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
     end
   end
   local overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
-  return applied or overlapped
+  return applied or overlapped or called
 end
 
 local function flattenText(text)
