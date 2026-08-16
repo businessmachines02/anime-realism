@@ -39,12 +39,11 @@ Enable **one** voxel world mod only — Dramatic Shape, Dramaless Shape, and Pot
 |-----|----|-----|
 | [Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod) or [Dramaless Shape](https://github.com/artyrambles/DRAMALESS_SHAPE) | `DRAMATIC_SHAPE` / `DRAMALESS_SHAPE` | Voxel overworld under FIELD. Staging is gated so a 3D arena does not cover map fights. |
 | [Wilds of Kanto](https://github.com/YoDrehDenSwagAuf/overworld-spawn-mod) | `overworld_wild_spawns` | Visible wilds plus overworld sheets FIELD can use |
-| PokéPC Followers (Voxel Merge) | `PokePCFollowers_VoxelMerge` | GSC-style follower / battler sheets |
+| [PokéPC Followers (Voxel Merge)](https://github.com/mfrtechconsult/PokePCFollowers) | `PokePCFollowers_VoxelMerge` | GSC-style follower / battler sheets |
 | [Followers EX](https://github.com/masterwebx/gen1recomp-followers-ex) | `FOLLOWERS_EX` | Follower control on voxel maps (needs PokéPC Followers + Wilds) |
 | [Weather FX](https://github.com/MrKrisSatan/Weather-fx) | `Weather-fx` | Recommended. Adds dynamic weather effects (rain, snow, sandstorm, etc.) to the overworld battles for extra immersion. |
 | [Battle Cinematics](https://github.com/EnterPlayerOne/Battle-Cinematics-Stadium-Camera) | `BATTLE_CINEMATICS` | Optional. Again! / extra swings re-emit `battle.move_used` |
 | [Quality of Life](https://github.com/unxpected-uxp/pokemon-gen1-recomp-mod-qol) | `quality_of_life` | Optional HUD/XP helpers (skipped while FIELD compact UI is up) |
-| Overworld Encounters | `overworld_encounters` | Optional older roaming-wilds companion |
 | Gen 3 Inspired UI | `gen3_battle_ui` | Optional; skipped during FIELD compact UI |
 
 Leave **Stadium Overworld Models** (`STADIUM_OVERWORLD_MODELS`) and **Stadium Battle FX** (`STADIUM_BATTLE_FX`) off. FIELD owns the fight; Stadium staging and FX fight that presentation.
