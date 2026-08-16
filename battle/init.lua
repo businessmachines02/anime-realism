@@ -1,13 +1,10 @@
 -- Battle systems — traditional battle layer
 --
--- Reactive Defense (Focus) math + REACT pipeline (menus, momentum,
--- EffectRegistry wrap). Speech bubbles and trainer banter still live
--- in main.lua until the next extract. FIELD presentation is
--- field_battle/; this package is the fight systems on top of BattleState.
---
---   immersion/     → HP/EXP hide + rewards
---   battle/        → this package
---   field_battle/  → overworld viewer
+-- Reactive Defense (Focus) math + REACT pipeline + animation policy.
+-- Speech bubbles and trainer banter still live in main.lua.
+--   immersion/     → HUD hide + rewards
+--   battle/        → this package (rules, react menus, classic/FIELD FX policy)
+--   field_battle/  → overworld viewer (pad cues, projectiles, compact HUD)
 
 return function(env)
     local loadFile = env and env.load
@@ -27,6 +24,7 @@ return function(env)
 
     local ReactiveDefense
     local React
+    local Fx
     if type(loadFile) == "function" then
         local ok, value = pcall(loadFile, "reactive_defense.lua")
         if ok and type(value) == "table" then
@@ -40,9 +38,16 @@ return function(env)
         else
             print("[anime_realism] battle/react: " .. tostring(value))
         end
+        ok, value = pcall(loadFile, "fx.lua")
+        if ok and type(value) == "table" then
+            Fx = value
+        else
+            print("[anime_realism] battle/fx: " .. tostring(value))
+        end
     end
     Battle.ReactiveDefense = ReactiveDefense
     Battle.React = React
+    Battle.Fx = Fx
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do
@@ -53,8 +58,8 @@ return function(env)
         return false
     end
 
-    -- Engine wraps (EffectRegistry) are installed from main after host
-    -- presentation callbacks exist. See React.bind / React.install.
+    -- React.bind / Fx.bind + React.install run from main after host
+    -- presentation callbacks exist.
     function Battle.install(_mod)
         return true
     end

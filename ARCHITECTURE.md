@@ -22,7 +22,8 @@ menus, Party/Bag, and faint/switch resolution. This mod:
 | `FIELD` | Transparent `BattleState` over the map (`field_battle/`) |
 | `AUTO` | Leave other presentation mods alone; classic (or their) battle UI |
 
-Legacy `CLASSIC` / `STADIUM` option values map to `AUTO`. This mod does not
+Legacy `CLASSIC` maps to `AUTO`. Legacy `STADIUM` maps to `FIELD` (stadium
+presentation is gone; those saves keep map fights). This mod does not
 drive Stadium / Dramaless arena models.
 
 ## Runtime constraints
@@ -89,25 +90,24 @@ package trees (tests excluded) so folder paths survive import.
 
 ```text
 anime_realism/
-  main.lua              orchestrator + most runtime hooks
+  main.lua              orchestrator + dialogue chrome (bubbles, banter, say wraps)
   lib/modload.lua       zip-safe package loader
-  immersion/            option keys for numbers-feel
-  battle/               option keys + Reactive Defense logic
-  field_battle/         overworld presentation (extracted)
+  immersion/            HUD hide + EXP/effort rewards
+  battle/               rules (RD) + REACT menus + classic/FIELD FX policy
+  field_battle/         overworld presentation (cues, projectiles, compact HUD)
 ```
 
-Ownership today is **asymmetric on purpose** (LuaJIT 200-local budget + shared
-HUD table). Option keys live on packages; most *behavior* for immersion and
-classic battle still runs in `main.lua`. FIELD presentation is the extracted
-viewer. Target facades, who may call whom, and the extraction sequence live in
+Ownership is layered so each fight system has one home. `main.lua` still owns
+shared dialogue strings and classic picFx queue helpers (LuaJIT 200-local
+budget). Target facades, who may call whom, and remaining extracts live in
 [Composable APIs](#composable-apis).
 
 
 | Package | Owns at runtime | Still in `main.lua` |
 |---------|-----------------|---------------------|
-| `immersion/` | Option keys / labels + `Rewards.install` (underdog EXP, effort faint) | Hide HUD/XP, generic level-up, party heal hints |
-| `battle/` | `ReactiveDefense` math + `React` pipeline (momentum, REACT/COUNTER menus, `EffectRegistry` wrap) | Callouts, bubbles, banter, cover FX; `React.bind` host callbacks |
-| `field_battle/` | Intercept, session, pad, sprites, FX catalog, compact UI | Forwards `battle.*` into `FBV.*`; playFocusReactFx asks FBV on FIELD |
+| `immersion/` | `Hide.install` (levels/HP/XP) + `Rewards.install` | Speech bubbles, say wraps, overlay chrome |
+| `battle/` | `ReactiveDefense` + `React` + `Fx` (tag queue / play Focus FX) | Callouts, banter, classic dodge/brace queue builders; `React.bind` / `Fx.bind` host callbacks |
+| `field_battle/` | Intercept, session, pad cues (`Cues.register`), sprites, FX catalog, compact UI | Forwards `battle.*` into `FBV.*` |
 
 ## Engine seams `main.lua` wraps
 
@@ -328,11 +328,9 @@ This mod does not depend on StadiumBattleFX or Dramaless Shape.
 
 ## Composable APIs
 
-Packages exist on disk, but they are not yet the APIs the rest of the code
-uses. `main.lua` still owns HUD hide, dialogue, and most presentation patches.
-FIELD is extracted as a viewer, then historically leaked submodules
-and peeked `mod._arPackages.battle`. New work should plug into the contracts
-below instead of growing god-functions (`Cues.apply`, `Projectiles.move` /
+Packages plug into three layers. `main.lua` still owns dialogue strings and
+classic picFx queue builders. New work should plug into the contracts below
+instead of growing god-functions (`Cues.apply` dispatch, `Projectiles.move` /
 `drawEffect`, `Hooks.install`).
 
 ```mermaid
@@ -345,31 +343,34 @@ flowchart TB
     Bat[Battle.install]
     FBV[FBV.install]
   end
-  subgraph battlePkg [battle]
+  subgraph battlePkg [battle system]
     RD[ReactiveDefense]
     React[REACT menus plus EffectRegistry wrap]
-    Call[callouts bubbles banter]
+    Fx[Fx.play / Fx.tag]
   end
-  subgraph fieldPkg [field_battle]
-    Life[Lifecycle composer]
-    Cues[Cues.apply]
+  subgraph hudPkg [HUD]
+    Hide[Immersion.Hide]
+    Bubbles[main.lua bubbles]
+    FieldUI[FBV compact UI]
+  end
+  subgraph animPkg [animation]
+    CueReg[Cues.register]
     Proj[Projectiles spawn]
-    CueReg[cue kind registry]
-    FxReg[MOVE_FX plus style painters]
-    ArenaReg[arena kits]
+    ClassicFx[classic picFx helpers]
   end
   Main --> Imm
   Main --> Bat
   Main --> FBV
+  Imm --> Hide
   Bat --> RD
   Bat --> React
-  Bat --> Call
-  FBV --> Life
-  Life --> Cues
-  Life --> Proj
-  Cues --> CueReg
-  Proj --> FxReg
-  Life --> ArenaReg
+  Bat --> Fx
+  Fx --> CueReg
+  Fx --> ClassicFx
+  FBV --> FieldUI
+  FBV --> CueReg
+  CueReg --> Proj
+  Main --> Bubbles
   FBV -.->|"bind RD"| RD
 ```
 
@@ -379,8 +380,8 @@ flowchart TB
 
 | Package | Public now | Public target |
 |---------|------------|---------------|
-| `immersion/` | `install(mod)` owns underdog EXP + effort faint | HUD hide still in `main.lua` (`hud` packed table) |
-| `battle/` | `ReactiveDefense` + `React` + option keys; stub `install` | `install(mod)` owns REACT queue, `EffectRegistry` wrap, callouts/bubbles; `RD` stays pure |
+| `immersion/` | `Rewards.install` + `Hide.install` (after `Hide.bind`) | Dialogue chrome stays in `main.lua` |
+| `battle/` | `ReactiveDefense` + `React` + `Fx` + option keys | `React.bind` / `Fx.bind` host callbacks; callouts/bubbles still in `main.lua`; `RD` stays pure |
 | `field_battle/` | wide `FBV.*` plus every submodule | Narrow facade below; submodules are internal |
 
 **2. Internal composers** (only these may wire siblings)
@@ -401,6 +402,7 @@ switches:
 
 - **Cue kinds** — `Cues.register(kind, handler)` behind the existing
   `Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)` entry.
+  Built-in dodge/cover/brace/attack/hit/faint/… handlers register at load.
   Tests already depend on that signature.
 - **Move FX** — `field_battle/fx_catalog.lua` holds `MOVE_FX` + `TYPE_COLORS` +
   type defaults. `Projectiles.move` / `contact` / `status` stay the spawn API.
@@ -470,19 +472,18 @@ Do not “fix” these by rewriting:
 
 1. **Facades + wiring** — done: one boot path, `FBV.bind`, `FBV.isFieldBattle`.
 2. **REACT pipeline → `battle/`** — done: `battle/react.lua` owns momentum, pick
-   menus, and the `EffectRegistry.runDamaging` wrap. Host callbacks stay in
-   `main.lua` until HUD/dialogue extract.
-3. **HUD / EXP / effort → `immersion/`** — EXP + effort faint live in
-   `immersion/rewards.lua`. HUD hide still shares the `hud` packed table with
-   speech bubbles in `main.lua`.
-4. **FIELD registries** — `MOVE_FX` / type colors live in
-   `field_battle/fx_catalog.lua`. Cue-kind table and `arenas/*.lua` still later.
-   No behavior change.
+   menus, and the `EffectRegistry.runDamaging` wrap.
+3. **HUD / EXP / effort → `immersion/`** — done: `immersion/rewards.lua` +
+   `immersion/hide.lua`. Speech bubbles still share the `hud` table in `main.lua`.
+4. **FIELD registries** — done: `fx_catalog.lua` + `Cues.register`. Style painters
+   and `arenas/*.lua` still later. No behavior change.
 5. **Split god-files behind those registries** — `Hooks.install` into wrap
-   groups; `Cues.apply` dispatches a table; projectile style painters. Public
-   signatures unchanged.
+   groups; projectile style painters. Public signatures unchanged.
 6. **Narrow FBV** — stop exporting raw modules to `main`; Hooks uses facade
    methods added in step 5.
+7. **Dialogue extract** — callouts / bubbles / banter out of `main.lua` into
+   `battle/` (or a dedicated dialogue module) once the 200-local packed tables
+   can move as units.
 
 Do not start steps 2–6 until the contracts and wiring in step 1 are in.
 
@@ -492,9 +493,10 @@ Do not start steps 2–6 until the contracts and wiring in step 1 are in.
 |--------------|------------|
 | Focus costs / dodge math | `battle/reactive_defense.lua` |
 | REACT menu / queue timing | `battle/react.lua` (`React.install`; host callbacks still in `main.lua`) |
-| Hide numbers / EXP feel | `main.lua` HUD hide; EXP/effort in `immersion/rewards.lua` |
+| Hide numbers / EXP feel | `immersion/hide.lua` + `immersion/rewards.lua` |
+| Focus react animation | `battle/fx.lua` (policy) then classic helpers in `main.lua` or `Cues.register` |
 | FIELD intercept / no wipe | `field_battle/intercept.lua` |
-| Pad steps / Dig-Fly | `field_battle/cues.lua` + `grid.lua` |
+| Pad steps / Dig-Fly | `field_battle/cues.lua` (`Cues.register`) + `grid.lua` |
 | Move VFX | `field_battle/fx_catalog.lua` (named moves) then `projectiles.lua` |
 | Compact menus | `field_battle/ui.lua` + input in `hooks.lua` |
 | Follower art | `field_battle/sprites.lua` |

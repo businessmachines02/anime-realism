@@ -184,6 +184,10 @@ function tests.supported_battle_gate()
     "double battle stays vanilla")
   truthy(not FieldBattle.shouldUse(mod, { kind = "link", link = true }), "link stays vanilla")
   truthy(not FieldBattle.shouldUse(mod, { kind = "wild", demo = true }), "demo stays vanilla")
+  mod.options.get = function() return "STADIUM" end
+  truthy(FieldBattle.shouldUse(mod, { kind = "wild" }), "legacy STADIUM keeps FIELD")
+  mod.options.get = function() return nil end
+  truthy(FieldBattle.shouldUse(mod, { kind = "wild" }), "unset stage defaults to FIELD")
   mod.options.get = function() return "AUTO" end
   truthy(not FieldBattle.shouldUse(mod, { kind = "wild" }), "disabled stage stays vanilla")
 end

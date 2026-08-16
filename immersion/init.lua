@@ -3,7 +3,7 @@
 -- Hides levels and HP, XP bar, generic level-up / EXP lines, low-HP warnings,
 -- underdog EXP, and faint effort consolations so fights play by feel.
 --
--- HUD hide still lives in main.lua (shared `hud` table with speech bubbles).
+-- HUD hide (levels/HP/XP) lives in hide.lua; speech bubbles stay in main.lua.
 -- Rewards (underdog EXP + effort faint) install from this package.
 --   immersion/     → numbers feel (this package)
 --   battle/        → traditional battle systems (Reactive Defense, callouts…)
@@ -21,6 +21,7 @@ return function(env)
   Immersion.OPTION_KEYS = {}
 
   local Rewards
+  local Hide
   if type(loadFile) == "function" then
     local ok, value = pcall(loadFile, "rewards.lua")
     if ok and type(value) == "table" then
@@ -28,8 +29,15 @@ return function(env)
     else
       print("[anime_realism] immersion/rewards: " .. tostring(value))
     end
+    ok, value = pcall(loadFile, "hide.lua")
+    if ok and type(value) == "table" then
+      Hide = value
+    else
+      print("[anime_realism] immersion/hide: " .. tostring(value))
+    end
   end
   Immersion.Rewards = Rewards
+  Immersion.Hide = Hide
 
   function Immersion.ownsOption(key)
     for i = 1, #Immersion.OPTION_KEYS do

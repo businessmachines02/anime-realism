@@ -267,12 +267,22 @@ return function(env)
     return Lifecycle.capture(battle, ev)
   end
 
-  function FBV.enabled(mod)
+  -- BATTLE STAGE: FIELD keeps fights on the live map. AUTO leaves other
+  -- presentation mods alone. Legacy CLASSIC → AUTO; STADIUM → FIELD (the
+  -- 3D stadium presentation is gone, so those saves keep map fights).
+  function FBV.stage(mod)
     if not (mod and mod.options and type(mod.options.get) == "function") then
-      return false
+      return "AUTO"
     end
-    local raw = tostring(mod.options:get("battle_stage") or "AUTO"):upper()
-    return raw == "FIELD"
+    local raw = tostring(mod.options:get("battle_stage") or "FIELD"):upper()
+    if raw == "FIELD" or raw == "STADIUM" then
+      return "FIELD"
+    end
+    return "AUTO"
+  end
+
+  function FBV.enabled(mod)
+    return FBV.stage(mod) == "FIELD"
   end
 
   -- FIELD owns ordinary single wild and trainer encounters. Link, demo,
