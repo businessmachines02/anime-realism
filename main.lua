@@ -136,6 +136,17 @@ return function(mod)
                 },
             },
             {
+                key = "focus_bar",
+                type = "choice",
+                label = "FOCUS BAR",
+                default = "OFF",
+                choices = {
+                    { "OFF",   "OFF" },
+                    { "FLUSH", "FLUSH" },
+                    { "1PX",   "1PX" },
+                },
+            },
+            {
                 key = "dev_overlay",
                 type = "toggle",
                 label = "DEV OVERLAY",
@@ -170,6 +181,59 @@ return function(mod)
         }
         function dev.on()
             return mod.options:get("dev_overlay") == true
+        end
+
+        function dev.focusBarMode()
+            local raw = mod.options:get("focus_bar")
+            if raw == nil then
+                if mod.options:get("focus_bar_visible") == true then
+                    return "FLUSH"
+                end
+                return "OFF"
+            end
+            if raw == true then
+                return "FLUSH"
+            end
+            local s = tostring(raw):upper()
+            if s == "FLUSH" or s == "1PX" then
+                return s
+            end
+            if s == "1" or s == "1PXL" or s == "1 PIXEL" then
+                return "1PX"
+            end
+            return "OFF"
+        end
+
+        function dev.focusBarVisible()
+            local mode = dev.focusBarMode()
+            return mode == "FLUSH" or mode == "1PX"
+        end
+
+        do
+            local UI = FieldBattleViewer and FieldBattleViewer.UI
+            if UI then
+                UI.focusBarVisible = function()
+                    return dev.focusBarVisible() and opt("momentum_counter")
+                end
+                UI.focusBarGap = function()
+                    if dev.focusBarMode() == "1PX" then
+                        return 1
+                    end
+                    return 0
+                end
+                UI.focusRatio = function(battle, isPlayer)
+                    if not ReactiveDefense or not battle then
+                        return nil
+                    end
+                    local battler = isPlayer and battle.player or battle.enemy
+                    local side = ReactiveDefense.sideState(battle, isPlayer)
+                    local cap = ReactiveDefense.focusCap(battler)
+                    if not side or not cap or cap <= 0 then
+                        return nil
+                    end
+                    return math.max(0, math.min(1, (tonumber(side.focus) or 0) / cap))
+                end
+            end
         end
 
         function dev.bag(battle)
@@ -8601,7 +8665,7 @@ return function(mod)
             local x = foeSide and (160 - bw - 1) or 1
             local y = 1
             -- Leave room for the slim Focus bar under the top-left corner.
-            if not foeSide and opt("focus_chip") and ReactiveDefense then
+            if not foeSide and dev.focusBarVisible() and ReactiveDefense then
                 y = 1 + 9
             end
             local pulse = foeSide and (state.chipPulseFoe or 0) or (state.chipPulseYou or 0)
@@ -8629,10 +8693,11 @@ return function(mod)
             g.pop()
         end
 
-        -- Slim Focus meter — top-left, optional.
+        -- Slim Focus meter — top-left, optional (classic battles; FIELD uses
+        -- the purple bar above each world HP chip).
         -- Stored on `dev` to stay under LuaJIT's 200-local limit.
         dev.drawFocusChip = function(battle)
-            if not opt("focus_chip") or not opt("momentum_counter") then
+            if not dev.focusBarVisible() or not opt("momentum_counter") then
                 return
             end
             if not ReactiveDefense or not battle then
@@ -8662,14 +8727,10 @@ return function(mod)
             end
 
             local g = love.graphics
-            -- Tiny R/B/Y strip: "F" + black fill on white track.
+            -- Tiny strip: "F" + soft purple fill on a light track.
             local barW, barH = 28, 3
             local bw, bh = 7 + barW + 3, 8
             local x, y = 1, 1
-            local fill = 0
-            if focus <= 20 then
-                fill = 0.35 -- lighter when low so the empty track reads clearly
-            end
 
             g.push("all")
             g.setColor(1, 1, 1, 1)
@@ -8678,11 +8739,11 @@ return function(mod)
             g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
             Font.draw("F", x + 1, y)
             local barX, barY = x + 8, y + 2
-            g.setColor(0.85, 0.85, 0.85, 1)
+            g.setColor(0.90, 0.84, 0.94, 1)
             g.rectangle("fill", barX, barY, barW, barH)
             local filled = math.floor(barW * (focus / cap) + 0.5)
             if filled > 0 then
-                g.setColor(fill, fill, fill, 1)
+                g.setColor(0.62, 0.40, 0.82, 0.92)
                 g.rectangle("fill", barX, barY, filled, barH)
             end
             g.setColor(0, 0, 0, 1)

@@ -23,7 +23,8 @@ Pixels are presentation only; **pad cells are truth**.
 5. Callouts tag `arFieldCue`; FIELD plays pad steps when that row becomes `battle.current`. Physical vs special motion rules apply.
 6. FIELD suppresses classic/Stadium move paint and uses generic world-space
    contact, projectile, beam, area, stream, spiral, aura, wave, drain, status, heal,
-   shadow (Night Shade), seed (Leech Seed), surf (tidal wall), razor (leaf blades),
+   shadow (Night Shade), seed (Leech Seed), sonic (Supersonic rings), ray (Confuse Ray smog),
+   surf (tidal wall), razor (leaf blades),
    swift (flying stars), icebolt (Ice Beam), power burst (high-BP hits), and capture
    effects — named Gen1 moves pick glitz. Earthquake pops Dig-like dirt bursts on
    random pad tiles.    Persistent PAR / FRZ /
@@ -237,7 +238,7 @@ replacement mon.
 | attack (physical) | `u` toward foe 1, then home | `attack` |
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
-| hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst | `hit` (heavy knock when powerful) |
+| hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst; **weak** hits still play a `light_hit` spark on the target | `hit` (heavy knock when powerful) |
 | selfhit | stay | `selfhit` + bonk burst (confusion / recoil / crash) |
 | faint | stay | dust puff; trainer-owned → red recall laser + shrink; wild → sink |
 | recall | stay | red thunder-laser from trainer + shrink |
@@ -258,6 +259,9 @@ replacement mon.
   attacker (physical or special). A typed `power_hit` burst plays on the mon; if
   a cover prop, impassable cell, or pad edge lies within two cells behind the
   push line, a `power_impact` burst spawns there too.
+- **Weak hits** still get a `light_hit` spark on the target (contact slash /
+  punch / peck / etc. plus motes) so early physicals like Tackle and Scratch
+  read on impact, not only as a flinch.
 
 ## Battle initiation (`Lifecycle.begin`)
 

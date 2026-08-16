@@ -850,10 +850,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       local lunge = self._attackStepped and 5 or 14
       ox = ox + tx * pulse * lunge
       oy = oy + ty * pulse * lunge - pulse * 7
+      self.drawScale = 1 + pulse * 0.08
       self._walkFrame = (t < 0.9) and 1 or 0
       if self.animT >= 0.34 then
         self.anim = "idle"
         self.animT = 0
+        self.drawScale = 1
         self._attackStepped = nil
         self._attackJump = nil
       end

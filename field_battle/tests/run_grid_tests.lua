@@ -432,6 +432,123 @@ function tests.hp_chip_stays_on_screen_near_top()
   truthy(minY >= UI.HP_CHIP_TOP, "top-of-screen mon does not clip its HP chip")
 end
 
+function tests.focus_bar_paints_above_hp_when_enabled()
+  local prevVisible, prevRatio = UI.focusBarVisible, UI.focusRatio
+  UI.focusBarVisible = function() return true end
+  UI.focusRatio = function(_, isPlayer)
+    return isPlayer and 0.8 or 0.4
+  end
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80,
+    py = 40,
+    _fieldBarLift = 10,
+    hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = {
+        camera = { x = 0, y = 0 },
+        entities = { enemy },
+      },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  UI.focusBarVisible, UI.focusRatio = prevVisible, prevRatio
+  truthy(#painted >= 4, "focus bar adds extra rects above the HP chip")
+  local ys = {}
+  for i = 1, #painted do
+    ys[#ys + 1] = painted[i].y
+  end
+  table.sort(ys)
+  truthy(ys[1] < ys[#ys], "focus bar sits above the HP bar")
+  truthy(battle._arFocusBarShown and battle._arFocusBarShown.enemy ~= nil,
+    "shown focus eases toward the live ratio")
+end
+
+function tests.focus_bar_gap_flush_vs_one_pixel()
+  local prevVisible, prevRatio, prevGap = UI.focusBarVisible, UI.focusRatio, UI.focusBarGap
+  UI.focusBarVisible = function() return true end
+  UI.focusRatio = function() return 1 end
+  local function paintY(gap)
+    UI.focusBarGap = function() return gap end
+    local ys = {}
+    local prevLove = love
+    love = {
+      graphics = {
+        setColor = function() end,
+        rectangle = function(_, _, y)
+          ys[#ys + 1] = y
+        end,
+        polygon = function() end,
+        push = function() end,
+        pop = function() end,
+        translate = function() end,
+        scale = function() end,
+        print = function() end,
+      },
+    }
+    local enemy = {
+      _arFieldBattler = true,
+      _arFieldSide = "enemy",
+      px = 80,
+      py = 40,
+      _fieldBarLift = 10,
+      hidden = false,
+    }
+    local battle = {
+      _arAnimeField = true,
+      player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+      enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+      game = {
+        overworld = {
+          camera = { x = 0, y = 0 },
+          entities = { enemy },
+        },
+        renderer = {
+          uiSize = function() return 160, 144 end,
+          worldViewSize = function() return 160, 144 end,
+          fitScale = function() return 1 end,
+        },
+      },
+    }
+    UI.drawWorldHP(battle, 0, 0, "ui")
+    love = prevLove
+    table.sort(ys)
+    return ys[1]
+  end
+  local flushY = paintY(0)
+  local gappedY = paintY(1)
+  UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
+  truthy(gappedY < flushY, "1PX gap lifts the focus bar one pixel above flush")
+end
+
 function tests.compact_arena_keeps_cast_lanes_clear()
   local player = { cellX = 10, cellY = 10, facing = "right" }
   local fx, fy = Layout.wildAnchor(player)
@@ -876,6 +993,27 @@ function tests.powerful_moves_push_and_impact()
   end
   truthy(styles.power_hit, "typed burst on the mon")
   truthy(styles.power_impact, "impact burst at the obstacle")
+
+  Projectiles.clear(session)
+  enemy.padU = 4
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  enemy._heavyHit = nil
+  enemy.lastAnim = nil
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    moveId = "TACKLE",
+    movePower = 35,
+    moveType = "NORMAL",
+    category = "physical",
+    push = false,
+  }), "weak physical hit cue")
+  eq(enemy.lastAnim, "hit", "weak hit still plays a flinch")
+  truthy(not enemy._heavyHit, "weak hit is not a heavy knock")
+  local weakStyles = {}
+  for i = 1, #(session.projectiles or {}) do
+    weakStyles[session.projectiles[i].style] = true
+  end
+  truthy(weakStyles.light_hit, "weak physical hit paints a spark on the target")
+  truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
 end
 
 function tests.physical_jumps_cover()
@@ -1712,6 +1850,26 @@ function tests.world_space_projectiles()
   eq(leechSeed.glitz, "leaf", "leech seed uses leaf glitz")
   truthy(leechSeed.sx < leechSeed.ex, "leech seed travels toward the foe")
   truthy(leechSeed.pinTip, "leech seed plants on the target")
+  local supersonic = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "SUPERSONIC",
+  })
+  eq(supersonic.style, "sonic", "supersonic uses traveling sound rings")
+  eq(supersonic.glitz, "ring", "supersonic uses ring glitz")
+  truthy(supersonic.sx < supersonic.ex, "supersonic travels toward the foe")
+  truthy(supersonic.pinTip, "supersonic rings lock onto the target")
+  local confuseRay = Projectiles.status(session, "player", {
+    moveType = "GHOST", moveId = "CONFUSE_RAY",
+  })
+  eq(confuseRay.style, "ray", "confuse ray uses a smog wad")
+  eq(confuseRay.glitz, "confuse", "confuse ray uses dizzy glitz")
+  truthy(confuseRay.sx < confuseRay.ex, "confuse ray travels toward the foe")
+  truthy(confuseRay.pinTip, "confuse ray locks onto the target")
+  truthy(Projectiles.isTravelFx({
+    moveType = "NORMAL", moveId = "SUPERSONIC",
+  }), "supersonic is a travel FX")
+  truthy(Projectiles.isTravelFx({
+    moveType = "GHOST", moveId = "CONFUSE_RAY",
+  }), "confuse ray is a travel FX")
   truthy(Projectiles.isTravelFx({
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   }), "psychic is a travel FX")
@@ -1723,6 +1881,31 @@ function tests.world_space_projectiles()
     moveType = "NORMAL", moveId = "BITE",
   })
   eq(bite.glitz, "bite", "bite contact uses jaw glitz")
+  local pound = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "POUND",
+  })
+  eq(pound.glitz, "slap", "pound uses a slap contact")
+  local scratch = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "SCRATCH",
+  })
+  eq(scratch.glitz, "slash", "scratch uses slash contact")
+  local peck = Projectiles.contact(session, "player", {
+    moveType = "FLYING", moveId = "PECK",
+  })
+  eq(peck.glitz, "pierce", "peck uses pierce contact")
+  local sting = Projectiles.contact(session, "player", {
+    moveType = "POISON", moveId = "POISON_STING",
+  })
+  eq(sting.glitz, "sting", "poison sting uses a stinger")
+  local payday = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "PAY_DAY",
+  })
+  eq(payday.glitz, "coin", "pay day tosses coin sparks")
+  local light = Projectiles.lightHit(session, "enemy", {
+    moveType = "NORMAL", moveId = "TACKLE",
+  })
+  eq(light.style, "light_hit", "weak physicals get a light hit burst")
+  eq(light.glitz, "impact", "tackle light hit keeps impact glitz")
   Projectiles.clear(session)
 
   local resolved = false
@@ -1733,6 +1916,60 @@ function tests.world_space_projectiles()
   Projectiles.tick(session, 1)
   truthy(resolved, "ball resolves after flight and shakes")
   eq(#session.projectiles, 0, "ball projectile cleans itself up")
+end
+
+function tests.supersonic_and_confuse_ray_paint()
+  local calls = { arc = 0, line = 0, circle = 0, ellipse = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() calls.line = calls.line + 1 end,
+      arc = function() calls.arc = calls.arc + 1 end,
+      ellipse = function() calls.ellipse = calls.ellipse + 1 end,
+      circle = function() calls.circle = calls.circle + 1 end,
+      rectangle = function() end,
+      polygon = function() end,
+    },
+  }
+  local grid = sampleGrid()
+  local player = {
+    id = "player",
+    padU = grid.home.player.u,
+    padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy",
+    padU = grid.home.enemy.u,
+    padV = grid.home.enemy.v,
+    px = 80, py = 32,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  local sonic = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "SUPERSONIC",
+  })
+  sonic.age = 0.35
+  sonic:draw(0, 0)
+  truthy(calls.arc > 0, "supersonic paints traveling sound arcs")
+
+  calls.arc, calls.line, calls.circle, calls.ellipse = 0, 0, 0, 0
+  local ray = Projectiles.status(session, "player", {
+    moveType = "GHOST", moveId = "CONFUSE_RAY",
+  })
+  ray.age = 0.28
+  ray:draw(0, 0)
+  truthy(calls.ellipse > 0, "confuse ray paints a short smog wad")
+  truthy(calls.circle > 0, "confuse ray paints smog wisps")
+  truthy(calls.line > 0, "confuse ray leaves a light trail")
+  love = prevLove
 end
 
 function tests.camera_avoids_battle_menu()

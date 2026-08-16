@@ -91,18 +91,48 @@ local function hpBar(g, x, y, w, ratio)
     end
 end
 
+-- Soft purple Focus meter (same shell as HP, thinner fill).
+local function focusBar(g, x, y, w, ratio)
+    ratio = clamp01(ratio)
+    g.setColor(0.16, 0.10, 0.20, 1)
+    g.rectangle("fill", x, y, w, 3)
+    g.setColor(0.90, 0.84, 0.94, 1)
+    g.rectangle("fill", x + 1, y + 1, w - 2, 1)
+    local fill = math.floor((w - 2) * ratio + 0.5)
+    if fill > 0 then
+        g.setColor(0.62, 0.40, 0.82, 0.92)
+        g.rectangle("fill", x + 1, y + 1, fill, 1)
+    end
+end
+
+local function easeToward(cur, target, step)
+    if cur == nil then
+        return target
+    end
+    local d = target - cur
+    if math.abs(d) <= step then
+        return target
+    end
+    if d > 0 then
+        return cur + step
+    end
+    return cur - step
+end
+
 -- Letter + bar + pointer: keep the chip on the canvas when a mon is
 -- near the top (or side) of the view.
 UI.HP_CHIP_W = 27
 UI.HP_CHIP_H = 7
 UI.HP_CHIP_TOP = 2
+UI.FOCUS_BAR_H = 3
+UI.FOCUS_BAR_GAP = 0 -- in pixels. this is either 1 or 0 ~ cannot have a half pixel unfortunately :)
 
-function UI.clampHpChip(x, y, canvasW, canvasH)
+function UI.clampHpChip(x, y, canvasW, canvasH, extraTop)
     canvasW = tonumber(canvasW) or UI.WIDTH
     canvasH = tonumber(canvasH) or UI.HEIGHT
     local w = UI.HP_CHIP_W
     local h = UI.HP_CHIP_H
-    local top = UI.HP_CHIP_TOP
+    local top = UI.HP_CHIP_TOP + (tonumber(extraTop) or 0)
     y = tonumber(y) or 0
     x = tonumber(x) or 0
     if y < top then
@@ -214,7 +244,17 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                     canvasW, canvasH = a, b or canvasH
                 end
             end
-            x, y = UI.clampHpChip(x, y, canvasW, canvasH)
+            local showFocus = type(UI.focusBarVisible) == "function"
+                and UI.focusBarVisible(battle) == true
+            local extraTop = 0
+            if showFocus then
+                local gap = UI.FOCUS_BAR_GAP
+                if type(UI.focusBarGap) == "function" then
+                    gap = tonumber(UI.focusBarGap(battle)) or gap
+                end
+                extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
+            end
+            x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
             -- Stash UI anchors for speech bubbles / other overlay chrome.
@@ -237,6 +277,19 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             else
                 g.setColor(0.08, 0.06, 0.05, 1)
                 g.print(initial, left, y - 2)
+            end
+            if showFocus and type(UI.focusRatio) == "function" then
+                local target = tonumber(UI.focusRatio(battle, item.side == "player"))
+                if target then
+                    local shown = battle._arFocusBarShown
+                    if type(shown) ~= "table" then
+                        shown = {}
+                        battle._arFocusBarShown = shown
+                    end
+                    local key = item.side
+                    shown[key] = easeToward(shown[key], clamp01(target), 0.03)
+                    focusBar(g, left + letterW + 1, y - extraTop, barW, shown[key])
+                end
             end
             hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
             g.setColor(0.12, 0.09, 0.08, 1)
