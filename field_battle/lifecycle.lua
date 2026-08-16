@@ -38,6 +38,9 @@ Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM = 54
 -- When it rests, the auto camera eases back in. Desktop may look from
 -- anywhere in the window. While the on-screen pad is up, only the inner
 -- viewport may peek so d-pad / A / B taps do not pan the camera (#49).
+-- CAMERA_LOOK_SPAN is the peek in world pixels at the classic 160×144 view;
+-- focusCamera scales it (and the envelope clamp) to the live worldViewSize
+-- so a phone-sized Dramaless pass pans as far as desktop.
 Lifecycle.CAMERA_LOOK_HOLD = 0.45
 Lifecycle.CAMERA_LOOK_RATE = 11
 Lifecycle.CAMERA_LOOK_SPAN = 56
@@ -401,23 +404,35 @@ function Lifecycle.active(battle)
 end
 
 local function cameraViewSize(session, game)
-    local vw = session and session._vw
-    local vh = session and session._vh
-    if vw then
-        return vw, vh or 144
-    end
-    vw, vh = 160, 144
+    local vw, vh = 160, 144
     local ren = game and game.renderer
     if ren and type(ren.worldViewSize) == "function" then
         local ok, a, b = pcall(ren.worldViewSize, ren)
         if ok and type(a) == "number" then
             vw, vh = a, b or vh
         end
+    elseif session and session._vw then
+        vw, vh = session._vw, session._vh or vh
     end
     if session then
         session._vw, session._vh = vw, vh
     end
     return vw, vh
+end
+
+--- Peek distance in world pixels for this view. 56px at 160×144; scales up
+--- so a wide mobile world pass pans the same fraction of the screen.
+function Lifecycle.mouseLookSpan(vw, vh)
+    local base = Lifecycle.CAMERA_LOOK_SPAN or 56
+    vw = tonumber(vw) or 160
+    vh = tonumber(vh) or 144
+    if vw < 1 then
+        vw = 160
+    end
+    if vh < 1 then
+        vh = 144
+    end
+    return base * (vw / 160), base * (vh / 144)
 end
 
 --- Invert Camera:follow / fallback top-left so we can seed a pan from the live view.
@@ -780,10 +795,13 @@ function Lifecycle.focusCamera(battle, dt)
     local targetX = fx
     local targetY = fy + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
     if looking then
-        local span = Lifecycle.CAMERA_LOOK_SPAN or 56
-        targetX = targetX + (session.mouseLookNx or 0) * span
-        targetY = targetY + (session.mouseLookNy or 0) * span
-        local env = envelopeRectPx(session, Lifecycle.CAMERA_LOOK_CLAMP_PAD)
+        local spanX, spanY = Lifecycle.mouseLookSpan(vw, vh)
+        targetX = targetX + (session.mouseLookNx or 0) * spanX
+        targetY = targetY + (session.mouseLookNy or 0) * spanY
+        -- Envelope clamp must grow with the view or a phone-sized world pass
+        -- eats the peek and the 3D camera looks locked while UI chips slide.
+        local pad = Lifecycle.CAMERA_LOOK_CLAMP_PAD or 64
+        local env = envelopeRectPx(session, math.max(pad, spanX, spanY))
         if env then
             targetX = clamp(targetX, env.minX, env.maxX)
             targetY = clamp(targetY, env.minY, env.maxY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y))
