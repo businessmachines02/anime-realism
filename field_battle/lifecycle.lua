@@ -35,12 +35,15 @@ Lifecycle.CAMERA_EDGE_MARGIN_X = 22
 Lifecycle.CAMERA_EDGE_MARGIN_TOP = 16
 Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM = 54
 -- Mouse look-around: while the cursor is moving, peek around the fight.
--- When it rests, the auto camera eases back in.
+-- When it rests, the auto camera eases back in. Desktop may look from
+-- anywhere in the window. While the on-screen pad is up, only the inner
+-- viewport may peek so d-pad / A / B taps do not pan the camera (#49).
 Lifecycle.CAMERA_LOOK_HOLD = 0.45
 Lifecycle.CAMERA_LOOK_RATE = 11
 Lifecycle.CAMERA_LOOK_SPAN = 56
 Lifecycle.CAMERA_LOOK_CLAMP_PAD = 64
 Lifecycle.CAMERA_LOOK_MOVE_PX = 3
+Lifecycle.CAMERA_LOOK_ZONE_INSET = 0.22
 
 -- Weak keys: sessions die with their BattleState without explicit cleanup races.
 local byBattle = setmetatable({}, { __mode = "k" })
@@ -589,6 +592,90 @@ function Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
     return clamp(nx, -1, 1), clamp(ny, -1, 1)
 end
 
+--- Inner viewport used for look-around while the on-screen pad is visible.
+function Lifecycle.mouseLookInZone(mx, my, sw, sh)
+    sw = tonumber(sw) or 0
+    sh = tonumber(sh) or 0
+    if sw < 1 or sh < 1 then
+        return false
+    end
+    local inset = Lifecycle.CAMERA_LOOK_ZONE_INSET or 0.22
+    if inset < 0 then
+        inset = 0
+    elseif inset > 0.45 then
+        inset = 0.45
+    end
+    local nx = (tonumber(mx) or 0) / sw
+    local ny = (tonumber(my) or 0) / sh
+    return nx >= inset and nx <= (1 - inset) and ny >= inset and ny <= (1 - inset)
+end
+
+local touchControlsCache
+
+local function getTouchControls()
+    if touchControlsCache ~= nil then
+        return touchControlsCache ~= false and touchControlsCache or nil
+    end
+    local ok, TC = pcall(require, "src.core.TouchControls")
+    if ok and type(TC) == "table" then
+        touchControlsCache = TC
+        return TC
+    end
+    touchControlsCache = false
+    return nil
+end
+
+function Lifecycle.touchOverlayVisible()
+    local TC = getTouchControls()
+    if not (TC and type(TC.visible) == "function") then
+        return false
+    end
+    local ok, vis = pcall(TC.visible, TC)
+    return ok and vis == true
+end
+
+function Lifecycle.touchControlAt(mx, my)
+    local TC = getTouchControls()
+    if not TC then
+        return false
+    end
+    if type(TC.visible) == "function" then
+        local okVis, vis = pcall(TC.visible, TC)
+        if not (okVis and vis == true) then
+            return false
+        end
+    end
+    -- A finger already claimed by the overlay must not pan, even if the
+    -- sampled point has drifted a few pixels off the glyph.
+    if TC.dpadTouch ~= nil then
+        return true
+    end
+    if type(TC.held) == "table" and next(TC.held) ~= nil then
+        return true
+    end
+    if type(TC.hitTest) ~= "function" then
+        return false
+    end
+    local ok, hit = pcall(TC.hitTest, TC, tonumber(mx) or 0, tonumber(my) or 0)
+    return ok and hit ~= nil
+end
+
+--- Desktop: any window point. Touch overlay: inner zone, never on a pad hit.
+function Lifecycle.mouseLookAllowed(mx, my, sw, sh, opts)
+    opts = opts or {}
+    if opts.touchHit == true or Lifecycle.touchControlAt(mx, my) then
+        return false
+    end
+    local constrained = opts.touchConstrained
+    if constrained == nil then
+        constrained = Lifecycle.touchOverlayVisible()
+    end
+    if not constrained then
+        return true
+    end
+    return Lifecycle.mouseLookInZone(mx, my, sw, sh)
+end
+
 --- Tests / input hook: hold a look offset until the idle timer elapses.
 function Lifecycle.noteMouseLook(session, nx, ny, hold)
     if not session then
@@ -597,6 +684,31 @@ function Lifecycle.noteMouseLook(session, nx, ny, hold)
     session.mouseLookNx = clamp(tonumber(nx) or 0, -1, 1)
     session.mouseLookNy = clamp(tonumber(ny) or 0, -1, 1)
     session.mouseLookT = hold or Lifecycle.CAMERA_LOOK_HOLD or 0.45
+end
+
+--- Arm look-around from a window-space move. Returns true when a peek starts.
+function Lifecycle.tryMouseLook(session, mx, my, sw, sh, dx, dy, opts)
+    if not session then
+        return false
+    end
+    local eps = Lifecycle.CAMERA_LOOK_MOVE_PX or 3
+    dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
+    if (dx * dx + dy * dy) < (eps * eps) then
+        return false
+    end
+    sw, sh = tonumber(sw) or 0, tonumber(sh) or 0
+    if sw < 1 or sh < 1 then
+        sw, sh = windowSize()
+    end
+    if not sw then
+        return false
+    end
+    if not Lifecycle.mouseLookAllowed(mx, my, sw, sh, opts) then
+        return false
+    end
+    local nx, ny = Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
+    Lifecycle.noteMouseLook(session, nx, ny)
+    return true
 end
 
 local function sampleMouseLook(session, dt)
@@ -631,13 +743,7 @@ local function sampleMouseLook(session, dt)
         -- First sample: remember pose, do not look (cursor may sit in a corner).
         return
     end
-    local dx, dy = mx - lastX, my - lastY
-    local eps = Lifecycle.CAMERA_LOOK_MOVE_PX or 3
-    if (dx * dx + dy * dy) < (eps * eps) then
-        return
-    end
-    local nx, ny = Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
-    Lifecycle.noteMouseLook(session, nx, ny)
+    Lifecycle.tryMouseLook(session, mx, my, sw, sh, mx - lastX, my - lastY)
 end
 
 function Lifecycle.focusCamera(battle, dt)

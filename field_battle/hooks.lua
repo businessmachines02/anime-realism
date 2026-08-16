@@ -164,24 +164,11 @@ function Hooks.install(FBV, mod)
             local origMove = Game.mousemoved
             function Game:mousemoved(x, y, dx, dy, ...)
                 if FBV.enabled(mod) and FBV.Lifecycle
-                    and type(FBV.Lifecycle.liveBattle) == "function" then
+                    and type(FBV.Lifecycle.liveBattle) == "function"
+                    and type(FBV.Lifecycle.tryMouseLook) == "function" then
                     local session = select(2, FBV.Lifecycle.liveBattle(self))
                     if session and session.live then
-                        local mx = tonumber(dx) or 0
-                        local my = tonumber(dy) or 0
-                        local eps = FBV.Lifecycle.CAMERA_LOOK_MOVE_PX or 3
-                        if (mx * mx + my * my) >= (eps * eps) then
-                            local sw, sh = 160, 144
-                            if love and love.graphics
-                                and type(love.graphics.getDimensions) == "function" then
-                                local ok, w, h = pcall(love.graphics.getDimensions)
-                                if ok and type(w) == "number" and w > 0 then
-                                    sw, sh = w, h or sh
-                                end
-                            end
-                            local nx, ny = FBV.Lifecycle.mouseLookFromWindow(x, y, sw, sh)
-                            FBV.Lifecycle.noteMouseLook(session, nx, ny)
-                        end
+                        FBV.Lifecycle.tryMouseLook(session, x, y, nil, nil, dx, dy)
                     end
                 end
                 if type(origMove) == "function" then
