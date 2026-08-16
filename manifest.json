@@ -1,7 +1,7 @@
 {
   "id": "anime_realism",
   "name": "Anime Realism",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "api": 2,
   "games": [
     "gen1"
@@ -24,6 +24,6 @@
   "permissions": [
     "engine_internals"
   ],
-  "description": "Overworld field battles with the overhauled REACT Battle System, Right-Shift pause, and readable toasts.",
+  "description": "Overworld field battles with the overhauled REACT Battle System, B pause on the move HUD, and readable toasts.",
   "github": "businessmachines02/anime-realism"
 }

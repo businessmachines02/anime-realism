@@ -6,7 +6,7 @@
 --   • FIELD input UX on top of vanilla BattleState phases:
 --       - Start on FIGHT / PKMN / ITEM / RUN until the player picks FIGHT
 --       - After FIGHT, keep opening the move diamond each turn until PAUSE
---       - Right Shift = PAUSE back to the command menu (clears move latch)
+--       - B = PAUSE back to the command menu (clears move latch)
 --       - While ENTRENCHED, stay on command so FIGHT opens HOLD/BREAK
 --       - U/R/L/D instantly cast that slot (inject A) while on the diamond
 --   • Redraw compact UI last so Move Inspector / typed-move panels cannot cover it
@@ -40,7 +40,7 @@ function Hooks.shouldDropFieldFill(mode, x, y, w, h, r, gr, b, a)
 end
 
 -- Fainted / empty HP / send-out: PKMN must be reachable. The sticky move
--- diamond (R-SHIFT PAUSE) must not sit on top of the party switch.
+-- diamond (B PAUSE) must not sit on top of the party switch.
 function Hooks.playerMustSwitch(battle)
     if not battle then
         return false
@@ -83,6 +83,43 @@ function Hooks.foeIsDown(battle)
     return false
 end
 
+-- B on the move diamond (or the sticky command frame before it reopens)
+-- pauses back to FIGHT/PKMN/ITEM/RUN. Mobile virtual pads have B; they
+-- do not have Right Shift. Dialogue B (toast pause) stays on messages.
+function Hooks.fieldPausePressed(input, battle)
+    if not input or type(input.wasPressed) ~= "function" then
+        return false
+    end
+    local phase = battle and battle.phase
+    if phase ~= "moveSelect"
+        and not (phase == "menu" and battle._arFieldPreferMoves) then
+        return false
+    end
+    return input:wasPressed("b") == true
+end
+
+-- Apply PAUSE: leave the diamond, clear the sticky move latch, hold command.
+-- Returns true when a pause actually happened this call.
+function Hooks.applyFieldPause(battle)
+    if not battle then
+        return false
+    end
+    if battle.phase == "moveSelect" then
+        battle.phase = "menu"
+        battle.menuIndex = battle.menuIndex or 1
+        battle.moveSwapIndex = nil
+        battle._arFieldPreferMoves = nil
+        battle._arFieldCommandHold = true
+        return true
+    end
+    if battle.phase == "menu" and battle._arFieldPreferMoves then
+        battle._arFieldPreferMoves = nil
+        battle._arFieldCommandHold = true
+        return true
+    end
+    return false
+end
+
 function Hooks.install(FBV, mod)
     if not mod then
         return false
@@ -117,23 +154,6 @@ function Hooks.install(FBV, mod)
     FBV.suppressForeignStages = function()
         if Compat and type(Compat.suppressDramaticShape) == "function" then
             Compat.suppressDramaticShape(FBV, mod)
-        end
-    end
-
-    -- Latch Right Shift for PAUSE (move diamond → command menu).
-    -- Wait until a trainer has made move
-    do
-        local okG, Game = pcall(require, "src.core.Game")
-        if okG and type(Game) == "table" and type(Game.keypressed) == "function" and not Game._arFbvRShiftLatch then
-            local origKey = Game.keypressed
-            function Game:keypressed(key, ...)
-                if key == "rshift" then
-                    mod._arFieldShiftEdge = true
-                end
-                return origKey(self, key, ...)
-            end
-
-            Game._arFbvRShiftLatch = true
         end
     end
 
@@ -330,8 +350,8 @@ function Hooks.install(FBV, mod)
         end
 
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate23 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate24 then
+        -- _arFbvUpdate25 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate25 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -341,36 +361,6 @@ function Hooks.install(FBV, mod)
 
                     local input = self.game and self.game.input
 
-                    -- PAUSE = Right Shift (edge), only meaningful on the move diamond.
-                    local shiftEdge = mod._arFieldShiftEdge == true
-                    mod._arFieldShiftEdge = false
-                    do
-                        local down = false
-                        if love and love.keyboard then
-                            local function keyDown(name)
-                                local okK, v = pcall(function()
-                                    return love.keyboard.isDown(name)
-                                end)
-                                return okK and v and true or false
-                            end
-                            local function scanDown(name)
-                                if type(love.keyboard.isScancodeDown) ~= "function" then
-                                    return false
-                                end
-                                local okK, v = pcall(function()
-                                    return love.keyboard.isScancodeDown(name)
-                                end)
-                                return okK and v and true or false
-                            end
-                            down = scanDown("rshift") or keyDown("rshift")
-                        end
-                        if not shiftEdge then
-                            shiftEdge = down and not self._arFieldShiftHeld
-                        end
-                        self._arFieldShiftHeld = (down or shiftEdge) and true or false
-                    end
-
-                    local pauseEdge = shiftEdge
                     local swallowPause = false
                     local swallowB = false
                     local phaseBefore = self.phase
@@ -407,16 +397,9 @@ function Hooks.install(FBV, mod)
                         self._arFieldCommandHold = nil
                     end
 
-                    if self.phase == "moveSelect" and pauseEdge then
-                        self.phase = "menu"
-                        self.menuIndex = self.menuIndex or 1
-                        self.moveSwapIndex = nil
-                        self._arFieldPreferMoves = nil
-                        self._arFieldCommandHold = true
-                        swallowPause = true
-                    elseif self.phase == "menu" and pauseEdge and self._arFieldPreferMoves then
-                        self._arFieldPreferMoves = nil
-                        self._arFieldCommandHold = true
+                    -- PAUSE = B (edge), only on the move diamond / sticky command.
+                    local pauseEdge = Hooks.fieldPausePressed(input, self)
+                    if pauseEdge and Hooks.applyFieldPause(self) then
                         swallowPause = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
                         and not entrenched and not mustSwitch and not foeDown
@@ -511,11 +494,6 @@ function Hooks.install(FBV, mod)
                         end
                     end
 
-                    local heldBefore = self._arFieldShiftHeld
-                    if swallowPause then
-                        self._arFieldShiftHeld = true
-                    end
-
                     local result
                     if (self._arFieldInstantMove or swallowPause or swallowB) and input then
                         local origWasPressed = input.wasPressed
@@ -528,10 +506,7 @@ function Hooks.install(FBV, mod)
                                     or key == "left" or key == "right") then
                                 return false
                             end
-                            if swallowB and key == "b" then
-                                return false
-                            end
-                            if swallowPause and key == "select" then
+                            if (swallowB or swallowPause) and key == "b" then
                                 return false
                             end
                             return origWasPressed(inp, key)
@@ -546,8 +521,6 @@ function Hooks.install(FBV, mod)
                     else
                         result = { origUpdate(self, dt, ...) }
                     end
-
-                    self._arFieldShiftHeld = heldBefore
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
                     if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA
@@ -569,6 +542,7 @@ function Hooks.install(FBV, mod)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate25 = true
             BattleState._arFbvUpdate24 = true
             BattleState._arFbvUpdate23 = true
             BattleState._arFbvUpdate22 = true

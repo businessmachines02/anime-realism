@@ -97,6 +97,50 @@ function tests.field_drops_classic_white_overlay()
     false, "stroke is not the overlay")
 end
 
+function tests.b_pauses_move_field_hud()
+  local function press(key)
+    return {
+      wasPressed = function(_, name)
+        return name == key
+      end,
+    }
+  end
+
+  truthy(Hooks.fieldPausePressed(press("b"), { phase = "moveSelect" }),
+    "B on the move diamond is pause")
+  truthy(Hooks.fieldPausePressed(press("b"), {
+    phase = "menu",
+    _arFieldPreferMoves = true,
+  }), "B on the sticky command frame is pause")
+  truthy(not Hooks.fieldPausePressed(press("b"), { phase = "messages" }),
+    "B during dialogue is not field pause")
+  truthy(not Hooks.fieldPausePressed(press("a"), { phase = "moveSelect" }),
+    "A on the diamond is not pause")
+  truthy(not Hooks.fieldPausePressed(nil, { phase = "moveSelect" }),
+    "missing input is not pause")
+
+  local battle = {
+    phase = "moveSelect",
+    moveSwapIndex = 2,
+    _arFieldPreferMoves = true,
+  }
+  truthy(Hooks.applyFieldPause(battle), "pause from diamond")
+  eq(battle.phase, "menu", "diamond yields the command menu")
+  eq(battle.menuIndex, 1, "command cursor defaults to FIGHT")
+  eq(battle.moveSwapIndex, nil, "swap cursor clears")
+  truthy(not battle._arFieldPreferMoves, "pause clears sticky moves")
+  truthy(battle._arFieldCommandHold, "pause holds command")
+
+  battle = { phase = "menu", _arFieldPreferMoves = true }
+  truthy(Hooks.applyFieldPause(battle), "pause on sticky command frame")
+  truthy(not battle._arFieldPreferMoves, "sticky latch clears")
+  truthy(battle._arFieldCommandHold, "sticky command stays held")
+
+  battle = { phase = "messages", _arFieldPreferMoves = true }
+  truthy(not Hooks.applyFieldPause(battle), "dialogue B is not field pause")
+  truthy(battle._arFieldPreferMoves, "message B leaves the move latch")
+end
+
 function tests.faint_drops_sticky_move_diamond()
   truthy(not Hooks.playerMustSwitch({
     player = { mon = { hp = 12 }, curMoves = { {} } },
@@ -391,6 +435,64 @@ function tests.compact_field_ui_tracks_engine_cursors()
   battle._arFieldBubbleDialogue = true
   state = UI.layoutState(battle)
   truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
+end
+
+function tests.move_hud_shows_b_pause_hint()
+  local drawn = {}
+  package.loaded["src.render.Font"] = {
+    draw = function(text)
+      drawn[#drawn + 1] = text
+    end,
+    width = function()
+      return 8
+    end,
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      push = function() end,
+      pop = function() end,
+    },
+  }
+  local battle = {
+    _arAnimeField = true,
+    phase = "moveSelect",
+    moveIndex = 1,
+    player = {
+      curMoves = {
+        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+      },
+    },
+    data = {
+      moves = {
+        TACKLE = { name = "TACKLE" },
+        GROWL = { name = "GROWL" },
+        TAIL_WHIP = { name = "TAIL WHIP" },
+        SCRATCH = { name = "SCRATCH" },
+      },
+    },
+    game = {
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+      overworld = { camera = { x = 0, y = 0 }, entities = {} },
+    },
+  }
+  UI.draw(battle)
+  love = prevLove
+  package.loaded["src.render.Font"] = nil
+  local hinted = false
+  for i = 1, #drawn do
+    if drawn[i] == "B PAUSE" then
+      hinted = true
+      break
+    end
+  end
+  truthy(hinted, "move HUD tells the player to pause with B")
 end
 
 function tests.hp_chip_stays_on_screen_near_top()
