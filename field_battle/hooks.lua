@@ -497,6 +497,7 @@ function Hooks.install(FBV, mod)
                                 category = "physical",
                                 moveType = move.type,
                                 moveId = move.id,
+                                movePower = move.power,
                             })
                         end
                     end
@@ -966,25 +967,29 @@ function Hooks.install(FBV, mod)
             local session = FBV and type(FBV.session) == "function"
                 and FBV.session(battle)
             local Cues = FBV and FBV.Cues
+            local side = ev.target.isPlayer and "player" or "enemy"
+            local cat = moveCategory(ev.move)
+            local hitOpts = {
+                category = cat,
+                typeMult = ev.typeMult,
+                moveId = ev.move and ev.move.id,
+                moveType = ev.move and ev.move.type,
+                movePower = ev.move and ev.move.power,
+            }
             if session and Cues and type(Cues.shouldHoldEngineHit) == "function"
                 and Cues.shouldHoldEngineHit(session, { user = ev.user }) then
+                if type(Cues.holdCloseHit) == "function" then
+                    Cues.holdCloseHit(session, side, hitOpts)
+                end
                 return
             end
-            local side = ev.target.isPlayer and "player" or "enemy"
             local skip = false
             if type(FBV.shouldSkipEventReact) == "function" then
                 local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "hit")
                 skip = okS and s
             end
             if not skip then
-                local cat = moveCategory(ev.move)
-                pcall(FBV.react, battle, side, "hit", {
-                    category = cat,
-                    typeMult = ev.typeMult,
-                    moveId = ev.move and ev.move.id,
-                    moveType = ev.move and ev.move.type,
-                    movePower = ev.move and ev.move.power,
-                })
+                pcall(FBV.react, battle, side, "hit", hitOpts)
             end
         end)
 

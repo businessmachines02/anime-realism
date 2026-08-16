@@ -65,6 +65,21 @@ function tests.field_allows_learn_move_textbox()
   battle.game.stack.states = { battle, party }
   truthy(not Compat.fieldAllowsStackedBottomUI(battle),
     "opaque party menu does not unhide battle chrome")
+
+  -- BATTLE STAGE = AUTO uses the same helper (speech bubbles hide the slab).
+  local autoBattle = {
+    game = {
+      stack = {
+        states = {},
+        top = function(self)
+          return self.states[#self.states]
+        end,
+      },
+    },
+  }
+  autoBattle.game.stack.states = { autoBattle, textBox }
+  truthy(Compat.fieldAllowsStackedBottomUI(autoBattle),
+    "AUTO also unhides learn-move TextBox over hidden dialogue")
 end
 
 function tests.field_drops_classic_white_overlay()
@@ -1198,6 +1213,50 @@ function tests.close_the_gap_physicals()
   eq(player.lastAnim, "attack", "adjacent punch plays on the next present tick")
 end
 
+function tests.close_gap_powerful_hit_pushes_two()
+  local plan = Layout.plan(0, 0, 12, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 12, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 1, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 6, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 4,
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "physical", moveId = "BODY_SLAM", moveType = "NORMAL",
+    movePower = 85,
+  }), "body slam closes the gap")
+  eq(player.padU, 5, "occupancy sits adjacent before the punch")
+  eq(enemy.padU, 6, "foe has not been shoved during the walk")
+  truthy(Cues.holdCloseHit(session, "enemy", {
+    category = "physical", moveId = "BODY_SLAM", movePower = 85,
+  }), "damage_dealt during the walk is stashed")
+  Cues.tickReturns(session, Grid)
+  eq(enemy.padU, 6, "arming tick does not shove")
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "punch lands in melee")
+  eq(enemy.padU, 8, "powerful close-in hit pushes two tiles")
+  truthy(enemy._heavyHit, "heavy hit flag set")
+  eq(enemy.lastAnim, "hit", "foe plays the hit")
+end
+
 function tests.special_trajectories_track_mons()
   local grid = sampleGrid()
   local player = {
@@ -1689,6 +1748,12 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
     "switch prompt is narrative")
   truthy(Callouts.isEnginePrompt("PSYCHIC is about to use\nSLOWPOKE!"),
     "about-to-use is an engine prompt")
+  truthy(Callouts.isEnginePrompt("PIKACHU is trying to learn\nTHUNDERBOLT!"),
+    "learn-move announce is an engine prompt")
+  truthy(Callouts.isEnginePrompt("Delete an older move to make\nroom for THUNDERBOLT?"),
+    "forget-move YES-NO is an engine prompt")
+  truthy(Callouts.isEnginePrompt("PIKACHU forgot TACKLE!"),
+    "forgot-move confirm is an engine prompt")
   truthy(Callouts.isTrainerSpeech("BROCK:\nOnix, dodge!"),
     "named trainer order is NPC")
   truthy(Callouts.isTrainerSpeech("YOUNGSTER:\nWow, a Slowpoke!"),
@@ -1715,20 +1780,54 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   local session = {}
   truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
     "first push sticks")
-  truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!"), "duplicate refresh")
+  Callouts.tick(session, 0.4)
+  local liveAge = session._trainerCallouts.foe[1].age
+  truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!"), "duplicate of live line")
   eq(#session._trainerCallouts.foe, 1, "same line is not stacked")
+  eq(session._trainerCallouts.foe[1].age, liveAge,
+    "re-push does not restart the hold")
   truthy(Callouts.ownsText(session, "BROCK:\nOnix, dodge!"), "owns the live line")
   truthy(Callouts.push(session, "foe", "Onix!\nUse Surf!", { kind = "order" }),
-    "order queues behind")
-  eq(#session._trainerCallouts.foe, 2, "live line stays while the next waits")
-  eq(session._trainerCallouts.foe[1].text, "BROCK:\nOnix, dodge!",
-    "current callout is not replaced")
+    "new order replaces the live shout")
+  eq(#session._trainerCallouts.foe, 1, "emitted line is not queued behind")
+  eq(session._trainerCallouts.foe[1].text, "Onix!\nUse Surf!",
+    "latest callout is showing")
   truthy(Callouts.push(session, "foe", "Onix! Move!", { kind = "react", urgent = true }),
-    "urgent react jumps the queue")
+    "urgent react replaces")
   eq(session._trainerCallouts.foe[1].text, "Onix! Move!", "react is showing")
+  eq(#session._trainerCallouts.foe, 1, "previous order is dropped")
   Callouts.tick(session, Callouts.HOLD_REACT + Callouts.FADE + 0.05)
-  eq(session._trainerCallouts.foe[1].text, "BROCK:\nOnix, dodge!",
-    "queue advances after the hold")
+  truthy(not (session._trainerCallouts and session._trainerCallouts.foe
+      and session._trainerCallouts.foe[1]),
+    "emitted callout is not replayed after the hold")
+
+  -- Re-arm a shout to test dismiss on menu / learn-move.
+  truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
+    "re-arm after expiry")
+  Callouts.tick(session, 0.2, { phase = "menu" })
+  truthy(not (session._trainerCallouts and session._trainerCallouts.foe),
+    "command menu dismisses a used-move callout")
+
+  truthy(Callouts.push(session, "foe", "BROCK:\nOnix, use Surf!", { kind = "order" }),
+    "order before learn-move")
+  local held = {
+    game = {
+      stack = {
+        states = {},
+        top = function(self)
+          return self.states[#self.states]
+        end,
+      },
+    },
+  }
+  local learnBox = { boxTx = 0, boxTy = 12 }
+  held.game.stack.states = { held, learnBox }
+  truthy(Callouts.shouldHold(held), "stacked TextBox yields the foe overlay")
+  Callouts.tick(session, 1, held)
+  truthy(not (session._trainerCallouts and session._trainerCallouts.foe),
+    "learn-move drops the live callout instead of resuming it later")
+  held.game.stack.states = { held }
+  truthy(not Callouts.shouldHold(held), "yield ends when battle is top again")
 end
 
 function tests.dig_fly_vanish_and_emerge()
