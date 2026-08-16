@@ -228,18 +228,43 @@ local function toastAlpha(age, hold)
   return 1
 end
 
-local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
+-- Tiny nub on the speaker-facing edge. Never stretches toward the world
+-- anchor — that was the long triangle when the NPC sat above the player.
+local function drawNub(g, x, y, bw, bh, placement, fillR, fillG, fillB, alpha)
+  local nub = 3
+  local fx, fy, tx1, ty1, tx2, ty2
+  if placement == "left" then
+    fx, fy = x + bw, math.floor(y + bh * 0.5)
+    tx1, ty1 = fx + nub, fy - nub
+    tx2, ty2 = fx + nub, fy + nub
+  elseif placement == "right" then
+    fx, fy = x, math.floor(y + bh * 0.5)
+    tx1, ty1 = fx - nub, fy - nub
+    tx2, ty2 = fx - nub, fy + nub
+  else
+    fx, fy = math.floor(x + bw * 0.5), y + bh
+    tx1, ty1 = fx - nub, fy + nub
+    tx2, ty2 = fx + nub, fy + nub
+  end
+  g.setColor(fillR, fillG, fillB, alpha)
+  g.polygon("fill", fx, fy, tx1, ty1, tx2, ty2)
+  g.setColor(0, 0, 0, alpha)
+  g.line(fx, fy, tx1, ty1)
+  g.line(fx, fy, tx2, ty2)
+end
+
+local function drawBubble(g, Font, text, session, side, ow, battle, stackLift, alpha, threat)
   if alpha <= 0 then
     return
   end
-  local maxInner = 96
-  local padX, padY = 4, 3
+  local maxInner = 88
+  local padX, padY = 3, 2
   local lineH = 8
   local lines = wrapText(Font, text, maxInner)
   if #lines == 0 then
     lines[1] = ""
   end
-  local maxLines = 4
+  local maxLines = 3
   if #lines > maxLines then
     local trimmed = {}
     for i = 1, maxLines - 1 do
@@ -252,15 +277,15 @@ local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
   for i = 1, #lines do
     contentW = math.max(contentW, Font.width(lines[i]))
   end
-  contentW = math.max(32, math.min(maxInner, contentW))
+  contentW = math.max(28, math.min(maxInner, contentW))
   local bw = contentW + padX * 2
   local bh = padY * 2 + #lines * lineH
-  local x = math.floor(anchorX - bw / 2)
-  local y = math.floor(anchorY - bh - 9)
-  x = math.max(1, math.min(159 - bw, x))
-  if y < 1 then
-    y = 1
+  local x, y, _, _, placement = Callouts.bubbleRect(session, side, ow, battle, bw, bh)
+  if not x then
+    return
   end
+  y = y - (stackLift or 0)
+  y = math.max(1, math.min(144 - bh, y))
 
   local fillR, fillG, fillB = 1, 1, 1
   if threat then
@@ -272,17 +297,7 @@ local function drawBubble(g, Font, text, anchorX, anchorY, alpha, threat)
   g.rectangle("fill", x, y, bw, bh)
   g.setColor(0, 0, 0, alpha)
   g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
-  g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
-
-  local tailX = math.max(x + 5, math.min(x + bw - 5, anchorX))
-  g.setColor(fillR, fillG, fillB, alpha)
-  g.polygon("fill", tailX - 4, y + bh - 1,
-    tailX + 4, y + bh - 1, anchorX, math.min(anchorY - 2, y + bh + 6))
-  g.setColor(0, 0, 0, alpha)
-  g.line(tailX - 4, y + bh - 1,
-    anchorX, math.min(anchorY - 2, y + bh + 6))
-  g.line(anchorX, math.min(anchorY - 2, y + bh + 6),
-    tailX + 4, y + bh - 1)
+  drawNub(g, x, y, bw, bh, placement, fillR, fillG, fillB, alpha)
 
   g.setColor(0, 0, 0, alpha)
   local textX = x + padX
@@ -327,15 +342,12 @@ function Callouts.draw(session, battle)
     local side = (si == 1) and "player" or "foe"
     local q = session._trainerCallouts[side]
     if q then
-      local ax, ay = Callouts.anchor(session, side, ow, battle)
-      if ax then
-        for i = 1, #q do
-          local toast = q[i]
-          local alpha = toastAlpha(toast.age, toast.hold)
-          local stackLift = (#q - i) * 14
-          drawBubble(g, Font, toast.text, ax, ay - stackLift, alpha,
-            looksThreat(toast.text, side, toast.threat))
-        end
+      for i = 1, #q do
+        local toast = q[i]
+        local alpha = toastAlpha(toast.age, toast.hold)
+        local stackLift = (#q - i) * 12
+        drawBubble(g, Font, toast.text, session, side, ow, battle, stackLift,
+          alpha, looksThreat(toast.text, side, toast.threat))
       end
     end
   end
