@@ -8,6 +8,8 @@
 -- PAR / FRZ / PSN / BRN / SLP / confusion auras are drawn around live field
 -- sprites each frame. Cover plants the mon behind a real pad prop (or a
 -- crouch shade if none is nearby) — never a looping crate glued to the sprite.
+-- Fire specials paint teardrop flame tongues (not red blobs); Gust is a
+-- traveling wind projectile even though Gen1 Flying is physical.
 
 local Coords = require("coords")
 
@@ -49,10 +51,10 @@ local MOVE_FX = {
   THUNDERBOLT = { style = "beam", glitz = "bolt", duration = 0.36 },
   THUNDERSHOCK = { style = "beam", glitz = "bolt", duration = 0.30 },
   THUNDER = { style = "bolt", duration = 0.42 },
-  FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.48 },
-  FIRE_BLAST = { style = "area", glitz = "flame", radius = 24, duration = 0.50 },
-  EMBER = { style = "orb", glitz = "flame", arc = 10 },
-  FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.48 },
+  FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.52 },
+  FIRE_BLAST = { style = "blast", glitz = "flame", radius = 24, duration = 0.56 },
+  EMBER = { style = "ember", glitz = "flame", duration = 0.48, arc = 12 },
+  FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
   HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
   WATER_GUN = { style = "orb", glitz = "bubble" },
   BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
@@ -190,8 +192,15 @@ local MOVE_FX = {
   PAY_DAY = { style = "contact", glitz = "coin" },
   RAGE = { style = "contact", glitz = "impact" },
   SUPER_FANG = { style = "contact", glitz = "bite" },
-  WING_ATTACK = { style = "contact", glitz = "slash" },
-  GUST = { style = "contact", glitz = "dash" },
+  WING_ATTACK = { style = "contact", glitz = "wing" },
+  GUST = {
+    style = "gust",
+    glitz = "wind",
+    duration = 0.56,
+    color = { 0.70, 0.84, 1.00 },
+  },
+  FLY = { style = "contact", glitz = "wing" },
+  SKY_ATTACK = { style = "contact", glitz = "wing" },
   BARRAGE = { style = "contact", glitz = "impact" },
   BONE_CLUB = { style = "contact", glitz = "impact" },
   BONEMERANG = { style = "orb", glitz = "rock", arc = 14 },
@@ -229,7 +238,7 @@ local TYPE_STYLE = {
   GROUND = { style = "area", glitz = "quake", radius = 18 },
   ROCK = { style = "orb", glitz = "rock", arc = 14 },
   BUG = { style = "orb", glitz = "leaf" },
-  FLYING = { style = "multi", glitz = "star" },
+  FLYING = { style = "gust", glitz = "wind" },
   FIGHTING = { style = "contact", glitz = "impact" },
   NORMAL = { style = "orb", glitz = "star" },
 }
@@ -241,7 +250,7 @@ local TYPE_CONTACT = {
   ICE = "frost",
   POISON = "blob",
   FIGHTING = "impact",
-  FLYING = "slash",
+  FLYING = "wing",
   BUG = "slash",
   GHOST = "ghost",
   STEEL = "slash",
@@ -724,6 +733,9 @@ local TRAVEL_STYLES = {
   swift = true,
   sonic = true,
   ray = true,
+  ember = true,
+  blast = true,
+  gust = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -1523,6 +1535,322 @@ local function drawSwiftStars(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Teardrop flame sprite. rot=0 points up (screen -Y).
+local function drawFlameTongue(g, px, py, rot, scale, alpha)
+  scale = math.max(0.18, scale or 1)
+  alpha = alpha or 1
+  rot = rot or 0
+  local fx, fy = math.sin(rot), -math.cos(rot)
+  local nx, ny = -fy, fx
+  local h, w = 7.4 * scale, 2.55 * scale
+  local function pt(along, side)
+    return px + fx * along * h + nx * side * w,
+      py + fy * along * h + ny * side * w
+  end
+  local function fillPoly(x1, y1, x2, y2, x3, y3, x4, y4, r, gr, b, a)
+    if g.polygon then
+      g.setColor(r, gr, b, a)
+      g.polygon("fill", x1, y1, x2, y2, x3, y3, x4, y4)
+    else
+      g.setColor(r, gr, b, a)
+      g.circle("fill", (x1 + x3) * 0.5, (y1 + y3) * 0.5, w * 0.7)
+    end
+  end
+  local tx, ty = pt(1.00, 0)
+  local rx, ry = pt(0.28, 1.08)
+  local bx, by = pt(-0.16, 0)
+  local lx, ly = pt(0.28, -1.08)
+  fillPoly(tx + fx * 1.2, ty + fy * 1.2, rx + nx * 0.55, ry + ny * 0.55,
+    bx - fx * 0.6, by - fy * 0.6, lx - nx * 0.55, ly - ny * 0.55,
+    0.92, 0.14, 0.02, 0.32 * alpha)
+  fillPoly(tx, ty, rx, ry, bx, by, lx, ly, 1.00, 0.30, 0.04, 0.90 * alpha)
+  local itx, ity = pt(0.74, 0)
+  local irx, iry = pt(0.22, 0.62)
+  local ibx, iby = pt(0.00, 0)
+  local ilx, ily = pt(0.22, -0.62)
+  fillPoly(itx, ity, irx, iry, ibx, iby, ilx, ily,
+    1.00, 0.62, 0.10, 0.95 * alpha)
+  local ytx, yty = pt(0.46, 0)
+  local yrx, yry = pt(0.16, 0.32)
+  local ybx, yby = pt(0.05, 0)
+  local ylx, yly = pt(0.16, -0.32)
+  fillPoly(ytx, yty, yrx, yry, ybx, yby, ylx, yly,
+    1.00, 0.93, 0.40, 0.95 * alpha)
+  g.setColor(1, 1, 1, 0.82 * alpha)
+  g.circle("fill", px + fx * 0.10 * h, py + fy * 0.10 * h, math.max(0.45, 0.72 * scale))
+end
+
+--- Crescent wind slash. ang is travel heading (atan2).
+local function drawWindSlash(g, px, py, ang, scale, c, alpha)
+  scale = scale or 1
+  alpha = alpha or 1
+  local cr, cg, cb = c[1] or 0.7, c[2] or 0.84, c[3] or 1
+  local r = 5.2 * scale
+  if g.arc then
+    g.setColor(cr, cg, cb, 0.28 * alpha)
+    g.setLineWidth(3.4 * scale)
+    g.arc("line", px, py, r + 1.2, ang - 1.05, ang + 1.05)
+    g.setColor(cr, cg, cb, 0.88 * alpha)
+    g.setLineWidth(1.8 * scale)
+    g.arc("line", px, py, r, ang - 0.95, ang + 0.95)
+    g.setColor(1, 1, 1, 0.55 * alpha)
+    g.setLineWidth(1)
+    g.arc("line", px, py, r * 0.68, ang - 0.72, ang + 0.72)
+  else
+    local ca, sa = math.cos(ang), math.sin(ang)
+    local nx, ny = -sa, ca
+    g.setColor(cr, cg, cb, 0.85 * alpha)
+    g.setLineWidth(2)
+    g.line(px + nx * r, py + ny * r * 0.45 - sa * 1.2,
+      px - nx * r, py - ny * r * 0.45 + sa * 1.2)
+  end
+end
+
+--- Ember: staggered bouncing flame tongues caster → foe.
+local function drawEmberVolley(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local heading = math.atan2(dy, dx) + math.pi * 0.5
+  local fade = 1
+  if t > 0.82 then
+    fade = 1 - (t - 0.82) / 0.18
+  end
+  local n = 6
+  for i = 1, n do
+    local delay = (i - 1) * 0.07
+    local u = (t - delay) / math.max(0.38, 0.78 - delay * 0.35)
+    if u > 0 and u < 1.14 then
+      local along = math.min(1, u)
+      local side = ((i % 2) * 2 - 1)
+      local bounce = math.sin(along * math.pi) * (5.5 + (i % 3) * 1.4)
+      local weave = math.sin(along * math.pi * 2.1 + i) * 2.2
+      local px = ox + dx * along + nx * (weave * side * 0.55)
+      local py = oy + dy * along + ny * (weave * side * 0.3) - bounce
+      local flick = 0.82 + 0.18 * math.abs(math.sin((age or 0) * 16 + i * 2.2))
+      local a = fade * (u < 1 and 0.95 or (1.14 - u) / 0.14) * flick
+      local rot = heading + math.sin((age or 0) * 10 + i) * 0.35
+          + side * 0.18
+      drawFlameTongue(g, px, py, rot, (0.62 + (i % 3) * 0.12) * flick, a)
+      if along > 0.08 and along < 0.92 then
+        for k = 1, 2 do
+          local back = k * 0.05
+          local sx = ox + dx * math.max(0, along - back)
+          local sy = oy + dy * math.max(0, along - back) - bounce * 0.7
+          g.setColor(1, 0.72, 0.18, (0.45 - k * 0.14) * a)
+          g.circle("fill", sx, sy, 1.1 - k * 0.25)
+        end
+      end
+    end
+  end
+  if t > 0.62 then
+    local burst = (t - 0.62) / 0.38
+    for i = 1, 5 do
+      local a = i * 1.256 + (age or 0) * 4
+      local dist = burst * (4 + i)
+      drawFlameTongue(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.5 - burst * 2,
+        a + math.pi * 0.5, 0.42, (0.7 - burst * 0.5) * fade)
+    end
+  end
+end
+
+--- Flamethrower: dense jet of flame tongues along the stream.
+local function drawFlameJet(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local heading = math.atan2(dy, dx) + math.pi * 0.5
+  local fade = 1 - t * 0.18
+  local n = 16
+  for i = 0, n do
+    local u = i / n
+    local along = u * math.min(1, t * 1.18 + 0.06)
+    local wobble = math.sin((age or 0) * 17 + i * 1.5) * (1.6 + u * 2.4)
+        + math.cos((age or 0) * 11 + i * 2.1) * 1.1
+    local px = ox + dx * along + nx * wobble
+    local py = oy + dy * along + ny * wobble * 0.45 - u * 1.4
+        - math.abs(math.sin((age or 0) * 14 + i)) * 0.6
+    local flick = 0.78 + 0.22 * math.abs(math.sin((age or 0) * 22 + i * 1.7))
+    local scale = (0.55 + (1 - u) * 0.85) * flick
+    local a = (0.35 + 0.6 * (1 - u * 0.45)) * fade * flick
+    local rot = heading + math.sin((age or 0) * 13 + i) * 0.28
+    drawFlameTongue(g, px, py, rot, scale, a)
+  end
+  -- Hot core along the jet spine.
+  if len > 1 then
+    g.setColor(1.00, 0.82, 0.22, 0.22 * fade)
+    g.setLineWidth(4)
+    g.line(ox, oy, x, y)
+    g.setColor(1.00, 0.95, 0.62, 0.45 * fade)
+    g.setLineWidth(1.6)
+    g.line(ox, oy, x, y)
+  end
+  -- Leading bloom.
+  g.setColor(1.00, 0.45, 0.08, 0.28 * fade)
+  g.circle("fill", x, y, 6.5)
+  drawFlameTongue(g, x, y, heading, 1.15, 0.95 * fade)
+  for i = 1, 5 do
+    local a = (age or 0) * 15 + i * 1.8
+    drawFlameTongue(g,
+      x + math.cos(a) * (2.5 + i % 3),
+      y + math.sin(a) * 1.8 - 1.5,
+      heading + math.sin(a) * 0.5, 0.42, 0.7 * fade)
+  end
+end
+
+--- Fire Blast: traveling fireball, then a 大-shaped star of tongues.
+local function drawFireBlast(g, x, y, ox, oy, t, age, c, radius)
+  local dx, dy = x - ox, y - oy
+  local heading = math.atan2(dy, dx) + math.pi * 0.5
+  local fade = 1
+  if t > 0.86 then
+    fade = 1 - (t - 0.86) / 0.14
+  end
+  local travelT = math.min(1, t / 0.48)
+  local bloomT = math.max(0, (t - 0.42) / 0.58)
+  if travelT < 0.98 then
+    local tipX = ox + dx * travelT
+    local tipY = oy + dy * travelT
+    for i = 1, 4 do
+      local u = travelT - (i - 1) * 0.06
+      if u > 0.02 then
+        local px = ox + dx * u
+        local py = oy + dy * u
+        drawFlameTongue(g, px, py, heading, 1.05 - i * 0.14,
+          (0.85 - i * 0.12) * fade)
+      end
+    end
+    g.setColor(1.00, 0.42, 0.06, 0.32 * fade)
+    g.circle("fill", tipX, tipY, 7)
+    drawFlameTongue(g, tipX, tipY, heading, 1.35, fade)
+  end
+  if bloomT > 0 then
+    local R = (radius or 22) * (0.35 + bloomT * 0.75)
+    g.setColor(1.00, 0.28, 0.04, 0.22 * fade * (1 - bloomT * 0.4))
+    g.circle("fill", x, y, R)
+    for i = 1, 5 do
+      local a = i * (math.pi * 2 / 5) - math.pi * 0.5 + bloomT * 0.4
+      local dist = R * 0.42
+      drawFlameTongue(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.72,
+        a + math.pi * 0.5, 1.15 + bloomT * 0.35,
+        (0.95 - bloomT * 0.35) * fade)
+    end
+    drawFlameTongue(g, x, y - 1, 0, 1.05, 0.9 * fade)
+    for i = 1, 7 do
+      local a = i * 0.9 + (age or 0) * 5
+      local dist = bloomT * (6 + (i % 3) * 3)
+      g.setColor(1, 0.78, 0.22, (0.7 - bloomT * 0.4) * fade)
+      g.circle("fill",
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.55 - bloomT * 2,
+        1.3)
+    end
+  end
+end
+
+--- Fire Spin: vortex of flame tongues around the foe.
+local function drawFireSpin(g, x, y, t, age, c)
+  local fade = 1 - t * 0.35
+  local pulse = math.sin(t * math.pi)
+  for i = 1, 8 do
+    local a = (age or 0) * 9 + i * 0.785
+    local r = (4 + i * 1.15) * (0.4 + 0.7 * pulse)
+    local px = x + math.cos(a) * r
+    local py = y + math.sin(a) * r * 0.55
+    local rot = a + math.pi * 0.5 + 0.4
+    drawFlameTongue(g, px, py, rot, 0.62 + (i % 3) * 0.12, 0.85 * fade)
+  end
+  g.setColor(1.00, 0.45, 0.08, 0.22 * fade)
+  g.ellipse("fill", x, y + 2, 7 + pulse * 5, 2.6)
+  drawFlameTongue(g, x, y - 1, 0, 0.85, 0.7 * fade)
+end
+
+--- Gust: traveling wind crescents + swirl impact.
+local function drawGustWind(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local ang = math.atan2(fy, fx)
+  local fade = 1
+  if t > 0.82 then
+    fade = 1 - (t - 0.82) / 0.18
+  end
+  local travelT = math.min(1, t / 0.58)
+  local landT = math.max(0, (t - 0.48) / 0.52)
+  -- Helical ribbons filling the path.
+  for i = 1, 7 do
+    local u = travelT - (i - 1) * 0.08
+    if u > 0.04 and u < 1.05 then
+      local along = math.min(1, u)
+      local spin = (age or 0) * 10 + i * 1.1
+      local px = ox + dx * along + nx * math.sin(spin) * (3.2 + along * 2)
+      local py = oy + dy * along + ny * math.sin(spin) * (3.2 + along * 2) * 0.45
+          - math.sin(along * math.pi) * 2.2
+      local a = (0.8 - i * 0.08) * fade * (1 - math.max(0, u - 0.88) / 0.17)
+      drawWindSlash(g, px, py, ang + math.sin(spin) * 0.35,
+        0.72 + (i % 3) * 0.12, c, a)
+    end
+  end
+  -- Leading gust cone.
+  if travelT > 0.06 and travelT < 0.98 then
+    local tipX = ox + dx * travelT
+    local tipY = oy + dy * travelT
+    drawWindSlash(g, tipX, tipY, ang, 1.25, c, 0.95 * fade)
+    drawWindSlash(g, tipX - fx * 4, tipY - fy * 4, ang, 0.95, c, 0.55 * fade)
+    g.setColor(c[1], c[2], c[3], 0.18 * fade)
+    g.ellipse("fill", tipX, tipY, 8, 3.4)
+  end
+  -- Leaf specks caught in the draft.
+  for i = 1, 5 do
+    local u = travelT - 0.05 - (i % 3) * 0.07
+    if u > 0.04 and u < 0.95 then
+      local spin = (age or 0) * 8 + i * 2
+      local px = ox + dx * u + nx * math.cos(spin) * 5
+      local py = oy + dy * u + math.sin(spin) * 2.4
+      g.setColor(0.55, 0.72, 0.38, 0.55 * fade)
+      if g.polygon then
+        g.polygon("fill",
+          px, py - 1.4,
+          px + 1.6, py,
+          px, py + 1.2,
+          px - 1.2, py)
+      else
+        g.circle("fill", px, py, 1.1)
+      end
+    end
+  end
+  if landT > 0 then
+    for i = 1, 4 do
+      local r = 4 + landT * (8 + i * 3)
+      g.setColor(c[1], c[2], c[3], (0.55 - i * 0.1) * fade * (1 - landT * 0.4))
+      g.setLineWidth(1.6)
+      g.ellipse("line", x, y + 1, r, r * 0.48)
+    end
+    for i = 1, 5 do
+      local a = i * 1.256 + (age or 0) * 6
+      drawWindSlash(g,
+        x + math.cos(a) * (5 + landT * 6),
+        y + math.sin(a) * (3 + landT * 3),
+        a, 0.7, c, (0.7 - landT * 0.4) * fade)
+    end
+  end
+end
+
 local function drawMove(g, p, x, y)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "orb"
@@ -1531,31 +1859,21 @@ local function drawMove(g, p, x, y)
     (glitz == "flame" or glitz == "bubble") and 3.2 or 4)
 
   if glitz == "flame" then
+    local heading = math.atan2(p.dirY or 0, p.dirX or 1) + math.pi * 0.5
     for i = #trail, 1, -1 do
       local tp = trail[i]
-      local wobble = math.sin(age * 22 + i * 1.7) * 1.8
-      local nx = -(p.dirY or 0) * wobble
-      local ny = (p.dirX or 1) * wobble
-      local r = 5.5 - (i - 1) * 0.45
-      g.setColor(c[1], c[2] * 0.35, 0.02, 0.28 * tp.a)
-      g.circle("fill", tp.x + nx * 0.4, tp.y + ny * 0.4 - (i - 1) * 0.6, r + 2)
-      g.setColor(c[1], c[2] * 0.55, 0.05, 0.6 * tp.a)
-      g.circle("fill", tp.x + nx, tp.y + ny - (i - 1) * 0.5, r)
+      local wobble = math.sin(age * 18 + i * 1.6) * 0.28
+      drawFlameTongue(g, tp.x, tp.y - (i - 1) * 0.35,
+        heading + wobble, 0.95 - (i - 1) * 0.08, 0.85 * tp.a)
     end
-    -- Embers peeling off the tip.
-    for i = 1, 5 do
+    drawFlameTongue(g, x, y, heading, 1.15, 0.95)
+    for i = 1, 4 do
       local a = age * 14 + i * 2.1
-      local d = 3 + (i % 3) * 2
-      g.setColor(1, 0.7 + (i % 2) * 0.2, 0.2, 0.7)
-      g.circle("fill",
-        x + math.cos(a) * d * 0.6 - (p.dirX or 0) * (i + 1),
-        y + math.sin(a) * d * 0.5 - 2 - i * 0.4,
-        1.4 - i * 0.12)
+      drawFlameTongue(g,
+        x + math.cos(a) * (2.5 + i % 3) - (p.dirX or 0) * (i + 0.5),
+        y + math.sin(a) * 1.6 - 1.5 - i * 0.3,
+        heading + math.sin(a) * 0.4, 0.4, 0.7)
     end
-    g.setColor(1, 0.95, 0.55, 0.95)
-    g.circle("fill", x, y, 2.8)
-    g.setColor(1, 1, 1, 0.85)
-    g.circle("fill", x, y - 0.5, 1.2)
     return
   end
 
@@ -1690,6 +2008,19 @@ local function drawContact(g, p, x, y, t)
     return
   end
 
+  if glitz == "wing" then
+    local reach = 5 + t * 9
+    local ang = -0.45
+    drawWindSlash(g, x, y, ang, 1.15 + t * 0.35, c, fade)
+    drawWindSlash(g, x + 2, y - 1, ang + 0.55, 0.85, c, fade * 0.7)
+    g.setColor(1, 1, 1, 0.75 * fade)
+    g.setLineWidth(2)
+    g.line(x - reach * 0.3, y + 3, x + reach * 0.55, y - 5)
+    g.setColor(c[1], c[2], c[3], fade)
+    g.circle("fill", x + reach * 0.2, y - 2, 1.6)
+    return
+  end
+
   if glitz == "pierce" then
     g.setColor(c[1], c[2], c[3], fade)
     g.setLineWidth(2)
@@ -1776,7 +2107,20 @@ local function drawContact(g, p, x, y, t)
     return
   end
 
-  if glitz == "flame" or glitz == "bubble" or glitz == "blob"
+  if glitz == "flame" then
+    for i = 1, 5 do
+      local a = i * 1.256 + t * 3
+      local dist = 2 + t * 7
+      drawFlameTongue(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.6 - t * 2,
+        a + math.pi * 0.5, 0.7, fade)
+    end
+    drawFlameTongue(g, x, y - 1, 0, 1.05, fade)
+    return
+  end
+
+  if glitz == "bubble" or glitz == "blob"
       or glitz == "frost" or glitz == "bolt" or glitz == "ghost"
       or glitz == "leaf" or glitz == "psy" then
     local reach = 3 + t * 8
@@ -1975,11 +2319,13 @@ local function drawEffect(g, p, x, y, ox, oy)
       end
     elseif glitz == "flame" then
       for i = 1, 5 do
-        local a = i * 1.256 + t * 4
-        g.setColor(c[1], c[2] * 0.6, 0.1, 0.55 * (1 - t))
-        g.circle("fill", x + math.cos(a) * radius * 0.55,
-          y + math.sin(a) * radius * 0.55 - 2, 3)
+        local a = i * 1.256 + t * 4 - math.pi * 0.5
+        drawFlameTongue(g,
+          x + math.cos(a) * radius * 0.45,
+          y + math.sin(a) * radius * 0.45 - 1,
+          a + math.pi * 0.5, 0.95, 0.85 * (1 - t))
       end
+      drawFlameTongue(g, x, y - 1, 0, 1.1, 0.9 * (1 - t))
     end
   elseif p.style == "wave" then
     local radius = 6 + t * (p.radius or 20)
@@ -1997,9 +2343,17 @@ local function drawEffect(g, p, x, y, ox, oy)
     drawRazorVolley(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "swift" then
     drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
+  elseif p.style == "ember" then
+    drawEmberVolley(g, x, y, ox, oy, t, p.age, c)
+  elseif p.style == "blast" then
+    drawFireBlast(g, x, y, ox, oy, t, p.age, c, p.radius)
+  elseif p.style == "gust" then
+    drawGustWind(g, x, y, ox, oy, t, p.age, c)
   elseif p.style == "spiral" then
     if glitz == "psy" then
       drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
+    elseif glitz == "flame" then
+      drawFireSpin(g, x, y, t, p.age, c)
     else
       for i = 1, 8 do
         local a = t * math.pi * 5 + i * 0.7
@@ -2033,36 +2387,7 @@ local function drawEffect(g, p, x, y, ox, oy)
     local n = (glitz == "flame" or glitz == "bubble") and 14
         or (glitz == "blob" and 10 or 8)
     if glitz == "flame" then
-      for i = 0, n do
-        local u = i / n
-        -- Particles lag slightly behind the tip so the stream fills in.
-        local along = u * math.min(1, t * 1.15 + 0.08)
-        local wobble = math.sin(age * 18 + i * 1.6) * (2.8 + u * 2)
-            + math.cos(age * 11 + i * 2.3) * 1.4
-        local px = ox + dx * along + nx * wobble
-        local py = oy + dy * along + ny * wobble - u * 2
-        local r = 2.2 + (1 - u) * 3.5 + math.sin(age * 20 + i) * 0.6
-        local a = (0.25 + 0.55 * (1 - u)) * (1 - t * 0.2)
-        g.setColor(c[1], c[2] * 0.3, 0.02, a * 0.45)
-        g.circle("fill", px, py - 1, r + 2)
-        g.setColor(c[1], c[2] * 0.55, 0.08, a)
-        g.circle("fill", px, py, r)
-        if i % 3 == 0 then
-          g.setColor(1, 0.9, 0.4, a * 0.85)
-          g.circle("fill", px, py - 0.5, math.max(0.8, r * 0.35))
-        end
-      end
-      -- Tip bloom + embers.
-      g.setColor(1, 0.55, 0.12, 0.45)
-      g.circle("fill", x, y, 7)
-      for i = 1, 6 do
-        local a = age * 16 + i * 1.9
-        g.setColor(1, 0.75, 0.25, 0.75)
-        g.circle("fill",
-          x + math.cos(a) * (3 + i % 3),
-          y + math.sin(a) * 2 - 2,
-          1.5)
-      end
+      drawFlameJet(g, x, y, ox, oy, t, age, c)
     elseif glitz == "bubble" then
       for i = 0, n do
         local u = i / n
@@ -2102,7 +2427,9 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.55)
       g.circle("fill", x, y, 2.2)
     end
-    drawMove(g, p, x, y)
+    if glitz ~= "flame" then
+      drawMove(g, p, x, y)
+    end
   elseif p.style == "multi" then
     local n = (glitz == "tri") and 3 or 5
     for i = 1, n do
@@ -2204,20 +2531,19 @@ local function drawEffect(g, p, x, y, ox, oy)
     local fade = 1 - t
     local age = p.age or 0
     local rising = (oy or y) >= (y - 1)
+    local ang = rising and (-math.pi * 0.5) or (math.pi * 0.5)
     for i = 1, 6 do
       local u = i / 6
       local along = rising and (-u * (12 + t * 14)) or (u * (10 + t * 12))
       local sway = math.sin(age * 10 + i * 1.7) * (3 + u * 2)
       local px = x + sway
       local py = y + along
-      g.setColor(c[1], c[2], c[3], (0.55 - u * 0.25) * fade)
-      g.setLineWidth(1.6)
-      g.line(px - 2, py + 2, px + 2, py - 3)
-      g.setColor(1, 1, 1, 0.35 * fade * (1 - u))
-      g.circle("fill", px, py, 1.2)
+      drawWindSlash(g, px, py, ang + math.sin(age * 8 + i) * 0.25,
+        0.7 + u * 0.2, c, (0.7 - u * 0.25) * fade)
     end
     g.setColor(c[1], c[2], c[3], 0.25 * fade)
     g.ellipse("fill", x, y + 2, 7 + t * 4, 2.5)
+    drawWindSlash(g, x, y, ang, 1.15, c, 0.85 * fade)
   elseif p.style == "power_hit" then
     drawPowerBurst(g, x, y, t, p.age, c, { impact = false })
   elseif p.style == "power_impact" then
@@ -2459,23 +2785,9 @@ local function drawStatusAura(g, x, y, status, phase)
       local sway = math.sin(phase * 8 + i * 2.1) * 1.5
       local px = x + math.sin(phase * 1.7 + i * 1.9) * 5.6 + sway
       local py = y + 5 - drift * 16
-      local h = 3.4 + (i % 2) * 1.3
-      local w = 1.5 + (1 - drift) * 0.55
       local a = 0.30 + 0.55 * (1 - drift)
-      g.setColor(c[1], c[2] * 0.42, 0.04, a * 0.55)
-      if g.polygon then
-        g.polygon("fill",
-          px, py - h,
-          px + w, py + 1,
-          px, py + 2.2,
-          px - w, py + 1)
-      else
-        g.circle("fill", px, py, w + 0.4)
-      end
-      g.setColor(1.00, 0.78, 0.22, a)
-      g.circle("fill", px, py + 0.3, 1.15)
-      g.setColor(1, 1, 1, a * 0.5)
-      g.circle("fill", px, py, 0.45)
+      drawFlameTongue(g, px, py, math.sin(phase * 6 + i) * 0.25,
+        0.55 + (i % 2) * 0.18, a)
     end
   elseif aura.kind == "zs" then
     -- Rising Z's over a sleeping mon.
@@ -2958,6 +3270,46 @@ function Projectiles.move(session, side, opts)
       glitz = fx.glitz or "star",
       sx = sx, sy = sy, ex = ex, ey = ey,
       duration = fx.duration or 0.52,
+      arc = 6,
+      color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "ember" then
+    return spawn(session, {
+      kind = "effect",
+      style = "ember",
+      glitz = fx.glitz or "flame",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.48,
+      arc = fx.arc or 12,
+      color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "blast" then
+    return spawn(session, {
+      kind = "effect",
+      style = "blast",
+      glitz = fx.glitz or "flame",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.56,
+      arc = 5,
+      radius = fx.radius or 24,
+      color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "gust" then
+    return spawn(session, {
+      kind = "effect",
+      style = "gust",
+      glitz = fx.glitz or "wind",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.56,
       arc = 6,
       color = fx.color,
       onDone = opts.onDone,
