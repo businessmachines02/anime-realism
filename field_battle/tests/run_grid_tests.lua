@@ -2142,6 +2142,57 @@ function tests.world_space_projectiles()
   eq(flamethrower.style, "stream", "named fire move uses stream glitz")
   eq(flamethrower.glitz, "flame", "flamethrower paints flame trail")
   truthy((flamethrower.duration or 0) >= 0.45, "flamethrower holds a longer stream")
+  truthy(flamethrower.sx < flamethrower.ex, "flamethrower travels toward the foe")
+  local ember = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "EMBER",
+  })
+  eq(ember.style, "ember", "ember uses bouncing flame tongues")
+  eq(ember.glitz, "flame", "ember paints flame glitz")
+  truthy(ember.sx < ember.ex, "ember travels toward the foe")
+  truthy((ember.arc or 0) >= 10, "ember arcs like bouncing fireballs")
+  truthy(Projectiles.isTravelFx({
+    moveType = "FIRE", moveId = "EMBER",
+  }), "ember is a travel FX")
+  local fireBlast = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "FIRE_BLAST",
+  })
+  eq(fireBlast.style, "blast", "fire blast uses a traveling fireball")
+  eq(fireBlast.glitz, "flame", "fire blast paints flame tongues")
+  truthy(fireBlast.sx < fireBlast.ex, "fire blast travels toward the foe")
+  truthy(Projectiles.isTravelFx({
+    moveType = "FIRE", moveId = "FIRE_BLAST",
+  }), "fire blast is a travel FX")
+  local fireSpin = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "FIRE_SPIN",
+  })
+  eq(fireSpin.style, "spiral", "fire spin swirls around the foe")
+  eq(fireSpin.glitz, "flame", "fire spin paints flame tongues")
+  local gust = Projectiles.move(session, "player", {
+    moveType = "FLYING", moveId = "GUST",
+  })
+  eq(gust.style, "gust", "gust uses a traveling wind projectile")
+  eq(gust.glitz, "wind", "gust paints wind crescents")
+  truthy(gust.sx < gust.ex, "gust travels toward the foe")
+  truthy((gust.duration or 0) >= 0.5, "gust holds a longer draft")
+  truthy(Projectiles.isTravelFx({
+    moveType = "FLYING", moveId = "GUST",
+  }), "gust is a travel FX")
+  truthy(not Projectiles.isContactFx({ moveId = "GUST" }), "gust is not contact FX")
+  truthy(not Cues.isMeleeAttack({
+    category = "physical", moveId = "GUST", moveType = "FLYING",
+  }, Projectiles), "gust stays a travel cast even though Flying is physical")
+  local wing = Projectiles.contact(session, "player", {
+    moveType = "FLYING", moveId = "WING_ATTACK",
+  })
+  eq(wing.glitz, "wing", "wing attack uses a wing slash")
+  local flyHit = Projectiles.contact(session, "player", {
+    moveType = "FLYING", moveId = "FLY",
+  })
+  eq(flyHit.glitz, "wing", "fly strike uses a wing slash")
+  local sky = Projectiles.contact(session, "player", {
+    moveType = "FLYING", moveId = "SKY_ATTACK",
+  })
+  eq(sky.glitz, "wing", "sky attack uses a wing slash")
   local bubblebeam = Projectiles.move(session, "player", {
     moveType = "WATER", moveId = "BUBBLEBEAM",
   })
@@ -2368,6 +2419,83 @@ function tests.supersonic_and_confuse_ray_paint()
   truthy(calls.ellipse > 0, "confuse ray paints a short smog wad")
   truthy(calls.circle > 0, "confuse ray paints smog wisps")
   truthy(calls.line > 0, "confuse ray leaves a light trail")
+  love = prevLove
+end
+
+function tests.fire_tongues_and_gust_paint()
+  local calls = { polygon = 0, arc = 0, circle = 0, ellipse = 0, line = 0 }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() calls.line = calls.line + 1 end,
+      arc = function() calls.arc = calls.arc + 1 end,
+      ellipse = function() calls.ellipse = calls.ellipse + 1 end,
+      circle = function() calls.circle = calls.circle + 1 end,
+      rectangle = function() end,
+      polygon = function() calls.polygon = calls.polygon + 1 end,
+    },
+  }
+  local grid = sampleGrid()
+  local player = {
+    id = "player",
+    padU = grid.home.player.u,
+    padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy",
+    padU = grid.home.enemy.u,
+    padV = grid.home.enemy.v,
+    px = 80, py = 32,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+
+  local ember = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "EMBER",
+  })
+  ember.age = 0.28
+  ember:draw(0, 0)
+  truthy(calls.polygon > 0, "ember paints flame-tongue polygons, not red blobs")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local flamethrower = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "FLAMETHROWER",
+  })
+  flamethrower.age = 0.22
+  flamethrower:draw(0, 0)
+  truthy(calls.polygon > 0, "flamethrower paints a jet of flame tongues")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local blast = Projectiles.move(session, "player", {
+    moveType = "FIRE", moveId = "FIRE_BLAST",
+  })
+  blast.age = 0.50
+  blast:draw(0, 0)
+  truthy(calls.polygon > 0, "fire blast paints a star of flame tongues")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local gust = Projectiles.move(session, "player", {
+    moveType = "FLYING", moveId = "GUST",
+  })
+  gust.age = 0.32
+  gust:draw(0, 0)
+  truthy(calls.arc > 0, "gust paints traveling wind crescents")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local wing = Projectiles.contact(session, "player", {
+    moveType = "FLYING", moveId = "WING_ATTACK",
+  })
+  wing.age = 0.12
+  wing:draw(0, 0)
+  truthy(calls.arc > 0, "wing attack paints a flying crescent slash")
   love = prevLove
 end
 

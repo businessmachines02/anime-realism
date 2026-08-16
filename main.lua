@@ -2380,7 +2380,7 @@ return function(mod)
             STONE = { "DIG", "ROCK_THROW", "HARDEN" },
             LEDGE = { "DIG", "QUICK_ATTACK" },
             CLIFF = { "DIG", "FLY", "ROCK_SLIDE" },
-            ["FLY UP"] = { "FLY", "GUST", "WING_ATTACK" },
+            ["FLY UP"] = { "FLY", "GUST", "WING_ATTACK", "SKY_ATTACK" },
             PATH = { "DIG", "SAND_ATTACK", "DOUBLE_TEAM" },
             CART = { "DOUBLE_TEAM", "SMOKESCREEN", "DIG" },
             ALLEY = { "SMOKESCREEN", "DOUBLE_TEAM", "DIG" },
@@ -2390,7 +2390,7 @@ return function(mod)
             COURT = { "DOUBLE_TEAM", "QUICK_ATTACK" },
             COVER = { "DIG", "DOUBLE_TEAM", "MINIMIZE" },
             ZIP = { "FLASH", "THUNDER_WAVE", "DOUBLE_TEAM" },
-            BURST = { "SMOKESCREEN", "EMBER", "FIRE_SPIN" },
+            BURST = { "SMOKESCREEN", "EMBER", "FLAMETHROWER", "FIRE_SPIN" },
             FADE = { "TELEPORT", "NIGHT_SHADE" },
             SENSE = { "CONFUSION", "TELEPORT", "DISABLE" },
         }
@@ -5029,8 +5029,8 @@ return function(mod)
                 ["FLY UP"] = {
                     pic = "slideUp",
                     wait = 18,
-                    moves = { "FLY", "WING_ATTACK", "GUST", "DRILL_PECK" },
-                    emerge = { "FLY", "WING_ATTACK", "GUST" },
+                    moves = { "FLY", "GUST", "WING_ATTACK", "SKY_ATTACK", "DRILL_PECK" },
+                    emerge = { "FLY", "GUST", "WING_ATTACK" },
                 },
                 ["ZIP"] = {
                     pic = "slideOff",
@@ -5041,8 +5041,8 @@ return function(mod)
                 ["BURST"] = {
                     pic = "bounce",
                     wait = 28,
-                    moves = { "FLAMETHROWER", "FIRE_SPIN", "EMBER", "SMOKESCREEN" },
-                    emerge = { "EMBER", "QUICK_ATTACK" },
+                    moves = { "FLAMETHROWER", "FIRE_BLAST", "FIRE_SPIN", "EMBER", "SMOKESCREEN" },
+                    emerge = { "EMBER", "FLAMETHROWER" },
                 },
                 ["FADE"] = {
                     pic = "blink",
@@ -5813,13 +5813,16 @@ return function(mod)
                 cube(g, ox + 6, oy + 2, 8, 0.90, 0.92, 0.96, a)
                 cube(g, ox + 16, oy - 2, 10, 0.94, 0.96, 0.99, a)
                 cube(g, ox + 24, oy + 2, 7, 0.88, 0.90, 0.95, a)
+                cube(g, ox + 12, oy - 8, 5, 0.82, 0.88, 0.98, a * 0.75)
+                cube(g, ox + 20, oy - 10, 4, 0.78, 0.86, 1.00, a * 0.65)
             elseif kind == "shadow" then
                 cube(g, ox + 10, oy + 4, 12, 0.18, 0.12, 0.28, a * 0.7)
                 cube(g, ox + 18, oy, 8, 0.32, 0.18, 0.42, a * 0.65)
             elseif kind == "ember" then
-                cube(g, ox + 8, oy + 6, 7, 0.55, 0.22, 0.10, a)
-                cube(g, ox + 16, oy + 2, 6, 0.90, 0.45, 0.12, a)
-                cube(g, ox + 12, oy - 4, 5, 0.98, 0.75, 0.20, a)
+                cube(g, ox + 10, oy + 8, 8, 0.62, 0.16, 0.04, a)
+                cube(g, ox + 12, oy + 2, 6, 0.95, 0.40, 0.08, a)
+                cube(g, ox + 13, oy - 4, 4, 1.00, 0.78, 0.18, a)
+                cube(g, ox + 14, oy - 9, 3, 1.00, 0.95, 0.55, a * 0.9)
             else -- spark / crate
                 cube(g, ox + 10, oy + 2, 10, 0.58, 0.42, 0.20, a)
                 cube(g, ox + 18, oy - 2, 8, 0.68, 0.52, 0.26, a)

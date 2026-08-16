@@ -25,7 +25,9 @@ Pixels are presentation only; **pad cells are truth**.
    contact, projectile, beam, area, stream, spiral, aura, wave, drain, status, heal,
    shadow (Night Shade), seed (Leech Seed), sonic (Supersonic rings), ray (Confuse Ray smog),
    surf (tidal wall), razor (leaf blades),
-   swift (flying stars), icebolt (Ice Beam), power burst (high-BP hits), and capture
+   swift (flying stars), icebolt (Ice Beam), ember / flamethrower / fire blast
+   (flame-tongue sprites), gust (wind crescents; Flying contact uses wing
+   slashes), power burst (high-BP hits), and capture
    effects — named Gen1 moves pick glitz. Earthquake pops Dig-like dirt bursts on
    random pad tiles.    Persistent PAR / FRZ /
    PSN / BRN / SLP / confusion auras tint field sprites; **Leech Seed** keeps a pulsing
