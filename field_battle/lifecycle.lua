@@ -1729,6 +1729,10 @@ function Lifecycle.onTurnStarted(battle)
     repairInvalidCell(session.playerMon)
     repairInvalidCell(session.enemyMon)
     session._lastCueMoveId = nil
+    session._arSkipEngineStrike = nil
+    session._arFollowUpAnimKey = nil
+    session._multiHitMoveId = nil
+    session._multiHitSide = nil
 end
 
 function Lifecycle.react(battle, side, kind, opts)
@@ -1907,6 +1911,9 @@ function Lifecycle.tick(battle, dt, deps)
         deps.Projectiles.syncCoverHold(session, battle, dt)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
+    if type(deps.Cues.pumpFollowUpAnims) == "function" then
+      deps.Cues.pumpFollowUpAnims(session, battle, deps.Grid, Lifecycle.nudgeCamera)
+    end
     if deps.Callouts and type(deps.Callouts.tick) == "function" then
         deps.Callouts.tick(session, dt, battle)
     end
