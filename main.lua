@@ -6356,6 +6356,20 @@ return function(mod)
                 state.suppressReactDefer = nil
             end
             battle._arSuppressReactDefer = nil
+            -- Issue #6: drop the sticky FIELD diamond so PKMN is reachable.
+            battle._arFieldPreferMoves = nil
+            battle._arFieldCommandHold = true
+            if battle.phase == "moveSelect" or battle.phase == "mimicSelect" then
+                battle.phase = "menu"
+            end
+            if type(battle.queue) == "table" then
+                for i = #battle.queue, 1, -1 do
+                    local row = battle.queue[i]
+                    if type(row) == "table" and row.ui then
+                        table.remove(battle.queue, i)
+                    end
+                end
+            end
             -- Keep _arPickOfferedThisTurn until turn_started (resetMomentum).
         end
 

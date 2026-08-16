@@ -39,6 +39,30 @@ function Hooks.shouldDropFieldFill(mode, x, y, w, h, r, gr, b, a)
     return "drop"
 end
 
+-- Fainted / empty HP / send-out: PKMN must be reachable. The sticky move
+-- diamond (R-SHIFT PAUSE) must not sit on top of the party switch.
+function Hooks.playerMustSwitch(battle)
+    if not battle then
+        return false
+    end
+    if battle.sendingOut then
+        return true
+    end
+    local p = battle.player
+    if not p then
+        return false
+    end
+    local hp = (p.mon and p.mon.hp) or p.hp
+    if type(hp) == "number" and hp <= 0 then
+        return true
+    end
+    local shown = p.shownHP
+    if type(shown) == "number" and shown <= 0 then
+        return true
+    end
+    return false
+end
+
 function Hooks.install(FBV, mod)
     if not mod then
         return false
@@ -286,8 +310,8 @@ function Hooks.install(FBV, mod)
         end
 
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate22 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate22 then
+        -- _arFbvUpdate23 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate23 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -335,6 +359,18 @@ function Hooks.install(FBV, mod)
                         pressedA = input:wasPressed("a") == true
                     end
                     local entrenched = focusEntrenched(self)
+                    local mustSwitch = Hooks.playerMustSwitch(self)
+
+                    -- Issue #6: fainted player cannot be stuck on the move diamond.
+                    if mustSwitch then
+                        self._arFieldPreferMoves = nil
+                        self._arFieldCommandHold = true
+                        if self.phase == "moveSelect" or self.phase == "mimicSelect" then
+                            self.phase = "menu"
+                            self.menuIndex = self.menuIndex or 2
+                            self.moveSwapIndex = nil
+                        end
+                    end
 
                     -- `_arFieldPreferMoves`: sticky after FIGHT until PAUSE.
                     if self.phase == "messages" then
@@ -353,7 +389,7 @@ function Hooks.install(FBV, mod)
                         self._arFieldCommandHold = true
                         swallowPause = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
-                        and not entrenched
+                        and not entrenched and not mustSwitch
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
                         and #(self.player.curMoves) > 0 then
@@ -464,6 +500,7 @@ function Hooks.install(FBV, mod)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate23 = true
             BattleState._arFbvUpdate22 = true
             BattleState._arFbvUpdate21 = true
             BattleState._arFbvUpdate20 = true

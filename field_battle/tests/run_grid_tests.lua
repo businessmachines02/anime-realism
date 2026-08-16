@@ -82,6 +82,22 @@ function tests.field_drops_classic_white_overlay()
     false, "stroke is not the overlay")
 end
 
+function tests.faint_drops_sticky_move_diamond()
+  truthy(not Hooks.playerMustSwitch({
+    player = { mon = { hp = 12 }, curMoves = { {} } },
+  }), "healthy mon does not force a switch")
+  truthy(Hooks.playerMustSwitch({
+    player = { mon = { hp = 0 }, curMoves = { {} } },
+  }), "HP 0 forces a switch")
+  truthy(Hooks.playerMustSwitch({
+    sendingOut = true,
+    player = { mon = { hp = 20 } },
+  }), "send-out forces a switch")
+  truthy(Hooks.playerMustSwitch({
+    player = { shownHP = 0, mon = { hp = 4 } },
+  }), "empty shown HP forces a switch")
+end
+
 function tests.supported_battle_gate()
   local mod = {
     options = {
