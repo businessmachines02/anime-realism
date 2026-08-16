@@ -432,6 +432,123 @@ function tests.hp_chip_stays_on_screen_near_top()
   truthy(minY >= UI.HP_CHIP_TOP, "top-of-screen mon does not clip its HP chip")
 end
 
+function tests.focus_bar_paints_above_hp_when_enabled()
+  local prevVisible, prevRatio = UI.focusBarVisible, UI.focusRatio
+  UI.focusBarVisible = function() return true end
+  UI.focusRatio = function(_, isPlayer)
+    return isPlayer and 0.8 or 0.4
+  end
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80,
+    py = 40,
+    _fieldBarLift = 10,
+    hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = {
+        camera = { x = 0, y = 0 },
+        entities = { enemy },
+      },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  UI.focusBarVisible, UI.focusRatio = prevVisible, prevRatio
+  truthy(#painted >= 4, "focus bar adds extra rects above the HP chip")
+  local ys = {}
+  for i = 1, #painted do
+    ys[#ys + 1] = painted[i].y
+  end
+  table.sort(ys)
+  truthy(ys[1] < ys[#ys], "focus bar sits above the HP bar")
+  truthy(battle._arFocusBarShown and battle._arFocusBarShown.enemy ~= nil,
+    "shown focus eases toward the live ratio")
+end
+
+function tests.focus_bar_gap_flush_vs_one_pixel()
+  local prevVisible, prevRatio, prevGap = UI.focusBarVisible, UI.focusRatio, UI.focusBarGap
+  UI.focusBarVisible = function() return true end
+  UI.focusRatio = function() return 1 end
+  local function paintY(gap)
+    UI.focusBarGap = function() return gap end
+    local ys = {}
+    local prevLove = love
+    love = {
+      graphics = {
+        setColor = function() end,
+        rectangle = function(_, _, y)
+          ys[#ys + 1] = y
+        end,
+        polygon = function() end,
+        push = function() end,
+        pop = function() end,
+        translate = function() end,
+        scale = function() end,
+        print = function() end,
+      },
+    }
+    local enemy = {
+      _arFieldBattler = true,
+      _arFieldSide = "enemy",
+      px = 80,
+      py = 40,
+      _fieldBarLift = 10,
+      hidden = false,
+    }
+    local battle = {
+      _arAnimeField = true,
+      player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+      enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+      game = {
+        overworld = {
+          camera = { x = 0, y = 0 },
+          entities = { enemy },
+        },
+        renderer = {
+          uiSize = function() return 160, 144 end,
+          worldViewSize = function() return 160, 144 end,
+          fitScale = function() return 1 end,
+        },
+      },
+    }
+    UI.drawWorldHP(battle, 0, 0, "ui")
+    love = prevLove
+    table.sort(ys)
+    return ys[1]
+  end
+  local flushY = paintY(0)
+  local gappedY = paintY(1)
+  UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
+  truthy(gappedY < flushY, "1PX gap lifts the focus bar one pixel above flush")
+end
+
 function tests.compact_arena_keeps_cast_lanes_clear()
   local player = { cellX = 10, cellY = 10, facing = "right" }
   local fx, fy = Layout.wildAnchor(player)
