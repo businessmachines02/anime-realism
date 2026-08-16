@@ -1601,6 +1601,91 @@ function tests.cues_and_dedupe()
   eq(player.lastAnim, nil, "faint dialogue does not start the exit anim")
 end
 
+function tests.multi_hit_replays_each_strike()
+  truthy(Cues.isMultiHitMove("PIN_MISSILE"), "pin missile is multi-hit")
+  truthy(Cues.isMultiHitMove("DOUBLE_KICK"), "double kick is multi-hit")
+  truthy(Cues.isMultiHitMove({ id = "FURY_ATTACK", multiHit = { 2, 2, 3, 3, 4, 5 } }),
+    "engine multiHit list counts")
+  truthy(Cues.isMultiHitMove({ id = "TWINEEDLE", multiHit = 2 }),
+    "fixed two-hit record counts")
+  truthy(not Cues.isMultiHitMove("TACKLE"), "tackle is a single strike")
+  truthy(not Cues.isEngineMoveAnim("POOF_ANIM"), "send-out poof is not a move strike")
+  truthy(Cues.isEngineMoveAnim("COMET_PUNCH"), "comet punch anim is a move strike")
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 30,
+    _deps = { Projectiles = Projectiles },
+    _battle = { queue = {} },
+  }
+  session._battle.queue = {}
+
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "PIN_MISSILE", moveType = "BUG",
+  }), "first pin missile cue")
+  truthy(session._arSkipEngineStrike, "first swing skips the engine hit-1 anim")
+  truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "PIN_MISSILE" }),
+    "duplicate announce still dedupes")
+  truthy(not Cues.shouldSkipEvent(session, "player", "attack", {
+    moveId = "PIN_MISSILE", followUp = true,
+  }), "follow-up strikes are not deduped")
+
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "first strike punches")
+  local punchU = player.padU
+  player.lastAnim = nil
+  enemy.lastAnim = nil
+  Projectiles.clear(session)
+
+  session._battle.queue = {
+    { anim = "PIN_MISSILE", attackerIsPlayer = true },
+  }
+  eq(Cues.pumpFollowUpAnims(session, session._battle, Grid, nil), false,
+    "engine hit-1 anim does not replay the first punch")
+  eq(player.lastAnim, nil, "no extra attack on hit 1")
+  eq(session._battle.queue[1]._arFieldFollowUpDone, true, "hit-1 row is consumed")
+
+  session._battle.queue = {
+    { anim = "PIN_MISSILE", attackerIsPlayer = true },
+  }
+  session._now = 30.5
+  truthy(Cues.pumpFollowUpAnims(session, session._battle, Grid, nil),
+    "engine hit-2 anim replays the strike")
+  eq(player.lastAnim, "attack", "follow-up plays another attack")
+  eq(enemy.lastAnim, "hit", "follow-up shows the foe getting hit")
+  eq(player.padU, punchU, "follow-up does not close the gap again")
+  eq(#(session.projectiles or {}) > 0, true, "follow-up spawns contact FX")
+
+  session._battle.queue = {
+    { anim = "PIN_MISSILE", attackerIsPlayer = true },
+  }
+  session._now = 30.9
+  player._returnAt = session._now
+  player._withdrawAfterStrike = true
+  Cues.tickReturns(session, Grid)
+  eq(player._withdrawAfterStrike, true, "withdraw waits until the combo ends")
+  truthy(player._returnAt > session._now, "return is deferred for remaining hits")
+end
+
 function tests.faint_follows_hp_bar_not_dialogue()
   local grid = sampleGrid()
   local pHome = grid.home.player

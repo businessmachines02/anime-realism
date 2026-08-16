@@ -9,6 +9,9 @@
 -- damage waits for that same arrival beat (gait from Speed, Attack boost, cap).
 -- Cue dedupe prevents double-steps when multiple battle
 -- events fire for the same move beat.
+-- Multi-hit physicals (Pin Missile, Double Kick, Fury Attack, …) keep
+-- the first FIELD swing, then replay contact/cast FX on each extra
+-- engine anim row so landed hits stay readable.
 
 local Cues = {}
 
@@ -17,6 +20,54 @@ Cues.VANISH_MOVES = {
   DIG = "dig",
   FLY = "fly",
 }
+
+-- Named Gen1 (and later) multi-strike moves. Engine `move.multiHit`
+-- wins when the record is present; this table covers anim-row ids.
+Cues.MULTI_HIT_MOVES = {
+  DOUBLE_KICK = true,
+  TWINEEDLE = true,
+  PIN_MISSILE = true,
+  COMET_PUNCH = true,
+  FURY_ATTACK = true,
+  FURY_SWIPES = true,
+  SPIKE_CANNON = true,
+  BARRAGE = true,
+  DOUBLE_SLAP = true,
+  DOUBLESLAP = true,
+  BONEMERANG = true,
+  ICICLE_SPEAR = true,
+  BULLET_SEED = true,
+  ARM_THRUST = true,
+  BONE_RUSH = true,
+  ROCK_BLAST = true,
+}
+
+function Cues.isMultiHitMove(moveOrId)
+  if type(moveOrId) == "table" then
+    local mh = moveOrId.multiHit
+    if type(mh) == "number" then
+      return mh > 1
+    end
+    if type(mh) == "table" and #mh > 0 then
+      return true
+    end
+    return Cues.isMultiHitMove(moveOrId.id)
+  end
+  local id = tostring(moveOrId or ""):upper():gsub("%s+", "_")
+  return Cues.MULTI_HIT_MOVES[id] == true
+end
+
+-- Engine specials use a *_ANIM id; move strikes use the move id.
+function Cues.isEngineMoveAnim(anim)
+  if not anim then
+    return false
+  end
+  local id = tostring(anim):upper()
+  if id == "" or id:find("_ANIM$", 1) then
+    return false
+  end
+  return true
+end
 
 local function now(session)
   if session and session._now ~= nil then
@@ -156,11 +207,11 @@ function Cues.closeGapSpeed(ent, battle, side)
   end
   local speedU = math.max(0, math.min(1, spe / 120))
   local atkU = math.max(0, math.min(1, (atk - 40) / 100))
-  local gait = 22 + 48 * speedU
+  local gait = 26 + 54 * speedU   -- Raise base gait & speed scaling for faster minimums
   local boost = 1 + 0.4 * atkU
   local px = gait * boost
-  if px < 22 then
-    px = 22
+  if px < 28 then                  -- Raise the minimum a bit from 22 to 28
+    px = 28
   elseif px > 86 then
     px = 86
   end
@@ -405,6 +456,14 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       mid = nil
     end
     session._lastCueMoveId = mid
+    session._lastCueMoveType = opts.moveType
+    if kind == "attack" and not opts.followUp and Cues.isMultiHitMove(mid) then
+      -- First FIELD swing already presented; the engine's hit-1 anim
+      -- row must not replay it. Hits 2+ reuse that skip flag.
+      session._arSkipEngineStrike = true
+      session._multiHitMoveId = mid
+      session._multiHitSide = side
+    end
   end
   local foe = foeOf(session, side)
   local g = session.grid
@@ -559,6 +618,25 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
         ent:play("cast")
       end
     else
+      -- Extra multi-hit swings stay in melee: replay contact + attack, no walk.
+      if opts.followUp then
+        if Projectiles and type(Projectiles.contact) == "function" then
+          Projectiles.contact(session, side, {
+            moveType = opts.moveType,
+            moveId = opts.moveId,
+          })
+        end
+        if Audio and type(Audio.playMove) == "function" then
+          pcall(Audio.playMove, battle or session._battle, opts.moveId,
+            side == "player")
+        end
+        if type(ent.play) == "function" then
+          ent:play(ent._attackJump and "jump" or "attack")
+        end
+        ent._returnAt = now(session) + 0.42
+        ent._withdrawAfterStrike = true
+        return true
+      end
       -- Physical: mon charges (optional close-the-gap, else one step / jump).
       -- Jump only when cover blocks the path — already-adjacent mons attack in place.
       local obstructed = type(Grid.pathObstructed) == "function"
@@ -760,8 +838,10 @@ function Cues.shouldSkipEvent(session, side, kind, opts)
     return false
   end
   local last = session._lastCueKind
-  -- Again! / Dig-Fly release must be allowed to strike after the first swing.
-  if opts.releaseStrike or opts.again or opts.isCalled then
+  -- Again! / Dig-Fly release / extra multi-hit strikes must be allowed
+  -- after the first swing.
+  if opts.releaseStrike or opts.again or opts.isCalled
+      or opts.followUp or opts.multiHit then
     return false
   end
   -- Announce toast (~1.5s) + REACT menu outlive the short beat window.
@@ -931,6 +1011,119 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   return applied or overlapped or called
 end
 
+local function followUpAnimRow(row, moveId, wantPlayer)
+  if not row or not row.anim then
+    return false
+  end
+  if tostring(row.anim):upper() ~= moveId then
+    return false
+  end
+  if not Cues.isEngineMoveAnim(row.anim) then
+    return false
+  end
+  return (row.attackerIsPlayer == true) == wantPlayer
+end
+
+--- True while extra multi-hit engine anims (or the live clip) still belong
+--- to this side — hold withdraw so the combo stays in melee.
+function Cues.pendingMultiHitFollowUp(session, battle, side)
+  if not (session and battle and side) then
+    return false
+  end
+  local moveId = session._multiHitMoveId
+  if not moveId or session._multiHitSide ~= side then
+    return false
+  end
+  if not Cues.isMultiHitMove(moveId) then
+    return false
+  end
+  local wantPlayer = side == "player"
+  if battle.animPlaying and Cues.isEngineMoveAnim(battle.animName)
+      and tostring(battle.animName):upper() == moveId
+      and (battle.animAttackerIsPlayer == true) == wantPlayer then
+    return true
+  end
+  local q = battle.queue
+  if type(q) ~= "table" then
+    return false
+  end
+  for i = 1, #q do
+    local row = q[i]
+    if followUpAnimRow(row, moveId, wantPlayer) and not row._arFieldFollowUpDone then
+      return true
+    end
+  end
+  return false
+end
+
+--- Replay FIELD contact/cast on each extra engine anim row (issue #16).
+-- Hit 1 is the announce / close-the-gap punch; later `{ anim = move.id }`
+-- rows are the remaining strikes. Engine queue already waits on each
+-- anim + HP drain, so we only have to paint the world FX on those beats.
+function Cues.pumpFollowUpAnims(session, battle, Grid, nudgeCamera)
+  if not (session and session.live and battle) then
+    return false
+  end
+  local moveId, isPlayer, item
+  local q1 = battle.queue and battle.queue[1]
+  if q1 and not q1._arFieldFollowUpDone and Cues.isEngineMoveAnim(q1.anim) then
+    moveId = tostring(q1.anim):upper()
+    isPlayer = q1.attackerIsPlayer == true
+    item = q1
+  elseif battle.animPlaying and Cues.isEngineMoveAnim(battle.animName) then
+    moveId = tostring(battle.animName):upper()
+    isPlayer = battle.animAttackerIsPlayer == true
+    local key = moveId .. ":" .. (isPlayer and "P" or "E")
+    if session._arFollowUpAnimKey == key then
+      return false
+    end
+  else
+    if not battle.animPlaying then
+      session._arFollowUpAnimKey = nil
+    end
+    return false
+  end
+
+  if not Cues.isMultiHitMove(moveId) then
+    return false
+  end
+  if session._lastCueMoveId ~= moveId then
+    return false
+  end
+  local side = isPlayer and "player" or "enemy"
+  if session._lastCueSide ~= side then
+    return false
+  end
+
+  if item then
+    item._arFieldFollowUpDone = true
+  end
+  session._arFollowUpAnimKey = moveId .. ":" .. (isPlayer and "P" or "E")
+
+  -- Engine hit-1 anim is the swing FIELD already presented.
+  if session._arSkipEngineStrike then
+    session._arSkipEngineStrike = nil
+    return false
+  end
+
+  local opts = {
+    category = session._lastAttackCategory,
+    moveId = moveId,
+    moveType = session._lastCueMoveType,
+    followUp = true,
+  }
+  Cues.apply(session, side, "attack", Grid, nudgeCamera, battle, opts)
+  local foeSide = (side == "player") and "enemy" or "player"
+  Cues.apply(session, foeSide, "hit", Grid, nudgeCamera, battle, {
+    category = opts.category,
+    moveId = moveId,
+    moveType = opts.moveType,
+    followUp = true,
+    push = false,
+  })
+  return true
+end
+
 local function flattenText(text)
   return tostring(text or ""):lower():gsub("\n", " "):gsub("%s+", " ")
 end
@@ -1084,17 +1277,21 @@ function Cues.tickReturns(session, Grid)
     if ent and ent._pendingCloseStrike then
       -- Still closing; do not walk home yet.
     elseif ent and ent._returnAt and t >= ent._returnAt then
-      ent._returnAt = nil
-      local foe = foeOf(session, side)
-      if ent._withdrawAfterStrike then
-        ent._withdrawAfterStrike = nil
-        if foe and type(Grid.withdrawFromFoe) == "function" then
-          Grid.withdrawFromFoe(session.grid, ent, foe)
-        end
+      if Cues.pendingMultiHitFollowUp(session, session._battle, side) then
+        ent._returnAt = t + 0.12
       else
-        Grid.returnHome(session.grid, ent)
+        ent._returnAt = nil
+        local foe = foeOf(session, side)
+        if ent._withdrawAfterStrike then
+          ent._withdrawAfterStrike = nil
+          if foe and type(Grid.withdrawFromFoe) == "function" then
+            Grid.withdrawFromFoe(session.grid, ent, foe)
+          end
+        else
+          Grid.returnHome(session.grid, ent)
+        end
+        restoreStepSpeed(ent)
       end
-      restoreStepSpeed(ent)
     end
     if ent and ent._releaseAt and t >= ent._releaseAt then
       ent._releaseAt = nil

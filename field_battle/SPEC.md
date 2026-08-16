@@ -242,6 +242,7 @@ replacement mon.
 | cover | nearest free prop-adjacent, else wall/corner, far on `u` | `cover` / dodge fallback |
 | brace | stay | `brace` |
 | attack (physical) | close to adjacent if **CLOSE THE GAP** and farther than 1 tile, else `u` toward foe 1, then home | `attack` / `jump` |
+| attack (multi-hit follow-up) | stay in melee; no second close-the-gap | replay contact/cast + `attack` / `hit` per extra engine anim row |
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
 | hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst; **weak** hits still play a `light_hit` spark on the target | `hit` (heavy knock when powerful) |
@@ -269,7 +270,11 @@ replacement mon.
   wait until the sprite's walk feet (`basePx`) are actually within one tile
   of the foe. After the strike the attacker stays near the foe: a slight
   withdraw to a free cell **one or two tiles** away, then idle roam in that
-  ring — they do not walk back to the opening home. Gait follows Speed;
+  ring — they do not walk back to the opening home. **Multi-hit physicals**
+  (Pin Missile, Double Kick, Fury Attack, …) hold that withdraw until the
+  last extra engine anim row; each later strike replays the move's contact
+  or projectile FX plus a hit flinch so landed hits stay countable. Gait
+  follows Speed;
   Attack adds a boost; dash speed is capped. Cover on the path still plays
   `jump` on arrival. Off restores the old one-cell lunge and return-home.
 - **Powerful hits** (`Projectiles.isPowerfulMove`: named high-BP Gen1 roster or
