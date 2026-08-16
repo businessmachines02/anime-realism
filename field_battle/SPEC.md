@@ -235,7 +235,7 @@ replacement mon.
 | dodge | `±v` | `dodge` |
 | cover | nearest free prop-adjacent, else wall/corner, far on `u` | `cover` / dodge fallback |
 | brace | stay | `brace` |
-| attack (physical) | `u` toward foe 1, then home | `attack` |
+| attack (physical) | close to adjacent if **CLOSE THE GAP** and farther than 1 tile, else `u` toward foe 1, then home | `attack` / `jump` |
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
 | hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst; **weak** hits still play a `light_hit` spark on the target | `hit` (heavy knock when powerful) |
@@ -254,6 +254,10 @@ replacement mon.
   wall-hugging / corner cell (`Grid.seekWallCover`). Water-types may wander onto
   adjacent water and switch to their swim sheet while there.
 - Trainers on fixed edge pad cells; not tracked for combat steps.
+- **Close the gap** (option `close_the_gap`, default on): a physical attack
+  more than one pad tile from the foe occupies a free adjacent cell, then
+  punches. Gait follows Speed; Attack adds a boost; dash speed is capped.
+  Cover on the path still plays `jump`. Off restores the old one-cell lunge.
 - **Powerful hits** (`Projectiles.isPowerfulMove`: named high-BP Gen1 roster or
   move power ≥ 100): always push the target up to two pad cells away from the
   attacker (physical or special). A typed `power_hit` burst plays on the mon; if

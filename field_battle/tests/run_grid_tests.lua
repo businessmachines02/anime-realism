@@ -925,6 +925,16 @@ function tests.occupancy_and_movement()
   eq(p.padU, homeU, "returned u")
   eq(p.padV, homeV, "returned v")
 
+  -- Close-the-gap: from farther than one tile, occupy a cell adjacent to the foe.
+  -- Foe is already one cell past home from the attack-step setup (distance 2).
+  truthy(Grid.padDistance(grid, p, e) > 1, "foe is more than a tile away")
+  truthy(Grid.closeGap(grid, p, e), "close gap toward the foe")
+  eq(Grid.padDistance(grid, p, e), 1, "lands adjacent, not on the foe")
+  truthy(Grid.returnHome(grid, p), "return after close-gap")
+  eq(p.padU, homeU, "close-gap return restores home")
+  truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "restore adjacent homes")
+  truthy(not Grid.closeGap(grid, p, e), "already-adjacent close-gap is a no-op")
+
   Grid.clear(grid)
   eq(next(grid.occ), nil, "clear occupancy")
 end
@@ -1047,9 +1057,74 @@ function tests.physical_jumps_cover()
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
     { category = "physical", moveType = "NORMAL" }), "physical over cover")
   eq(player.lastAnim, "jump", "attacker jumps when path is blocked")
+  eq(player.padU, 6, "close-the-gap lands adjacent to the foe")
+  eq(#(session.projectiles or {}), 0, "contact waits until the close lands")
+  session._now = player._closeStrikeAt or (session._now + 1)
+  Cues.tickReturns(session, Grid)
   local fx = session.projectiles and session.projectiles[1]
   truthy(fx and fx.style == "contact", "physical keeps contact-only FX")
   eq(fx.sx, fx.ex, "no traveling physical projectile")
+end
+
+function tests.close_the_gap_physicals()
+  local snorlax = Cues.closeGapSpeed({ _closeGapStats = { speed = 30, attack = 110 } })
+  local dragonite = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 134 } })
+  local weakSlow = Cues.closeGapSpeed({ _closeGapStats = { speed = 30, attack = 40 } })
+  local magikarp = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 10 } })
+  local electrode = Cues.closeGapSpeed({ _closeGapStats = { speed = 140, attack = 50 } })
+  local rocket = Cues.closeGapSpeed({ _closeGapStats = { speed = 250, attack = 250 } })
+  truthy(snorlax < dragonite, "snorlax closes slower than dragonite")
+  truthy(snorlax > weakSlow, "snorlax's attack boosts a slow gait")
+  truthy(electrode > magikarp, "higher speed closes faster")
+  truthy(rocket <= 86, "dash speed is capped")
+  truthy(snorlax >= 22, "even slow mons still close")
+
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 1, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 7, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = false,
+    _now = 5,
+    _deps = { Projectiles = Projectiles },
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "physical with gap off")
+  eq(player.padU, 2, "toggle off keeps the one-cell lunge")
+  eq(player.lastAnim, "attack", "short lunge punches immediately")
+
+  Grid.setPad(grid, player, 1, 0)
+  player._attackStepped = nil
+  player._returnAt = nil
+  player._closeStrikeAt = nil
+  player.lastAnim = nil
+  Projectiles.clear(session)
+  session.closeTheGap = true
+  session._now = 8
+  session._lastCueAt = nil
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
+    { category = "physical", moveType = "NORMAL" }), "physical with gap on")
+  eq(player.padU, 6, "toggle on occupies the adjacent approach cell")
+  eq(player.lastAnim, nil, "walk close delays the punch")
+  truthy(player._closeStrikeAt, "strike waits for the close")
+  session._now = player._closeStrikeAt
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "punch plays once the gap is closed")
 end
 
 function tests.special_trajectories_track_mons()

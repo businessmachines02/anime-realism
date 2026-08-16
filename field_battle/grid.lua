@@ -409,6 +409,50 @@ function Grid.attackStep(g, ent, foeEnt)
   return Grid.step(g, ent, du, 0)
 end
 
+--- Chebyshev pad distance between two entities.
+function Grid.padDistance(g, a, b)
+  if not (a and b) then
+    return 0
+  end
+  local u, v = padOf(g, a)
+  local fu, fv = padOf(g, b)
+  return math.max(math.abs(fu - u), math.abs(fv - v))
+end
+
+--- Occupy a free cell adjacent to the foe when more than one tile away.
+--- Pixels lerp via syncPx; occupancy jumps to the approach cell.
+function Grid.closeGap(g, ent, foeEnt)
+  if not (g and ent and foeEnt) then
+    return false
+  end
+  local u, v = padOf(g, ent)
+  local fu, fv = padOf(g, foeEnt)
+  if math.max(math.abs(fu - u), math.abs(fv - v)) <= 1 then
+    return false
+  end
+  local bestU, bestV, bestScore
+  for du = -1, 1 do
+    for dv = -1, 1 do
+      if not (du == 0 and dv == 0) then
+        local nu, nv = fu + du, fv + dv
+        if Grid.isFree(g, nu, nv, ent.id, ent) then
+          local away = math.max(math.abs(nu - u), math.abs(nv - v))
+          local axis = (nv == v or nv == fv) and 0 or 1
+          local score = away * 10 + axis
+          if not bestScore or score < bestScore then
+            bestU, bestV, bestScore = nu, nv, score
+          end
+        end
+      end
+    end
+  end
+  if bestU == nil then
+    return false
+  end
+  ent._returnU, ent._returnV = u, v
+  return Grid.setPad(g, ent, bestU, bestV)
+end
+
 function Grid.returnHome(g, ent)
   if not (g and ent) then
     return false

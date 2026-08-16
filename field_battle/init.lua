@@ -131,7 +131,7 @@ return function(env)
     UI = UI,
     Callouts = Callouts,
     Intercept = Intercept,
-    OPTION_KEYS = { "battle_stage", "field_sprites" },
+    OPTION_KEYS = { "battle_stage", "field_sprites", "close_the_gap" },
   }
 
   function FBV.session(battle)

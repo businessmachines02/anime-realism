@@ -894,7 +894,11 @@ function Lifecycle.begin(battle, mod, deps)
         coverKind = layout and layout.coverKind or nil,
         coverScene = layout and layout.coverScene or nil,
         ReactiveDefense = RD,
+        closeTheGap = true,
     }
+    if mod and mod.options and type(mod.options.get) == "function" then
+        session.closeTheGap = mod.options:get("close_the_gap") ~= false
+    end
     if RD then
         battle._arReactiveDefense = RD
     end

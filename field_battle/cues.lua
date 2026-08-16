@@ -5,6 +5,8 @@
 -- back one cell. Self-hits (confusion / recoil / crash) stumble in place.
 -- Two-turn vanish moves (Dig / Fly) burrow or soar out of sight on the
 -- charge turn and emerge on the release strike.
+-- With CLOSE THE GAP, physicals more than a tile away close to adjacent
+-- before the punch (gait from Speed, boost from Attack, capped).
 -- Cue dedupe prevents double-steps when multiple battle
 -- events fire for the same move beat.
 
@@ -89,6 +91,76 @@ local function isChargeTurn(ent, moveId)
     return true, battlerChargingVanish(battler) or kind
   end
   return false, kind
+end
+
+function Cues.closeTheGapEnabled(session, opts)
+  if opts and opts.closeTheGap ~= nil then
+    return opts.closeTheGap == true
+  end
+  local mod = session and session._mod
+  if mod and mod.options and type(mod.options.get) == "function" then
+    return mod.options:get("close_the_gap") ~= false
+  end
+  if session and session.closeTheGap ~= nil then
+    return session.closeTheGap == true
+  end
+  return true
+end
+
+--- Dash px/s: slower base Speed walks slower; Attack adds a boost; hard cap.
+function Cues.closeGapSpeed(ent, battle, side)
+  local spe, atk = 70, 70
+  local stats = ent and ent._closeGapStats
+  if type(stats) ~= "table" then
+    local battler = nil
+    if battle then
+      battler = (side == "player") and battle.player or battle.enemy
+    end
+    if not battler and ent then
+      battler = ent._battleBattler
+    end
+    local mon = battler and battler.mon
+    local def = mon and (mon.pokemon or mon.def)
+    if type(def) == "table" and type(def.baseStats) == "table" then
+      stats = def.baseStats
+    elseif battler and type(battler.stats) == "table" then
+      stats = battler.stats
+    elseif mon and type(mon.stats) == "table" then
+      stats = mon.stats
+    end
+  end
+  if type(stats) == "table" then
+    spe = tonumber(stats.speed or stats.spe) or spe
+    atk = tonumber(stats.attack or stats.atk) or atk
+  end
+  -- Battle stats are often ~2× base; compress so gait still reads as species.
+  if spe > 140 or atk > 160 then
+    spe = spe * 0.45
+    atk = atk * 0.45
+  end
+  local speedU = math.max(0, math.min(1, spe / 120))
+  local atkU = math.max(0, math.min(1, (atk - 40) / 100))
+  local gait = 22 + 48 * speedU
+  local boost = 1 + 0.4 * atkU
+  local px = gait * boost
+  if px < 22 then
+    px = 22
+  elseif px > 86 then
+    px = 86
+  end
+  return px
+end
+
+local function restoreStepSpeed(ent)
+  if not ent then
+    return
+  end
+  if ent._savedStepSpeed ~= nil then
+    ent.stepSpeed = ent._savedStepSpeed
+    ent._savedStepSpeed = nil
+  else
+    ent.stepSpeed = nil
+  end
 end
 
 --- Apply a cue kind to a side. opts.category = "physical"|"special"
@@ -270,26 +342,78 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
         ent:play("cast")
       end
     else
-      -- Physical: mon charges (step / jump over cover); impact FX at the foe only.
-      -- Jump only when cover blocks the path — already-adjacent mons just attack in place.
+      -- Physical: mon charges (optional close-the-gap, else one step / jump).
+      -- Jump only when cover blocks the path — already-adjacent mons attack in place.
       local obstructed = type(Grid.pathObstructed) == "function"
           and Grid.pathObstructed(g, ent, foe)
       local jump = obstructed == true
       ent._attackJump = jump and true or nil
-      ent._attackStepped = Grid.attackStep(g, ent, foe) == true
-      if Projectiles and type(Projectiles.contact) == "function" then
-        Projectiles.contact(session, side, {
-          moveType = opts.moveType,
-          moveId = opts.moveId,
-        })
+      local fromU, fromV = ent.padU, ent.padV
+      local stepped = false
+      if Cues.closeTheGapEnabled(session, opts)
+          and type(Grid.closeGap) == "function" then
+        stepped = Grid.closeGap(g, ent, foe) == true
       end
-      if ent._attackStepped then
-        ent._returnAt = now(session) + (jump and 0.56 or 0.48)
+      if not stepped then
+        stepped = Grid.attackStep(g, ent, foe) == true
+      end
+      ent._attackStepped = stepped
+      local steps = 0
+      if stepped and fromU ~= nil then
+        steps = math.max(
+          math.abs((ent.padU or fromU) - fromU),
+          math.abs((ent.padV or fromV) - fromV))
+      end
+      local delayStrike = stepped and steps > 1
+      if stepped then
+        local speed = Cues.closeGapSpeed(ent, battle or session._battle, side)
+        ent._savedStepSpeed = ent.stepSpeed
+        ent.stepSpeed = speed
+        local distPx = 16 * math.max(1, steps)
+        if type(ent.basePx) == "number" and type(ent.targetPx) == "number" then
+          local dx = ent.targetPx - ent.basePx
+          local dy = (ent.targetPy or 0) - (ent.basePy or 0)
+          distPx = math.max(distPx, math.sqrt(dx * dx + dy * dy))
+        end
+        local travel = distPx / math.max(12, speed)
+        if travel > 1 then
+          travel = 1
+        end
+        local punch = jump and 0.56 or 0.48
+        if delayStrike then
+          ent._pendingCloseStrike = {
+            moveType = opts.moveType,
+            moveId = opts.moveId,
+            jump = jump,
+          }
+          ent._closeStrikeAt = now(session) + travel
+          ent._returnAt = now(session) + travel + punch
+          if jump and type(ent.play) == "function" then
+            ent:play("jump")
+          end
+        else
+          if Projectiles and type(Projectiles.contact) == "function" then
+            Projectiles.contact(session, side, {
+              moveType = opts.moveType,
+              moveId = opts.moveId,
+            })
+          end
+          ent._returnAt = now(session) + punch
+          if type(ent.play) == "function" then
+            ent:play(jump and "jump" or "attack")
+          end
+        end
       else
+        if Projectiles and type(Projectiles.contact) == "function" then
+          Projectiles.contact(session, side, {
+            moveType = opts.moveType,
+            moveId = opts.moveId,
+          })
+        end
         ent._returnAt = nil
-      end
-      if type(ent.play) == "function" then
-        ent:play(jump and "jump" or "attack")
+        if type(ent.play) == "function" then
+          ent:play(jump and "jump" or "attack")
+        end
       end
     end
     return true
@@ -740,9 +864,29 @@ function Cues.tickReturns(session, Grid)
   local t = now(session)
   for _, side in ipairs({ "player", "enemy" }) do
     local ent = (side == "player") and session.playerMon or session.enemyMon
+    if ent and ent._closeStrikeAt and t >= ent._closeStrikeAt then
+      ent._closeStrikeAt = nil
+      local pending = ent._pendingCloseStrike
+      ent._pendingCloseStrike = nil
+      local Projectiles = session._deps and session._deps.Projectiles
+      if pending and Projectiles and type(Projectiles.contact) == "function" then
+        Projectiles.contact(session, side, pending)
+      end
+      if type(ent.play) == "function" then
+        local jump = (pending and pending.jump) or ent._attackJump
+        if jump then
+          if ent.anim ~= "jump" then
+            ent:play("jump")
+          end
+        else
+          ent:play("attack")
+        end
+      end
+    end
     if ent and ent._returnAt and t >= ent._returnAt then
       ent._returnAt = nil
       Grid.returnHome(session.grid, ent)
+      restoreStepSpeed(ent)
     end
     if ent and ent._releaseAt and t >= ent._releaseAt then
       ent._releaseAt = nil

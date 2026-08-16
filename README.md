@@ -190,6 +190,7 @@ remain on their normal presentation path.
 | **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
+| **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
 
