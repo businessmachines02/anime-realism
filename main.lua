@@ -8432,8 +8432,18 @@ return function(mod)
         end
 
         -- True while chat bubbles own battle dialogue (hide classic / Gen3 text box).
+        hud.stackedPromptActive = function(battle)
+            local Compat = FieldBattleViewer and FieldBattleViewer.Compat
+            return Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
+                and Compat.fieldAllowsStackedBottomUI(battle)
+        end
         hud.bubblesOwnDialogue = function(battle)
             if not opt("speech_bubbles") or type(battle) ~= "table" then
+                return false
+            end
+            -- Learn-move / YES-NO overlays paint through the classic box path
+            -- (UIVisibility asks the enclosing battle). Don't hide them.
+            if hud.stackedPromptActive(battle) then
                 return false
             end
             if battle.phase ~= "messages" then
@@ -8470,15 +8480,14 @@ return function(mod)
         end
 
         mod.hooks:wrap("battle.bottom_ui_visible", function(next, who)
+            -- Keep the classic dialogue slab hidden on FIELD / bubble mode, but
+            -- allow stacked learn-move / YES-NO TextBoxes to paint (UIVisibility
+            -- asks the enclosing battle before drawing those overlays). AUTO
+            -- used to miss this exception, so the prompt text was invisible.
+            if hud.stackedPromptActive(who) then
+                return true
+            end
             if hud.fieldCompactActive(who) then
-                -- Keep the classic dialogue slab hidden on FIELD, but allow
-                -- stacked learn-move / YES-NO TextBoxes to paint (UIVisibility
-                -- asks the enclosing battle before drawing those overlays).
-                local Compat = FieldBattleViewer and FieldBattleViewer.Compat
-                if Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
-                    and Compat.fieldAllowsStackedBottomUI(who) then
-                    return true
-                end
                 return false
             end
             -- Hide the classic text box for all battle dialogue; bubbles carry it.
@@ -8760,8 +8769,9 @@ return function(mod)
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
             next(battle)
+            local stackedPrompt = hud.stackedPromptActive(battle)
             if hud.fieldCompactActive(battle) then
-                local side = hud.bubbleSideActive(battle)
+                local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
                 battle._arFieldBubbleDialogue = side and true or nil
                 battle._arNarratorTop = nil
                 if FieldBattleViewer and type(FieldBattleViewer.drawUI) == "function" then
@@ -8771,7 +8781,9 @@ return function(mod)
                 if side then
                     hud.drawSpeechBubble(battle, side)
                 end
-                if FieldBattleViewer and type(FieldBattleViewer.drawCallouts) == "function" then
+                if not stackedPrompt
+                    and FieldBattleViewer
+                    and type(FieldBattleViewer.drawCallouts) == "function" then
                     FieldBattleViewer.drawCallouts(battle)
                 end
                 return
@@ -8788,7 +8800,7 @@ return function(mod)
             if type(dev.drawFocusChip) == "function" then
                 dev.drawFocusChip(battle)
             end
-            local side = hud.bubbleSideActive(battle)
+            local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
             if side then
                 hud.drawSpeechBubble(battle, side)
             end
@@ -9342,7 +9354,11 @@ return function(mod)
             local origTextArea = BattleState.drawTextArea
             if type(origTextArea) == "function" and not hud.patched[origTextArea] then
                 local function wrappedTextArea(self, ...)
-                    if hud.fieldCompactActive(self) or hud.bubblesOwnDialogue(self) then
+                    -- Stacked learn-move / YES-NO states draw themselves.
+                    -- Keep BattleState's slab invisible so leftover bubbles
+                    -- do not paint under the prompt.
+                    if hud.fieldCompactActive(self) or hud.bubblesOwnDialogue(self)
+                        or hud.stackedPromptActive(self) then
                         return hud.runDrawInvisible(origTextArea, self, ...)
                     end
                     return origTextArea(self, ...)

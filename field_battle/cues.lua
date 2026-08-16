@@ -69,6 +69,22 @@ function Cues.vanishKind(moveId)
   return Cues.VANISH_MOVES[tostring(moveId):upper()]
 end
 
+-- Walk-in / close-the-gap: contact FX and physicals. Travel FX and
+-- non-contact specials cast in place. Bite / Fire Punch stay melee even
+-- when Damage.isSpecial(type) is true.
+function Cues.isMeleeAttack(opts, Projectiles)
+  opts = opts or {}
+  if Projectiles and type(Projectiles.isTravelFx) == "function"
+      and Projectiles.isTravelFx(opts) then
+    return false
+  end
+  if Projectiles and type(Projectiles.isContactFx) == "function"
+      and Projectiles.isContactFx(opts) then
+    return true
+  end
+  return normCategory(opts.category) ~= "special"
+end
+
 local function battlerChargingVanish(battler)
   if not battler then
     return nil
@@ -211,7 +227,32 @@ function Cues.inMeleeReach(ent, foe)
   return false
 end
 
-local function fireCloseStrike(session, side, ent)
+--- damage_dealt often fires while CLOSE THE GAP is still walking (applyDamage
+--- reports the hit so the engine can continue). Hold the FIELD shove until
+--- the punch, or Body Slam etc. never push.
+function Cues.holdCloseHit(session, side, opts)
+  if not (session and side) then
+    return false
+  end
+  session._pendingCloseHit = { side = side, opts = type(opts) == "table" and opts or {} }
+  return true
+end
+
+function Cues.flushCloseHit(session, Grid)
+  local hit = session and session._pendingCloseHit
+  if not hit then
+    return false
+  end
+  session._pendingCloseHit = nil
+  Grid = Grid or (session._deps and session._deps.Grid)
+  if not (hit.side and Grid) then
+    return false
+  end
+  return Cues.apply(session, hit.side, "hit", Grid, nil, session._battle, hit.opts or {})
+      and true or false
+end
+
+local function fireCloseStrike(session, side, ent, Grid)
   if not ent then
     return
   end
@@ -236,6 +277,9 @@ local function fireCloseStrike(session, side, ent)
   end
   local punch = jump and 0.56 or 0.48
   ent._returnAt = now(session) + punch
+  -- Shove now that occupancy is adjacent. damage_dealt during the walk
+  -- was stashed; a replay after this is skipped by shouldSkipEvent.
+  Cues.flushCloseHit(session, Grid)
 end
 
 --- True while CLOSE THE GAP still owns the physical beat.
@@ -280,6 +324,9 @@ function Cues.flushHeldHit(session, battle)
   end
   battle._arCloseGapDamage = nil
   battle._arCloseGapApply = nil
+  -- Punch already applied this when Grid was available. If not, shove
+  -- before HP replay so a second damage_dealt cannot double-push.
+  Cues.flushCloseHit(session, session._deps and session._deps.Grid)
   battle._arCloseGapResuming = true
   local replayedRun = held and held.ctx and true or false
   if replayedRun then
@@ -488,11 +535,10 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     -- Special: hold cell; still play an in-place cast anim.
     local Projectiles = session._deps and session._deps.Projectiles
     local Audio = session._deps and session._deps.Audio
-    -- Travel FX (beams, streams, Night Shade shadow, …) fly even when the
-    -- Gen1 type split marks the move physical — don't contact-lunge instead.
-    local travel = Projectiles and type(Projectiles.isTravelFx) == "function"
-        and Projectiles.isTravelFx(opts)
-    if category == "special" or travel then
+    -- Travel FX (beams, Night Shade, …) fly even when the Gen1 type split
+    -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
+    -- when that split marks them special.
+    if not Cues.isMeleeAttack(opts, Projectiles) then
       if Audio and type(Audio.playMove) == "function" then
         pcall(Audio.playMove, battle or session._battle, opts.moveId,
           side == "player")
@@ -540,6 +586,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
         ent._pendingCloseStrike = {
           moveType = opts.moveType,
           moveId = opts.moveId,
+          movePower = opts.movePower,
           jump = jump,
         }
         -- Same present tick still runs tickReturns after pumpCurrent / react.
@@ -1028,10 +1075,10 @@ function Cues.tickReturns(session, Grid)
         -- Cue just armed this tick (HUD confirm / announce). Walk first.
         ent._closeStrikeWait = nil
       elseif not Cues.stillWalkingToPad(ent) and Cues.inMeleeReach(ent, foe) then
-        fireCloseStrike(session, side, ent)
+        fireCloseStrike(session, side, ent, Grid)
       elseif ent._closeStrikeArmedAt
           and (t - ent._closeStrikeArmedAt) > 2.8 then
-        fireCloseStrike(session, side, ent)
+        fireCloseStrike(session, side, ent, Grid)
       end
     end
     if ent and ent._pendingCloseStrike then

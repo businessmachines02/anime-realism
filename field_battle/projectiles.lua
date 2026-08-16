@@ -202,10 +202,10 @@ local MOVE_FX = {
   CRABHAMMER = { style = "contact", glitz = "impact" },
   WATERFALL = { style = "stream", glitz = "bubble" },
   SEISMIC_TOSS = { style = "contact", glitz = "impact" },
-  FIRE_PUNCH = { style = "contact", glitz = "flame" },
-  ICE_PUNCH = { style = "contact", glitz = "frost" },
-  THUNDERPUNCH = { style = "contact", glitz = "bolt" },
-  THUNDER_PUNCH = { style = "contact", glitz = "bolt" },
+  FIRE_PUNCH = { style = "contact", glitz = "punch" },
+  ICE_PUNCH = { style = "contact", glitz = "punch" },
+  THUNDERPUNCH = { style = "contact", glitz = "punch" },
+  THUNDER_PUNCH = { style = "contact", glitz = "punch" },
   DIZZY_PUNCH = { style = "contact", glitz = "punch" },
   HYPER_FANG = { style = "contact", glitz = "bite" },
   THRASH = { style = "contact", glitz = "impact" },
@@ -733,6 +733,14 @@ function Projectiles.isTravelFx(opts)
     return false
   end
   return TRAVEL_STYLES[named.style] == true
+end
+
+-- Jaws / punches / slams close the gap even when the Gen1 type split marks
+-- the move special (Bite is often Dark; Fire Punch is Fire).
+function Projectiles.isContactFx(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  local named = MOVE_FX[moveId]
+  return named and named.style == "contact" or false
 end
 
 function Projectiles.isPowerfulMove(opts)

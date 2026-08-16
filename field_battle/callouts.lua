@@ -1,19 +1,20 @@
 -- Field battle — standalone foe dialogue box (UI overlay).
 --
--- Move orders and react shouts live on their own queue so they linger after
--- the white narrator box advances. Banter uses the same box. Engine prompts
--- ("about to use" / switch) stay in the white box only.
+-- One live shout at a time. It can outlast the white narrator box for the
+-- rest of that beat, then it is gone — not replayed, not stacked behind the
+-- next order. Engine prompts (learn-move / "about to use" / switch) and the
+-- command menu dismiss it so a used-move callout cannot linger into your turn.
 
 local Callouts = {}
 
-Callouts.HOLD = 3.6
-Callouts.HOLD_ORDER = 3.6
-Callouts.HOLD_REACT = 3.6
-Callouts.HOLD_BANTER = 2.4
-Callouts.FADE = 0.35
+Callouts.HOLD = 1.6
+Callouts.HOLD_ORDER = 1.6
+Callouts.HOLD_REACT = 1.6
+Callouts.HOLD_BANTER = 1.6
+Callouts.FADE = 0.25
 Callouts.POP = 0.14
-Callouts.MAX_QUEUE = 4
-Callouts.MAX_PER_SIDE = 4
+Callouts.MAX_QUEUE = 1
+Callouts.MAX_PER_SIDE = 1
 
 Callouts.BOX_X = 4
 Callouts.BOX_W = 152
@@ -90,7 +91,44 @@ function Callouts.isEnginePrompt(text)
   if flat:find("about to use", 1, true) or flat:find("change pok", 1, true) then
     return true
   end
+  -- Level-up move learning (TextBox / YES-NO) must not lose the classic box
+  -- to a lingering trainer callout (issues #45 / #36).
+  local learn = {
+    "trying to learn", "can't learn more", "delete an older",
+    "make room for", "abandon learning", "did not learn",
+  }
+  for i = 1, #learn do
+    if flat:find(learn[i], 1, true) then
+      return true
+    end
+  end
+  if flat:find(" forgot ", 1, true) then
+    return true
+  end
   return flat:find("will ", 1, true) ~= nil and flat:find("change", 1, true) ~= nil
+end
+
+-- True when the live shout no longer belongs on screen: engine prompt,
+-- stacked learn-move / YES-NO, or the player has the command menu again.
+function Callouts.shouldHold(battle)
+  if not battle then
+    return false
+  end
+  local phase = battle.phase
+  if type(phase) == "string" and phase ~= "" and phase ~= "messages" then
+    return true
+  end
+  local live = (battle.current and battle.current.text)
+    or battle._arLastBubbleText
+  if Callouts.isEnginePrompt(live) then
+    return true
+  end
+  local stack = battle.game and battle.game.stack
+  local top = stack and type(stack.top) == "function" and stack:top() or nil
+  if not top or top == battle then
+    return false
+  end
+  return top.isOpaque ~= true
 end
 
 function Callouts.ownsText(session, text)
@@ -174,37 +212,25 @@ function Callouts.push(session, side, text, opts)
     session._trainerCallouts.foe = q
   end
   local n = Callouts.norm(text)
-  for i = 1, #q do
-    if Callouts.norm(q[i].text) == n then
-      if i == 1 then
-        q[i].age = 0
-      end
-      if opts.threat == true then
-        q[i].threat = true
-      end
-      if opts.urgent == true and i > 1 then
-        local item = table.remove(q, i)
-        item.age = 0
-        table.insert(q, 1, item)
-      end
-      return true
+  -- Same line already live: do not restart the hold (re-push used to make
+  -- a used-move order linger through the player's next turn).
+  if q[1] and Callouts.norm(q[1].text) == n then
+    if opts.threat == true then
+      q[1].threat = true
     end
+    return true
   end
-  local item = {
-    text = text,
-    age = 0,
-    hold = tonumber(opts.hold) or Callouts.holdFor(opts.kind),
-    threat = opts.threat == true,
-    kind = opts.kind,
+  -- A new shout replaces whatever was showing. Emitted lines are not queued
+  -- to play again after the next attack.
+  session._trainerCallouts.foe = {
+    {
+      text = text,
+      age = 0,
+      hold = tonumber(opts.hold) or Callouts.holdFor(opts.kind),
+      threat = opts.threat == true,
+      kind = opts.kind,
+    },
   }
-  if opts.urgent == true and #q > 0 then
-    table.insert(q, 1, item)
-  else
-    q[#q + 1] = item
-  end
-  while #q > Callouts.MAX_QUEUE do
-    table.remove(q)
-  end
   return true
 end
 
@@ -213,9 +239,10 @@ function Callouts.tick(session, dt, battle)
   if not all then
     return
   end
-  local live = (battle and battle.current and battle.current.text)
-    or (battle and battle._arLastBubbleText)
-  if Callouts.isEnginePrompt(live) then
+  -- Learn-move / menu / switch: drop the live shout. Pausing used to resume
+  -- it later on the player's turn (issues #36 / #45).
+  if Callouts.shouldHold(battle) then
+    session._trainerCallouts = nil
     return
   end
   dt = dt or (1 / 60)
@@ -226,9 +253,6 @@ function Callouts.tick(session, dt, battle)
       local total = (toast.hold or Callouts.HOLD) + Callouts.FADE
       if toast.age >= total then
         table.remove(q, 1)
-        if q[1] then
-          q[1].age = 0
-        end
       end
     end
     if #q == 0 then
@@ -347,10 +371,8 @@ function Callouts.draw(session, battle)
   if not (session and session._trainerCallouts and love and love.graphics) then
     return
   end
-  -- Switch / "about to use" pages own the white box; pause this one.
-  local live = (battle and battle.current and battle.current.text)
-    or (battle and battle._arLastBubbleText)
-  if Callouts.isEnginePrompt(live) then
+  -- Switch / learn-move / "about to use" pages own the white box; pause this one.
+  if Callouts.shouldHold(battle) then
     return
   end
   local q = session._trainerCallouts.foe
