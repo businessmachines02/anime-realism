@@ -751,7 +751,9 @@ Cues.register("hit", function(session, side, kind, Grid, nudgeCamera, battle, op
     end
     local Audio = session._deps and session._deps.Audio
     if Audio and type(Audio.playHit) == "function" then
-      pcall(Audio.playHit, battle or session._battle, opts.typeMult)
+      pcall(Audio.playHit, battle or session._battle, opts.typeMult, {
+        category = category or session._lastAttackCategory,
+      })
     end
     local Projectiles = session._deps and session._deps.Projectiles
     local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"

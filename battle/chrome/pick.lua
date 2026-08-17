@@ -102,7 +102,7 @@ local function isCommitChoice(choice)
     return choice and (choice.id == "commit" or choice.dir == "a")
 end
 
--- Floating labels. No boxes, no dock panel — D-pad reacts only.
+-- Floating labels. No boxes, no dock panel. COMMIT is A, not drawn.
 local function drawReactTabs(g, Font, modal, chrome)
     local choices = modal.choices
     local n = #choices
@@ -437,7 +437,6 @@ function Pick.newModal(game, opts)
         usePad = #choices > 0 and #choices <= 5
     end
     local style = reactHudStyle()
-    local hideCommit = style == "TABS"
 
     local function ensurePadDirs()
         if not usePad then
@@ -468,7 +467,7 @@ function Pick.newModal(game, opts)
             if byId.entrench then
                 byId.entrench.dir = "down"
             end
-            if byId.commit and not hideCommit then
+            if byId.commit then
                 byId.commit.dir = "a"
             end
             if byId.entrench_hold then
@@ -499,9 +498,7 @@ function Pick.newModal(game, opts)
             choices[2].dir = "left"
             choices[3].dir = "right"
             choices[4].dir = "down"
-            if not hideCommit then
-                choices[5].dir = "a"
-            end
+            choices[5].dir = "a"
         end
     end
     ensurePadDirs()

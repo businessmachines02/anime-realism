@@ -1,10 +1,10 @@
 -- Field battle — move / hit SFX synced to our world FX.
 --
--- Classic battles play sounds from AnimPlayer rows (BattleState.playAnimSound).
--- FIELD suppresses that paint and fires projectiles from Cues on move_used, so
--- engine SFX land later (or not at all if the anim is cancelled). This module
--- owns the audible beat while a FIELD session is live: play on cue, mute the
--- engine's Sound.playMove so nothing doubles.
+-- The engine always plays PlayApplyingAttackSound ("Damage" / SE / NVE) from
+-- BattleState.applyHitFx after the move anim. FIELD already owns that beat
+-- from Cues, so applyHitFx.sfx is stripped while a session is live. Intentional
+-- FIELD samples call the stashed Sound.playMove — they must not drop the
+-- suppress flag or the engine thud can leak on the same tick.
 
 local Audio = {}
 
@@ -20,30 +20,100 @@ end
 
 function Audio.enterField()
   Audio._suppressEngine = (Audio._suppressEngine or 0) + 1
+  local Sound = tryRequire("src.core.Sound")
+  if Sound then
+    Sound._arFieldSuppress = (Sound._arFieldSuppress or 0) + 1
+  end
 end
 
 function Audio.leaveField()
   Audio._suppressEngine = math.max(0, (Audio._suppressEngine or 0) - 1)
+  local Sound = tryRequire("src.core.Sound")
+  if Sound then
+    Sound._arFieldSuppress = math.max(0, (Sound._arFieldSuppress or 0) - 1)
+  end
 end
 
 function Audio.suppressingEngine()
-  return (Audio._suppressEngine or 0) > 0
+  if (Audio._suppressEngine or 0) > 0 then
+    return true
+  end
+  local Sound = tryRequire("src.core.Sound")
+  return Sound and (Sound._arFieldSuppress or 0) > 0
 end
 
---- Install once: mute engine move SFX while FIELD owns presentation.
+local HIT_SFX = {
+  Damage = true,
+  Super_Effective = true,
+  Not_Very_Effective = true,
+}
+
+local function fieldPlayMove(data, anim)
+  local Sound = tryRequire("src.core.Sound")
+  local fn = Audio._origPlayMove
+      or (Sound and Sound._arFieldOrigPlayMove)
+  if type(fn) ~= "function" then
+    fn = Sound and Sound.playMove
+  end
+  if type(fn) == "function" then
+    return fn(data, anim)
+  end
+  local play = Audio._origPlay
+  if type(play) ~= "function" then
+    local Sound = tryRequire("src.core.Sound")
+    play = Sound and Sound.play
+  end
+  if type(play) == "function" and anim and anim.sound then
+    return play(data, anim.sound)
+  end
+end
+
+--- Install once: mute engine move / applying-attack SFX while FIELD owns presentation.
 function Audio.installEngineMute()
   local Sound = tryRequire("src.core.Sound")
-  if not (Sound and type(Sound.playMove) == "function") or Sound._arFieldMute then
-    return
-  end
-  local orig = Sound.playMove
-  function Sound.playMove(data, anim)
-    if Audio.suppressingEngine() then
-      return
+  if Sound and not Sound._arFieldMute then
+    if type(Sound.playMove) == "function" then
+      local origMove = Sound.playMove
+      Audio._origPlayMove = origMove
+      Sound._arFieldOrigPlayMove = origMove
+      function Sound.playMove(data, anim)
+        if (Sound._arFieldSuppress or 0) > 0 then
+          return
+        end
+        return origMove(data, anim)
+      end
     end
-    return orig(data, anim)
+    if type(Sound.play) == "function" then
+      local origPlay = Sound.play
+      Audio._origPlay = origPlay
+      function Sound.play(data, name)
+        if (Sound._arFieldSuppress or 0) > 0 and HIT_SFX[tostring(name or "")] then
+          return
+        end
+        return origPlay(data, name)
+      end
+    end
+    Sound._arFieldMute = true
   end
-  Sound._arFieldMute = true
+
+  -- The generic thud on every connecting hit is applyHitFx, not AnimPlayer.
+  local okBS, BattleState = pcall(require, "src.battle.BattleState")
+  if okBS and BattleState and type(BattleState.applyHitFx) == "function"
+      and not BattleState._arFieldMuteHitFx then
+    local origHitFx = BattleState.applyHitFx
+    function BattleState.applyHitFx(self, hit)
+      -- FIELD battles stamp _arAnimeField. Drop the applying-attack sample
+      -- (Damage / SE / NVE) so it cannot fire after the hidden engine anim.
+      if self and self._arAnimeField and type(hit) == "table" and hit.sfx then
+        hit = {
+          animType = hit.animType,
+          blink = hit.blink,
+        }
+      end
+      return origHitFx(self, hit)
+    end
+    BattleState._arFieldMuteHitFx = true
+  end
 end
 
 local function moveDef(battle, moveId)
@@ -55,7 +125,6 @@ local function moveDef(battle, moveId)
   if def then
     return def, id
   end
-  -- Some rows pass the name; scan once.
   for mid, mdef in pairs(battle.data.moves) do
     if type(mdef) == "table" and tostring(mdef.name or ""):upper() == id then
       return mdef, mid
@@ -66,6 +135,7 @@ end
 
 --- Play the move's MoveSoundTable entry (pitch/tempo aware).
 function Audio.playMove(battle, moveId, attackerIsPlayer)
+  Audio._lastMovePlayed = false
   if not battle then
     return false
   end
@@ -84,6 +154,7 @@ function Audio.playMove(battle, moveId, attackerIsPlayer)
     if species and type(Sound.playMoveCry) == "function" then
       local tempo = def.anim and def.anim.tempo
       pcall(Sound.playMoveCry, battle.data, species, tempo)
+      Audio._lastMovePlayed = true
       return true
     end
   end
@@ -91,41 +162,32 @@ function Audio.playMove(battle, moveId, attackerIsPlayer)
   if not (anim and anim.sound) then
     return false
   end
-  -- Bypass our mute wrapper for the intentional FIELD play.
-  local was = Audio._suppressEngine
-  Audio._suppressEngine = 0
-  local ok = false
-  if type(Sound.playMove) == "function" then
-    -- Call through a direct require of the original if we stashed it…
-    -- The wrapper checks suppressingEngine(); with 0 it reaches the real play.
-    ok = pcall(Sound.playMove, battle.data, anim)
-  elseif type(Sound.play) == "function" then
-    ok = pcall(Sound.play, battle.data, anim.sound)
-  end
-  Audio._suppressEngine = was
+  local ok = pcall(fieldPlayMove, battle.data, anim)
+  Audio._lastMovePlayed = ok and true or false
   return ok and true or false
 end
 
 --- Impact thud matching PlayApplyingAttackSound (#826 pitch path).
-function Audio.playHit(battle, typeMult)
+-- Neutral physicals skip when the move sample just played — Tackle / Scratch
+-- already sound like Damage, and stacking them is the "double generic hit".
+function Audio.playHit(battle, typeMult, opts)
   if not battle then
     return false
   end
-  local Sound = tryRequire("src.core.Sound")
-  if not Sound then
+  typeMult = tonumber(typeMult) or 10
+  local category = opts and opts.category
+  if category == "physical" and typeMult == 10 and Audio._lastMovePlayed then
+    Audio._lastMovePlayed = false
     return false
   end
-  typeMult = tonumber(typeMult) or 10
+  Audio._lastMovePlayed = false
 
-  -- Use a different pitch calculation path
   local sfx = {}
   if typeMult > 10 then
     sfx.sound = "Super_Effective"
-    -- Pitch raises with multiplier (max 24 semitones up at x4)
     sfx.pitch = math.floor(0x80 + math.min(24, (typeMult - 10) * 1.5))
   elseif typeMult < 10 then
     sfx.sound = "Not_Very_Effective"
-    -- Pitch lowers with smaller multiplier (down to 0 at x0.25)
     sfx.pitch = math.floor(0x40 - math.min(32, (10 - typeMult) * 2.5))
     if sfx.pitch < 0x10 then sfx.pitch = 0x10 end
   else
@@ -133,15 +195,7 @@ function Audio.playHit(battle, typeMult)
     sfx.pitch = 0x60
   end
 
-  local was = Audio._suppressEngine
-  Audio._suppressEngine = 0
-  local ok = false
-  if type(Sound.playMove) == "function" then
-    ok = pcall(Sound.playMove, battle.data, sfx)
-  elseif type(Sound.play) == "function" then
-    ok = pcall(Sound.play, battle.data, sfx.sound)
-  end
-  Audio._suppressEngine = was
+  local ok = pcall(fieldPlayMove, battle.data, sfx)
   return ok and true or false
 end
 
