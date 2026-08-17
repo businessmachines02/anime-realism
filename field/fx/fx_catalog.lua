@@ -1,5 +1,5 @@
 -- FIELD move FX catalog. Add a named move here instead of editing projectiles.lua.
--- Loaded via require("fx_catalog") (shimmed in field/init.lua).
+-- Loaded via require("fx_catalog") (shimmed in field/init.lua from fx/fx_catalog.lua).
 
 local Catalog = {}
 

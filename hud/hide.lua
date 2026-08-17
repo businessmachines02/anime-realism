@@ -1,7 +1,7 @@
 -- HUD hide — levels, HP numbers/bars, XP strip, party/summary.
 -- Dialogue chrome (speech bubbles, say wraps, overlay) stays in main.lua /
 -- battle/dialogue.lua.
--- FIELD compact chrome lives in field/ui.lua.
+-- FIELD compact chrome lives in field/chrome/ui.lua.
 
 local Hide = {
     hidingHud = false,

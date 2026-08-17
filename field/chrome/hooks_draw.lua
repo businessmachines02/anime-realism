@@ -1,7 +1,7 @@
 -- Field battle — BattleState draw wraps, overlay, present clock, mouse look.
 --
 -- Loaded by field/init.lua and attached onto Hooks. Install is idempotent
--- via the same _arFbv* guards as the composer in hooks.lua.
+-- via the same _arFbv* guards as the composer in chrome/hooks.lua.
 
 return function(Hooks)
 function Hooks.installDraw(FBV, mod, ctx)

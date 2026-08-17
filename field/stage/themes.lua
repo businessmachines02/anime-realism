@@ -2,7 +2,7 @@
 --
 -- Themes.scene(battle) picks a kit from the current map id (route, cave,
 -- gym, …). Kits describe overlay prop density/colors only — live map tiles
--- are never read or written. Optional arenas/*.lua files can supply hand-
+-- are never read or written. Optional stage/arenas/*.lua files can supply hand-
 -- crafted pad layouts when present.
 
 local Themes = {}

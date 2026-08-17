@@ -9,27 +9,12 @@
 --   battle/  → REACT rules, menus, FX policy, dialogue paint
 --   field/   → this package
 --
--- Module map (loaded below):
---   intercept   push BattleState as a transparent stack host (no wipe)
---   lifecycle   Idle→Armed→Staging→Live→Finishing session owner
---   hooks       BattleState wrap composer (draw / input / events siblings)
---   ui          compact command / diamond moves / dialogue chrome
---   survey      read-only walkable envelope around the encounter
---   grid        pad occupancy + step helpers (pad is truth)
---   cast        stage trainers + mons onto pad homes
---   cues        arFieldCue → step-in / cast-in-place choreography
---   sprites     OW follower sheets as battlers (+ bob / motion)
---   projectiles world-space FX entities (camera/voxel aligned)
---   anims       classic move FX affine → live pad centers
---   arena       themed overlay props on pad cells (session-only; arenas/*.lua when pad size matches)
---   themes      map-id → kit (cover/grass/pond colors)
---   layout      tight adjacent-mon formation along the fight axis
---   coords      pad ↔ world ↔ pixel conversions
---   fx_catalog  TYPE_COLORS / MOVE_FX / TYPE_STYLE / TYPE_CONTACT
---   spectators  nearby trainers walk in, watch, rare shoutouts
---   wildlife    roaming OW mons scatter away from the duel
---   compat      suppress foreign staged battles while FIELD is on
---   debug       optional pad occupancy overlay
+-- Folders (env.load paths are relative to field/):
+--   pad/      coords, grid, layout, survey, cast
+--   session/  lifecycle, intercept, compat, spectators, wildlife
+--   fx/       catalog, projectiles, cues, anims, audio, sprites
+--   stage/    arena, themes, arenas/*.lua kits
+--   chrome/   ui, callouts, debug, hooks*
 --
 -- Public surface is the FBV table returned from this loader.
 
@@ -40,20 +25,20 @@ return function(env)
     error("field/init.lua requires env.load", 2)
   end
 
-  local Coords = loadFile("coords.lua")
-  local Themes = loadFile("themes.lua")
+  local Coords = loadFile("pad/coords.lua")
+  local Themes = loadFile("stage/themes.lua")
   do
     local ids = {
       "cave", "city", "forest", "grave", "gym", "indoor", "mountain", "route", "water",
     }
     for i = 1, #ids do
-      local ok, layout = pcall(loadFile, "arenas/" .. ids[i] .. ".lua")
+      local ok, layout = pcall(loadFile, "stage/arenas/" .. ids[i] .. ".lua")
       if ok and type(layout) == "table" and type(Themes.registerLayout) == "function" then
         Themes.registerLayout(layout.id or ids[i], layout)
       end
     end
   end
-  local FxCatalog = loadFile("fx_catalog.lua")
+  local FxCatalog = loadFile("fx/fx_catalog.lua")
   do
     local loaded = package and package.loaded
     if type(loaded) == "table" then
@@ -79,23 +64,27 @@ return function(env)
   local Audio, Anims, Lifecycle, Spectators, Wildlife, Compat
   local Hooks, Intercept, Debug, UI, Callouts
   local loadOk, loadErr = pcall(function()
-    Layout = loadFile("layout.lua")
-    Sprites = loadFile("sprites.lua")
-    Arena = loadFile("arena.lua")
-    Survey = loadFile("survey.lua")
-    Grid = loadFile("grid.lua")
-    Cast = loadFile("cast.lua")
-    Cues = loadFile("cues.lua")
-    Projectiles = loadFile("projectiles.lua")
-    Audio = loadFile("audio.lua")
-    Anims = loadFile("anims.lua")
-    Lifecycle = loadFile("lifecycle.lua")
-    Spectators = loadFile("spectators.lua")
-    Wildlife = loadFile("wildlife.lua")
-    Compat = loadFile("compat.lua")
-    Hooks = loadFile("hooks.lua")
+    Layout = loadFile("pad/layout.lua")
+    Sprites = loadFile("fx/sprites.lua")
+    Arena = loadFile("stage/arena.lua")
+    Survey = loadFile("pad/survey.lua")
+    Grid = loadFile("pad/grid.lua")
+    Cast = loadFile("pad/cast.lua")
+    Cues = loadFile("fx/cues.lua")
+    Projectiles = loadFile("fx/projectiles.lua")
+    Audio = loadFile("fx/audio.lua")
+    Anims = loadFile("fx/anims.lua")
+    Lifecycle = loadFile("session/lifecycle.lua")
+    Spectators = loadFile("session/spectators.lua")
+    Wildlife = loadFile("session/wildlife.lua")
+    Compat = loadFile("session/compat.lua")
+    Hooks = loadFile("chrome/hooks.lua")
     do
-      local attach = { "hooks_draw.lua", "hooks_input.lua", "hooks_events.lua" }
+      local attach = {
+        "chrome/hooks_draw.lua",
+        "chrome/hooks_input.lua",
+        "chrome/hooks_events.lua",
+      }
       for i = 1, #attach do
         local chunk = loadFile(attach[i])
         if type(chunk) == "function" then
@@ -103,10 +92,10 @@ return function(env)
         end
       end
     end
-    Intercept = loadFile("intercept.lua")
-    Debug = loadFile("debug.lua")
-    UI = loadFile("ui.lua")
-    Callouts = loadFile("callouts.lua")
+    Intercept = loadFile("session/intercept.lua")
+    Debug = loadFile("chrome/debug.lua")
+    UI = loadFile("chrome/ui.lua")
+    Callouts = loadFile("chrome/callouts.lua")
   end)
   require = origRequire
   if not loadOk then

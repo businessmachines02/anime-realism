@@ -2,7 +2,7 @@
 --
 -- Callout rewrite ("NAME used MOVE!" → trainer orders) and BattleState.say
 -- wraps stay in main.lua. FIELD world-anchored trainer strips live in
--- field/callouts.lua. This module is the packed BanterCameo + bubble
+-- field/chrome/callouts.lua. This module is the packed BanterCameo + bubble
 -- HUD tables, injected via Dialogue.bind(host).
 
 local Dialogue = {}

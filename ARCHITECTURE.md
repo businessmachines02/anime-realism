@@ -255,31 +255,18 @@ Never derive occupancy from pixels.
 
 ### FIELD module map
 
-Loaded from `field/init.lua` (plus `coords` / `themes`):
+Loaded from `field/init.lua`. Sibling `require("coords")` / `require("themes")` /
+`require("fx_catalog")` is shimmed while the tree loads.
 
-| Module | Role |
-|--------|------|
-| `hooks.lua` | Predicates + `Hooks.install` composer (`hooks_draw` / `hooks_input` / `hooks_events`) |
-| `ui.lua` | Compact FIGHT / diamond moves / fallback dialogue (draw-only) |
-| `survey.lua` | Read-only walkable envelope + water cells |
-| `grid.lua` | Pad occupancy + step helpers |
-| `cast.lua` | Stage trainers/mons onto pad homes |
-| `cues.lua` | `arFieldCue` → step-in / cast-in-place / Dig-Fly vanish |
-| `sprites.lua` | OW follower sheets via `Assets.image` / other-mod APIs |
-| `projectiles.lua` | World-space move FX (not `ow.entities`) |
-| `anims.lua` | Affine of classic move FX onto live pad centers |
-| `audio.lua` | Cue-synced SFX; mute engine `Sound.playMove` while live |
-| `arena.lua` / `themes.lua` | Session overlay props (trees/rocks/grass), not tile edits |
-| `layout.lua` | Tight adjacent-mon formation |
-| `spectators.lua` | Nearby trainers walk in and watch |
-| `wildlife.lua` | Roaming OW mons scatter |
-| `compat.lua` | Gate Dramatic Shape *staging*; keep free-roam VOXEL drawing |
-| `debug.lua` | Optional pad occupancy overlay |
+| Folder | Files | Role |
+|--------|-------|------|
+| `pad/` | `coords`, `grid`, `layout`, `survey`, `cast` | Pad space, occupancy, staging |
+| `session/` | `lifecycle`, `intercept`, `compat`, `spectators`, `wildlife` | Begin/end, stack host, world extras |
+| `fx/` | `fx_catalog`, `projectiles`, `cues`, `anims`, `audio`, `sprites` | Move VFX, pad cues, battler sheets |
+| `stage/` | `arena`, `themes`, `arenas/*.lua` | Overlay props; hand kits when pad size matches |
+| `chrome/` | `ui`, `callouts`, `debug`, `hooks*` | Compact menus, bubbles, BattleState wraps |
 
-Also in the tree: `arenas/*.lua` (hand-crafted kits; `Themes.registerLayout`
-in `field/init.lua`; used when pad size matches), `callouts.lua` (world-anchored
-trainer bubbles; loaded and exposed as `FBV.Callouts`), `logger.lua` (unused;
-do not wire or delete yet), `tests/`.
+Also in the tree: `logger.lua` (unused; do not wire or delete yet), `tests/`.
 
 ### Sprite resolution
 
@@ -395,9 +382,9 @@ flowchart TB
 - `Battle.install` is the classic-fight composer (menus, damage wrap,
   dialogue). It may call `RD.*` and `FBV.react` / `FBV.isFieldBattle` — not
   FIELD internals.
-- `Hooks.install` is a composer: predicates stay in `hooks.lua`; wrap groups
-  live in `hooks_draw.lua` / `hooks_input.lua` / `hooks_events.lua`. Those
-  talk only to the FBV facade (not `FBV.Lifecycle.*` / `FBV.Cues.*`).
+- `Hooks.install` is a composer: predicates stay in `chrome/hooks.lua`; wrap
+  groups live in `chrome/hooks_draw.lua` / `hooks_input.lua` / `hooks_events.lua`.
+  Those talk only to the FBV facade (not `FBV.Lifecycle.*` / `FBV.Cues.*`).
 
 **3. Registries** (how FIELD scales later)
 
@@ -408,11 +395,11 @@ switches:
   `Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)` entry.
   Built-in dodge/cover/brace/attack/hit/faint/… handlers register at load.
   Tests already depend on that signature.
-- **Move FX** — `field/fx_catalog.lua` holds `MOVE_FX` + `TYPE_COLORS` +
+- **Move FX** — `field/fx/fx_catalog.lua` holds `MOVE_FX` + `TYPE_COLORS` +
   type defaults. `Projectiles.move` / `contact` / `status` stay the spawn API.
   Style painters register by name (`Projectiles.registerStyle`);
   `drawEffect` dispatches `STYLE_PAINTERS[p.style]`.
-- **Arena kits** — `field/arenas/*.lua` register via `Themes.registerLayout`.
+- **Arena kits** — `field/stage/arenas/*.lua` register via `Themes.registerLayout`.
   `Themes.kit` attaches the hand layout when present. `Arena.generate` uses
   it only when pad `sizeU`/`sizeV` match the file (authored 10×5); tight
   wild pads stay procedural.
@@ -481,9 +468,9 @@ Do not “fix” these by rewriting:
 3. **HUD / EXP / effort → `hud/`** — done: `hud/rewards.lua` +
    `hud/hide.lua`. Overlay still *calls* bubble paint from `main.lua`.
 4. **FIELD registries** — done: `fx_catalog.lua` + `Cues.register` +
-   `Projectiles.registerStyle` + `Themes.registerLayout` / `arenas/*.lua`.
+   `Projectiles.registerStyle` + `Themes.registerLayout` / `stage/arenas/*.lua`.
 5. **Split god-files behind those registries** — done: `Hooks.install` composer
-   plus `hooks_draw.lua` / `hooks_input.lua` / `hooks_events.lua`. Public
+   plus `chrome/hooks_draw.lua` / `hooks_input.lua` / `hooks_events.lua`. Public
    signatures unchanged.
 6. **Narrow FBV** — done for Hooks: facade methods (`tryMouseLook`,
    `vanishKind`, `shouldHoldEngineHit`, `holdCloseHit`, `tagSelfDamage`, …).
@@ -502,10 +489,10 @@ Do not “fix” these by rewriting:
 | Hide numbers / EXP feel | `hud/hide.lua` + `hud/rewards.lua` |
 | Speech bubbles / trainer cameo | `battle/dialogue.lua` + `battle/strings.lua` (`Dialogue.bind`) |
 | Focus react animation | `battle/fx.lua` (policy) then classic helpers in `main.lua` or `Cues.register` |
-| FIELD intercept / no wipe | `field/intercept.lua` |
-| Pad steps / Dig-Fly | `field/cues.lua` (`Cues.register`) + `grid.lua` |
-| Move VFX | `field/fx_catalog.lua` (named moves) then `Projectiles.registerStyle` |
-| Compact menus | `field/ui.lua` + input in `hooks_input.lua` |
-| Follower art | `field/sprites.lua` |
-| Session begin/end | `field/lifecycle.lua` |
+| FIELD intercept / no wipe | `field/session/intercept.lua` |
+| Pad steps / Dig-Fly | `field/fx/cues.lua` (`Cues.register`) + `field/pad/grid.lua` |
+| Move VFX | `field/fx/fx_catalog.lua` then `Projectiles.registerStyle` |
+| Compact menus | `field/chrome/ui.lua` + input in `chrome/hooks_input.lua` |
+| Follower art | `field/fx/sprites.lua` |
+| Session begin/end | `field/session/lifecycle.lua` |
 | Zip contents | `build.sh` |

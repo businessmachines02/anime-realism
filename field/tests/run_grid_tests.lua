@@ -16,39 +16,39 @@ local function truthy(value, label)
   assert(value, label or "expected truthy value")
 end
 
-local Coords = load("coords.lua")
+local Coords = load("pad/coords.lua")
 package.loaded.coords = Coords
-local Themes = load("themes.lua")
+local Themes = load("stage/themes.lua")
 package.loaded.themes = Themes
-local FxCatalog = load("fx_catalog.lua")
+local FxCatalog = load("fx/fx_catalog.lua")
 package.loaded.fx_catalog = FxCatalog
-local Grid = load("grid.lua")
-local Layout = load("layout.lua")
-local Arena = load("arena.lua")
-local Survey = load("survey.lua")
-local Cues = load("cues.lua")
-local Callouts = load("callouts.lua")
-local Projectiles = load("projectiles.lua")
-local UI = load("ui.lua")
-local Lifecycle = load("lifecycle.lua")
-local Compat = load("compat.lua")
-local Sprites = load("sprites.lua")
-local Cast = load("cast.lua")
-local Spectators = load("spectators.lua")
-local Wildlife = load("wildlife.lua")
+local Grid = load("pad/grid.lua")
+local Layout = load("pad/layout.lua")
+local Arena = load("stage/arena.lua")
+local Survey = load("pad/survey.lua")
+local Cues = load("fx/cues.lua")
+local Callouts = load("chrome/callouts.lua")
+local Projectiles = load("fx/projectiles.lua")
+local UI = load("chrome/ui.lua")
+local Lifecycle = load("session/lifecycle.lua")
+local Compat = load("session/compat.lua")
+local Sprites = load("fx/sprites.lua")
+local Cast = load("pad/cast.lua")
+local Spectators = load("session/spectators.lua")
+local Wildlife = load("session/wildlife.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
-local Hooks = load("hooks.lua")
-load("hooks_draw.lua")(Hooks)
-load("hooks_input.lua")(Hooks)
-load("hooks_events.lua")(Hooks)
+local Hooks = load("chrome/hooks.lua")
+load("chrome/hooks_draw.lua")(Hooks)
+load("chrome/hooks_input.lua")(Hooks)
+load("chrome/hooks_events.lua")(Hooks)
 
 do
   local ids = {
     "cave", "city", "forest", "grave", "gym", "indoor", "mountain", "route", "water",
   }
   for i = 1, #ids do
-    local ok, layout = pcall(load, "arenas/" .. ids[i] .. ".lua")
+    local ok, layout = pcall(load, "stage/arenas/" .. ids[i] .. ".lua")
     if ok and type(layout) == "table" then
       Themes.registerLayout(layout.id or ids[i], layout)
     end
