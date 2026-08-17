@@ -152,8 +152,9 @@ return function(mod)
                 label = "REACT HUD",
                 default = "GRID",
                 choices = {
-                    { "GRID", "GRID" },
-                    { "TABS", "TABS" },
+                    { "GRID",    "GRID" },
+                    { "TABS",    "TABS" },
+                    { "DIAMOND", "DIAMOND" },
                 },
             },
             {
@@ -296,8 +297,8 @@ return function(mod)
 
         local function reactHudStyle()
             local raw = tostring(mod.options:get("react_hud") or "GRID"):upper()
-            if raw == "TABS" then
-                return "TABS"
+            if raw == "TABS" or raw == "DIAMOND" then
+                return raw
             end
             return "GRID"
         end
@@ -460,7 +461,7 @@ return function(mod)
         -- Physical hit → arms counter; on your reply you pick COUNTER or HOLD.
         -- Special → dodge callout (may fail); temp buffs clear when you attack.
         local Damage = require("src.battle.Damage")
-        -- Momentum table lives in battle/react.lua (React.state / peek).
+        -- Momentum table lives in battle/rules/react.lua (React.state / peek).
         -- Forward decls: event handlers / pick menu close over these.
         local revealPlayerPic
         local enqueueDodgeHideAnim
@@ -1687,6 +1688,22 @@ return function(mod)
             return Callouts.push(session, "foe", text, opts) == true
         end
 
+        local function pushPlayerCallout(battle, text, opts)
+            if not fieldFlowsText(battle) then
+                return false
+            end
+            text = tostring(text or ""):match("^%s*(.-)%s*$") or ""
+            if text == "" then
+                return false
+            end
+            local Callouts = FieldBattleViewer and FieldBattleViewer.Callouts
+            local session = liveFieldSession(battle)
+            if not (Callouts and session and type(Callouts.push) == "function") then
+                return false
+            end
+            return Callouts.push(session, "player", text, opts) == true
+        end
+
         -- original() may promote the announce to battle.current and leave
         -- nextInsert pointing at the next hole. Find the row we just submitted.
         local function stampNpcOrderOnAnnounce(battle, narrative, order)
@@ -2771,7 +2788,7 @@ return function(mod)
             end
         end
 
-        -- REACT pick / damage deferral lives in battle/react.lua.
+        -- REACT pick / damage deferral lives in battle/rules/react.lua.
         clearCalloutPickState = function(battle)
             if React then
                 React.clearPick(battle)
@@ -3273,7 +3290,7 @@ return function(mod)
             end
             return nil
         end
-        -- Speech-bubble paint lives in battle/dialogue.lua (Dialogue.Bubbles).
+        -- Speech-bubble paint lives in battle/chrome/bubbles.lua (Dialogue.Bubbles).
         hud.wrapBubbleText = function() return {} end
         hud.fieldPopupText = function(text) return tostring(text or "") end
         hud.bubbleVisibleText = function() return "" end
@@ -3420,6 +3437,7 @@ return function(mod)
                 resumeInsertIndex = resumeInsertIndex,
                 enqueueAutoAfter = enqueueAutoAfter,
                 markBubbleWait = markBubbleWait,
+                pushPlayerCallout = pushPlayerCallout,
                 tagFieldCue = tagFieldCue,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,

@@ -4,9 +4,9 @@
 -- underdog EXP, and faint effort consolations so fights play by feel.
 --
 -- HUD hide (levels/HP/XP) lives in hide.lua; speech-bubble paint lives in
--- battle/dialogue.lua. Rewards (underdog EXP + effort faint) install here.
+-- battle/chrome/bubbles.lua. Rewards (underdog EXP + effort faint) install here.
 --   hud/     → numbers feel (this package)
---   battle/  → REACT rules, menus, FX policy, dialogue paint
+--   battle/  → REACT rules, chrome, FX policy
 --   field/   → overworld FIELD viewer
 
 return function(env)

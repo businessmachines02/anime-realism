@@ -2130,6 +2130,13 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
       and session._trainerCallouts.foe[1]),
     "emitted callout is not replayed after the hold")
 
+  truthy(Callouts.push(session, "player", "PIKACHU!\nDodge it!", { kind = "react" }),
+    "player react order uses the dialogue strip")
+  eq(session._trainerCallouts.player[1].text, "PIKACHU!\nDodge it!",
+    "player order is live")
+  truthy(Callouts.ownsText(session, "PIKACHU!\nDodge it!"),
+    "owns the player order")
+
   -- Re-arm a shout to test dismiss on menu / learn-move.
   truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
     "re-arm after expiry")

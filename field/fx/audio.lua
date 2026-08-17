@@ -116,14 +116,23 @@ function Audio.playHit(battle, typeMult)
     return false
   end
   typeMult = tonumber(typeMult) or 10
-  local sfx
+
+  -- Use a different pitch calculation path
+  local sfx = {}
   if typeMult > 10 then
-    sfx = { sound = "Super_Effective", pitch = 0xe0 }
+    sfx.sound = "Super_Effective"
+    -- Pitch raises with multiplier (max 24 semitones up at x4)
+    sfx.pitch = math.floor(0x80 + math.min(24, (typeMult - 10) * 1.5))
   elseif typeMult < 10 then
-    sfx = { sound = "Not_Very_Effective", pitch = 0x50 }
+    sfx.sound = "Not_Very_Effective"
+    -- Pitch lowers with smaller multiplier (down to 0 at x0.25)
+    sfx.pitch = math.floor(0x40 - math.min(32, (10 - typeMult) * 2.5))
+    if sfx.pitch < 0x10 then sfx.pitch = 0x10 end
   else
-    sfx = { sound = "Damage", pitch = 0x20 }
+    sfx.sound = "Damage"
+    sfx.pitch = 0x60
   end
+
   local was = Audio._suppressEngine
   Audio._suppressEngine = 0
   local ok = false

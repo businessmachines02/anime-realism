@@ -530,6 +530,20 @@ S.AMBIENT_HIDE_MOVES = {
     FADE = { "TELEPORT", "NIGHT_SHADE" },
     SENSE = { "CONFUSION", "TELEPORT", "DISABLE" },
 }
+S.COVER_CALLS = {
+    "%s! Take cover!",
+    "Get down, %s!",
+    "%s! Behind cover!",
+    "Hide, %s!",
+    "%s! Use cover!",
+}
+S.COMMIT_CALLS = {
+    "%s! Take it!",
+    "Hang in there, %s!",
+    "%s! You can take this!",
+    "Endure it, %s!",
+    "%s! Don't give in!",
+}
 S.ENTRENCH_MAX_TURNS = 3
 S.STAY_ENTRENCHED_CALLS = {
     "Stay entrenched, %s!",

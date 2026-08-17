@@ -60,7 +60,7 @@ flowchart TD
   ml --> hud[hud/]
   ml --> bat[battle/]
   ml --> fbv[field/]
-  bat --> rd[battle/reactive_defense.lua]
+  bat --> rd[battle/rules/reactive_defense.lua]
   fbv --> sib[Sibling modules via env.load]
   ml --> pkgs[mod._arPackages]
   pkgs --> bind[FBV.bind]
@@ -162,25 +162,42 @@ not chain wraps.
 
 ## Reactive Defense
 
-`battle/reactive_defense.lua` is **pure logic**: Focus meter, costs, dodge
+`battle/rules/reactive_defense.lua` is **pure logic**: Focus meter, costs, dodge
 success, cover durability, brace type-call, entrench turns. No drawing, no
 queue edits.
 
 `main.lua` owns:
 
-- When to offer **REACT!** (`ALWAYS` / `THREAT` / `OFF`) is read by `battle/react.lua` via `React.bind`.
+- When to offer **REACT!** (`ALWAYS` / `THREAT` / `OFF`) is read by
+  `battle/rules/react.lua` via `React.bind`.
 - Dialogue rewrite, say wraps, send/idle banter enqueue, and classic dodge/brace sparkles.
-  Bubble paint and trainer cameo live in `battle/dialogue.lua`.
+  Bubble paint and trainer cameo live in `battle/chrome/bubbles.lua`.
 - Applying presentation after a pick (`dev.playFocusReactFx`).
   - FIELD: `FieldBattleViewer.react` (OW sprite + projectiles).
   - Classic: picFx hide/brace sparkles.
 
-`battle/react.lua` owns momentum state, the REACT / COUNTER pick modals, and the
-`EffectRegistry.runDamaging` wrap. It calls `ReactiveDefense.resolveIncoming`
+`battle/rules/react.lua` owns momentum state, when to queue REACT / COUNTER,
+and the `EffectRegistry.runDamaging` wrap. Pick HUD paint lives in
+`battle/chrome/pick.lua`. The pipeline calls `ReactiveDefense.resolveIncoming`
 then host callbacks for FX and queue text.
 
 State is weak-keyed per `BattleState` (`byBattle` in RD, `momentumByBattle` in
 main) so sessions die with the fight.
+
+### Battle module map
+
+Loaded from `battle/init.lua`. Siblings via `env.load("rules/react.lua")` /
+`env.load("chrome/pick.lua")` (zip-safe, same pattern as `field/`).
+
+| Folder | Files | Role |
+|--------|-------|------|
+| `rules/` | `reactive_defense`, `react`, `dialogue` | Focus math, REACT pipeline, callout rewrite |
+| `chrome/` | `pick`, `bubbles` | REACT HUD, speech bubbles, trainer cameo |
+| (root) | `fx.lua`, `strings.lua` | Animation policy, copy |
+
+Public facade is unchanged: `Battle.ReactiveDefense` / `React` / `Fx` /
+`Dialogue` / `Strings`. `Dialogue.Banter` / `Dialogue.Bubbles` still exist;
+chrome attaches them at package load.
 
 ## FIELD presentation
 
@@ -335,13 +352,15 @@ flowchart TB
   end
   subgraph battlePkg [battle system]
     RD[ReactiveDefense]
-    React[REACT menus plus EffectRegistry wrap]
+    React[REACT pipeline plus EffectRegistry wrap]
     Fx[Fx.play / Fx.tag]
-    Dial[Dialogue.Banter / Bubbles]
+    Dial[Dialogue rewrite / banter enqueue]
+    PickHud[chrome/pick.lua]
+    ChromeBubbles[chrome/bubbles.lua]
   end
   subgraph hudPkg [HUD]
     Hide[Hud.Hide]
-    Bubbles[Dialogue.Bubbles]
+    OverlayBubbles[Dialogue.Bubbles]
     FieldUI[FBV compact UI]
   end
   subgraph animPkg [animation]
@@ -357,12 +376,14 @@ flowchart TB
   Bat --> React
   Bat --> Fx
   Bat --> Dial
+  React --> PickHud
+  Dial --> ChromeBubbles
+  ChromeBubbles --> OverlayBubbles
   Fx --> CueReg
   Fx --> ClassicFx
   FBV --> FieldUI
   FBV --> CueReg
   CueReg --> Proj
-  Dial --> Bubbles
   FBV -.->|"bind RD"| RD
 ```
 
@@ -426,7 +447,7 @@ than digging the session.
 
 **`ReactiveDefense` (`RD`) — pure rules**
 
-`battle/reactive_defense.lua`: `state` / `sideState` / `resolveIncoming` /
+`battle/rules/reactive_defense.lua`: `state` / `sideState` / `resolveIncoming` /
 `menuActions` / `endTurn` / `applyCoverHit` / tunables. No drawing, no queue
 edits, no `require` of FIELD.
 
@@ -465,8 +486,9 @@ Do not “fix” these by rewriting:
 ### Extraction sequence
 
 1. **Facades + wiring** — done: one boot path, `FBV.bind`, `FBV.isFieldBattle`.
-2. **REACT pipeline → `battle/`** — done: `battle/react.lua` owns momentum, pick
-   menus, and the `EffectRegistry.runDamaging` wrap.
+2. **REACT pipeline → `battle/`** — done: `battle/rules/react.lua` owns momentum
+   and the `EffectRegistry.runDamaging` wrap; `battle/chrome/pick.lua` paints
+   the pick HUD.
 3. **HUD / EXP / effort → `hud/`** — done: `hud/rewards.lua` +
    `hud/hide.lua`. Overlay still *calls* bubble paint from `main.lua`.
 4. **FIELD registries** — done: `fx_catalog.lua` + `Cues.register` +
@@ -478,8 +500,9 @@ Do not “fix” these by rewriting:
    `vanishKind`, `shouldHoldEngineHit`, `holdCloseHit`, `tagSelfDamage`, …).
    Raw `FBV.Cues` / `FBV.Lifecycle` remain on the table for tests / internals;
    `main.lua` must not grow reads of them.
-7. **Dialogue extract** — done: `battle/strings.lua` owns `S`; `Dialogue`
-   owns rewrite, `wrapBattleSay`, and send/idle banter enqueue.
+7. **Dialogue extract** — done: `battle/strings.lua` owns `S`;
+   `battle/rules/dialogue.lua` owns rewrite, `wrapBattleSay`, and send/idle
+   banter enqueue; `battle/chrome/bubbles.lua` owns cameo + bubble paint.
 8. **Classic picFx → `battle/fx.lua`** — done: `Fx.enqueueDodgeHideAnim` /
    `enqueueBraceAnim` / `dodgeAnimSpec`. `main.lua` keeps `insertBeforeAnim`
    and ambient stance pulses.
@@ -488,10 +511,12 @@ Do not “fix” these by rewriting:
 
 | You want to… | Start here |
 |--------------|------------|
-| Focus costs / dodge math | `battle/reactive_defense.lua` |
-| REACT menu / queue timing | `battle/react.lua` (`React.install`; host callbacks still in `main.lua`) |
+| Focus costs / dodge math | `battle/rules/reactive_defense.lua` |
+| REACT menu / queue timing | `battle/rules/react.lua` (`React.install`; host callbacks still in `main.lua`) |
+| REACT pick HUD | `battle/chrome/pick.lua` |
 | Hide numbers / EXP feel | `hud/hide.lua` + `hud/rewards.lua` |
-| Speech bubbles / trainer cameo | `battle/dialogue.lua` + `battle/strings.lua` (`Dialogue.bind`) |
+| Speech bubbles / trainer cameo | `battle/chrome/bubbles.lua` + `battle/strings.lua` (`Dialogue.bind`) |
+| Callout rewrite / banter enqueue | `battle/rules/dialogue.lua` |
 | Focus react animation | `battle/fx.lua` (`Fx.play` + classic picFx enqueue) |
 | FIELD intercept / no wipe | `field/session/intercept.lua` |
 | Pad steps / Dig-Fly | `field/fx/cues.lua` (`Cues.register`) + `field/pad/grid.lua` |

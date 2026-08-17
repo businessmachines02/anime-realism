@@ -159,10 +159,11 @@ remain on their normal presentation path.
 - FIELD move selection defaults to a compact full-width **classic** 2×2
   (U/R/L/D labels, D-pad moves the cursor, **A** confirms). **MOVE HUD**
   `DIAMOND` keeps the compass layout and instant-casts on that direction.
-  The **REACT!** menu defaults to that same 2×2 (`REACT HUD` **GRID**) and
-  tints from the player's **COLORS** option. **TABS** slides a one-row strip
-  up from the bottom of the screen, each choice a slightly different soft
-  color.
+  The **REACT!** menu defaults to that same 2×2 (`REACT HUD` **GRID**), in
+  the MOVE HUD cream (a bit darker). **TABS** is a full-width one-row strip
+  that slides up from the bottom. **DIAMOND** is the U/R/L/D compass plus **A**.
+  Picking a react shows your trainer order in a dialogue box
+  (`PIKACHU! Dodge it!`).
   Trainers step aside when a Pokémon moves onto or beside them.
 - Trainers and Pokémon begin on a compact 5×3 formation, then move across a
   read-only surveyed fight envelope (normally about 9×7 nearby tiles).
@@ -198,7 +199,7 @@ remain on their normal presentation path.
 | **MOVE HUD** | CLASSIC | FIELD fight menu. `CLASSIC` is a compact full-width 2×2 with U/R/L/D labels (D-pad + **A**). `DIAMOND` is the compass with instant-cast |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
-| **REACT HUD** | GRID | `GRID` is the compact 2×2 (U/R/L/D + **A**). `TABS` is a one-row strip that slides up from the bottom, each choice a soft tint |
+| **REACT HUD** | GRID | `GRID` is the compact 2×2 (U/R/L/D + **A**). `TABS` is a full-width row that slides up from the bottom. `DIAMOND` is the U/R/L/D compass |
 | **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away, then idle 1–2 tiles off instead of returning home. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
@@ -230,7 +231,7 @@ Keep `LICENSE`, and note your changes.
 - `main.lua` — orchestrator + shared hooks
 - `lib/modload.lua` — package loader
 - `hud/` — hide numbers + EXP/effort rewards
-- `battle/` — battle systems (`reactive_defense.lua` lives here)
+- `battle/` — battle systems (`rules/` math + pipeline, `chrome/` HUD paint)
 - `field/` — overworld FIELD combat (tile-grid movement tracker)
 - `LICENSE` — CC BY 4.0 (attribution required)
 - `DIFFERENCES.md` — what this mod changes from vanilla
