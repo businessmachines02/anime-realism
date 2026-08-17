@@ -1,6 +1,6 @@
 -- Field battle — BattleState update wrap (menu latch, pause, directional cast).
 --
--- Loaded by field/init.lua and attached onto Hooks. Guard `_arFbvUpdate25`
+-- Loaded by field/init.lua and attached onto Hooks. Guard `_arFbvUpdate26`
 -- rebinds even if an older FIELD update wrap was installed.
 
 return function(Hooks)
@@ -12,8 +12,8 @@ function Hooks.installInput(FBV, mod, ctx)
     local ok, BattleState = pcall(require, "src.battle.BattleState")
     if ok and type(BattleState) == "table" then
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate25 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate25 then
+        -- _arFbvUpdate26 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate26 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -84,8 +84,11 @@ function Hooks.installInput(FBV, mod, ctx)
                         swallowB = true
                     end
 
-                    -- U/R/L/D → that move slot, then inject A so BattleState resolves it.
-                    if self.phase == "moveSelect" or self.phase == "mimicSelect" then
+                    -- DIAMOND only: U/R/L/D → that move slot, then inject A.
+                    -- CLASSIC leaves D-pad to BattleState list navigation + A.
+                    if type(FBV.moveHudStyle) == "function"
+                        and FBV.moveHudStyle(mod) == "DIAMOND"
+                        and (self.phase == "moveSelect" or self.phase == "mimicSelect") then
                         if input and type(input.wasPressed) == "function" then
                             local moves = self.phase == "mimicSelect"
                                 and (self.mimicMoves or {})
@@ -202,6 +205,7 @@ function Hooks.installInput(FBV, mod, ctx)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate26 = true
             BattleState._arFbvUpdate25 = true
             BattleState._arFbvUpdate24 = true
             BattleState._arFbvUpdate23 = true

@@ -501,6 +501,210 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     state.pickOfferedThisTurn = true
 end
 
+local function mix01(a, b, t)
+    return a + (b - a) * t
+end
+
+local function rgb01(c)
+    if type(c) ~= "table" then
+        return 1, 1, 1
+    end
+    local r = tonumber(c[1]) or 255
+    local g = tonumber(c[2]) or 255
+    local b = tonumber(c[3]) or 255
+    if r > 1 or g > 1 or b > 1 then
+        return r / 255, g / 255, b / 255
+    end
+    return r, g, b
+end
+
+-- COLORS (OG RED / SGB / CLASSIC / …) → a washed 4-shade chrome so the
+-- REACT bar tints with the player's display pack without harsh fills.
+local function reactChrome(game)
+    local pal
+    local data = game and game.data
+    local ok, PaletteFX = pcall(require, "src.render.PaletteFX")
+    if ok and type(PaletteFX) == "table" then
+        if type(PaletteFX.pal) == "function" then
+            pal = PaletteFX.pal(data, "PALLET") or PaletteFX.pal(data, "GREENBAR")
+        end
+        pal = pal or PaletteFX.GRAYS
+        if type(PaletteFX.effectiveColors) == "function" then
+            pal = PaletteFX.effectiveColors(pal) or pal
+        end
+    end
+    local pr, pg, pb = 0.97, 0.94, 0.90
+    local sr, sg, sb = 0.86, 0.80, 0.78
+    local ir, ig, ib = 0.16, 0.12, 0.11
+    if pal and pal[1] then
+        local r, g, b = rgb01(pal[1])
+        pr, pg, pb = mix01(r, 1, 0.42), mix01(g, 1, 0.42), mix01(b, 1, 0.42)
+    end
+    if pal and pal[2] then
+        local r, g, b = rgb01(pal[2])
+        sr, sg, sb = mix01(r, pr, 0.58), mix01(g, pg, 0.58), mix01(b, pb, 0.58)
+    elseif pal and pal[3] then
+        local r, g, b = rgb01(pal[3])
+        sr, sg, sb = mix01(r, pr, 0.62), mix01(g, pg, 0.62), mix01(b, pb, 0.62)
+    end
+    if pal and pal[4] then
+        local r, g, b = rgb01(pal[4])
+        ir, ig, ib = mix01(r, 0.22, 0.40), mix01(g, 0.16, 0.40), mix01(b, 0.14, 0.40)
+    end
+    return {
+        paper = { pr, pg, pb },
+        selected = { sr, sg, sb },
+        ink = { ir, ig, ib },
+        muted = {
+            mix01(ir, pr, 0.52),
+            mix01(ig, pg, 0.52),
+            mix01(ib, pb, 0.52),
+        },
+        fill255 = { pr * 255, pg * 255, pb * 255 },
+    }
+end
+
+local function reactHudStyle()
+    local fn = host.reactHudStyle
+    if type(fn) == "function" then
+        local raw = tostring(fn() or "GRID"):upper()
+        if raw == "TABS" then
+            return "TABS"
+        end
+    end
+    return "GRID"
+end
+
+local function shortReactLabel(choice)
+    local name = tostring(choice and choice.label or "")
+    if name == "TAKE COVER" then
+        return "COVER"
+    end
+    if name == "STAY COVER" then
+        return "STAY"
+    end
+    if name == "PHYSICAL" then
+        return "PHYS"
+    end
+    if name == "SPECIAL" then
+        return "SPEC"
+    end
+    if name == "ENTRENCH" then
+        return "ENTR"
+    end
+    return name
+end
+
+local DIR_LETTER = { up = "U", down = "D", left = "L", right = "R", a = "A" }
+
+-- Soft pastels per react, mixed with the player's COLORS paper.
+local TAB_TINTS = {
+    dodge = { 0.70, 0.82, 0.94 },
+    cover = { 0.76, 0.88, 0.72 },
+    brace = { 0.94, 0.82, 0.68 },
+    entrench = { 0.84, 0.76, 0.90 },
+    commit = { 0.92, 0.88, 0.78 },
+    entrench_hold = { 0.84, 0.76, 0.90 },
+    entrench_break = { 0.94, 0.76, 0.76 },
+    counter = { 0.94, 0.74, 0.70 },
+    hold = { 0.80, 0.82, 0.86 },
+}
+
+local TAB_FALLBACK = {
+    { 0.70, 0.82, 0.94 },
+    { 0.76, 0.88, 0.72 },
+    { 0.94, 0.82, 0.68 },
+    { 0.84, 0.76, 0.90 },
+    { 0.92, 0.88, 0.78 },
+}
+
+local function tabFill(choice, index, paper, selected)
+    local tint = (choice and choice.id and TAB_TINTS[choice.id])
+        or TAB_FALLBACK[((index - 1) % #TAB_FALLBACK) + 1]
+    local wash = selected and 0.22 or 0.48
+    return {
+        mix01(tint[1], paper[1], wash),
+        mix01(tint[2], paper[2], wash),
+        mix01(tint[3], paper[3], wash),
+    }
+end
+
+local function easeOutCubic(t)
+    if t <= 0 then return 0 end
+    if t >= 1 then return 1 end
+    local u = 1 - t
+    return 1 - u * u * u
+end
+
+-- One-row tabs that slide up from the bottom of the 160×144 canvas.
+local function drawReactTabs(g, Font, modal, chrome)
+    local choices = modal.choices
+    local n = #choices
+    if n < 1 then
+        return
+    end
+    local gap = 1
+    local tabH = 18
+    local inner = 160 - gap * (n + 1)
+    local tabW = math.floor(inner / n)
+    local extra = inner - tabW * n
+    local age = modal._tabAge or 0
+    local preferred = choices[modal.index]
+    local x = gap
+    for i = 1, n do
+        local w = tabW
+        if i <= extra then
+            w = w + 1
+        end
+        local delay = (i - 1) * 0.04
+        local t = easeOutCubic((age - delay) / 0.20)
+        local y = 144 - tabH * t
+        local choice = choices[i]
+        local selected = preferred == choice
+        if selected and t > 0.92 then
+            y = y - 2
+        end
+        local fill = tabFill(choice, i, chrome.paper, selected)
+        if choice and choice.disabled then
+            fill = {
+                mix01(fill[1], chrome.paper[1], 0.45),
+                mix01(fill[2], chrome.paper[2], 0.45),
+                mix01(fill[3], chrome.paper[3], 0.45),
+            }
+        end
+        g.setColor(fill[1], fill[2], fill[3], 0.96)
+        g.rectangle("fill", x, y, w, tabH + 4)
+        g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 0.55)
+        g.rectangle("line", x + 0.5, y + 0.5, w - 1, tabH + 3)
+        if selected then
+            g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 0.85)
+            g.rectangle("fill", x + 2, y + 1, w - 4, 1)
+        end
+        local letter = DIR_LETTER[choice and choice.dir or ""] or tostring(i)
+        local label = shortReactLabel(choice)
+        if choice and choice.disabled then
+            g.setColor(chrome.muted[1], chrome.muted[2], chrome.muted[3], 1)
+        else
+            g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
+        end
+        if Font and type(Font.draw) == "function" then
+            g.push()
+            g.translate(x + 2, y + 2)
+            g.scale(0.70, 0.70)
+            Font.draw(letter, 0, 0)
+            g.pop()
+            local scale = (#label > 5) and 0.62 or 0.70
+            g.push()
+            g.translate(x + 2, y + 9)
+            g.scale(scale, scale)
+            Font.draw(label, 0, 0)
+            g.pop()
+        end
+        x = x + w + gap
+    end
+    g.setColor(1, 1, 1, 1)
+end
+
 local function newCalloutPickModal(game, opts)
     local Font = require("src.render.Font")
     local Sound = require("src.core.Sound")
@@ -591,12 +795,14 @@ local function newCalloutPickModal(game, opts)
         choices = choices,
         index = start,
         usePad = usePad,
+        style = reactHudStyle(),
         cancelable = opts.cancelable == true,
         onPick = opts.onPick,
         onCancel = opts.onCancel,
         -- Instant D-pad picks must not fire on the same press that opened
         -- this modal (or a leftover held direction from the prior menu).
         _padArmed = not usePad,
+        _tabAge = 0,
         _resolved = false,
     }
 
@@ -647,40 +853,10 @@ local function newCalloutPickModal(game, opts)
         end
     end
 
-    -- Filled triangle arrows so D-pad mapping reads at a glance.
-    local function drawPadArrow(dir, cx, cy, enabled)
-        local g = love.graphics
-        local s = 3.5
-        if enabled == false then
-            g.setColor(0.45, 0.45, 0.45, 1)
-        else
-            g.setColor(0, 0, 0, 1)
-        end
-        if dir == "up" then
-            g.polygon("fill", cx, cy - s, cx - s, cy + s * 0.55, cx + s, cy + s * 0.55)
-        elseif dir == "down" then
-            g.polygon("fill", cx, cy + s, cx - s, cy - s * 0.55, cx + s, cy - s * 0.55)
-        elseif dir == "left" then
-            g.polygon("fill", cx - s, cy, cx + s * 0.55, cy - s, cx + s * 0.55, cy + s)
-        elseif dir == "right" then
-            g.polygon("fill", cx + s, cy, cx - s * 0.55, cy - s, cx - s * 0.55, cy + s)
-        end
-    end
-
-    local function drawAKey(cx, cy, enabled)
-        local g = love.graphics
-        if enabled == false then
-            g.setColor(0.45, 0.45, 0.45, 1)
-        else
-            g.setColor(0, 0, 0, 1)
-        end
-        -- Compact R/B/Y-style key hint (no filled disc).
-        g.rectangle("line", cx - 5, cy - 5, 10, 10)
-        g.setColor(0, 0, 0, 1)
-        Font.draw("A", cx - 3, cy - 4)
-    end
-
     function self:update(dt)
+        if self.usePad and self.style == "TABS" then
+            self._tabAge = (self._tabAge or 0) + (tonumber(dt) or 0)
+        end
         local input = self.game.input
         local n = #self.choices
         if n < 1 or self._resolved then
@@ -739,94 +915,88 @@ local function newCalloutPickModal(game, opts)
         local g = love.graphics
 
         if self.usePad then
-            -- Spatial D-pad compass (same language as the FIELD move diamond).
-            -- Compact bottom panel keeps mons / HP / weather readable above.
-            local function shortLabel(choice)
-                local name = tostring(choice and choice.label or "")
-                if name == "TAKE COVER" then
-                    return "COVER"
-                end
-                if name == "STAY COVER" then
-                    return "STAY"
-                end
-                if name == "PHYSICAL" then
-                    return "PHYS"
-                end
-                if name == "SPECIAL" then
-                    return "SPEC"
-                end
-                return name
+            if self.style == "TABS" then
+                drawReactTabs(g, Font, self, reactChrome(self.game))
+                return
             end
-            local function textW(label)
-                if type(Font.width) == "function" then
-                    return Font.width(label)
-                end
-                return #Font.split(label) * 8
-            end
+            -- Compact full-width 2×2 (GRID). U/R on top, L/D below;
+            -- A (COMMIT) sits on the header row.
+            local chrome = reactChrome(self.game)
             local preferred = self.choices[self.index]
-            local slots = {
-                up = { x = 56, y = 92, w = 48, h = 12 },
-                left = { x = 8, y = 108, w = 52, h = 12 },
-                right = { x = 100, y = 108, w = 52, h = 12 },
-                down = { x = 56, y = 124, w = 48, h = 12 },
-                a = { x = 56, y = 136, w = 48, h = 11 },
-            }
-            -- Cream panel across the lower third only.
-            g.setColor(0.96, 0.92, 0.82, 0.96)
-            g.rectangle("fill", 0, 78, 160, 66)
-            g.setColor(0.10, 0.07, 0.06, 1)
-            g.rectangle("line", 0.5, 78.5, 159, 65)
-            g.rectangle("line", 1.5, 79.5, 157, 63)
-            -- Title + tiny subtitle on one header row.
+            local x, y, w, h = 4, 100, 152, 40
+            g.setColor(chrome.paper[1], chrome.paper[2], chrome.paper[3], 0.96)
+            g.rectangle("fill", x, y, w, h)
+            g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
+            g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
+            if w > 3 and h > 3 then
+                g.rectangle("line", x + 1.5, y + 1.5, w - 3, h - 3)
+            end
             local title = self.title or "REACT!"
-            g.setColor(0.08, 0.06, 0.05, 1)
-            Font.draw(title, 6, 80)
-            if self.subtitle then
+            g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
+            Font.draw(title, x + 6, y + 3)
+            local aChoice = choiceForDir("a")
+            if self.subtitle and not aChoice then
                 local sub = tostring(self.subtitle)
-                if #sub > 10 then
-                    sub = sub:sub(1, 9) .. "."
+                if #sub > 8 then
+                    sub = sub:sub(1, 7) .. "."
                 end
-                g.setColor(0.40, 0.34, 0.28, 1)
-                local subX = 160 - 6 - math.floor(textW(sub) * 0.75)
+                g.setColor(chrome.muted[1], chrome.muted[2], chrome.muted[3], 1)
+                Font.draw(sub, x + 58, y + 3)
+            end
+            if aChoice then
+                local aLabel = shortReactLabel(aChoice)
+                local selectedA = preferred == aChoice
+                if selectedA then
+                    g.setColor(chrome.selected[1], chrome.selected[2],
+                        chrome.selected[3], 1)
+                    g.rectangle("fill", x + w - 58, y + 2, 52, 10)
+                end
+                if aChoice.disabled then
+                    g.setColor(chrome.muted[1], chrome.muted[2], chrome.muted[3], 1)
+                else
+                    g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
+                end
+                Font.draw("A", x + w - 56, y + 3)
                 g.push()
-                g.translate(math.max(70, subX), 81)
+                g.translate(x + w - 46, y + 3)
                 g.scale(0.75, 0.75)
-                Font.draw(sub, 0, 0)
+                Font.draw(aLabel, 0, 0)
                 g.pop()
             end
-            for _, dir in ipairs({ "up", "left", "right", "down", "a" }) do
-                local choice = choiceForDir(dir)
-                local slot = slots[dir]
-                if choice and slot then
+            local slots = {
+                { dir = "up",    letter = "U", col = 0, row = 0 },
+                { dir = "right", letter = "R", col = 1, row = 0 },
+                { dir = "left",  letter = "L", col = 0, row = 1 },
+                { dir = "down",  letter = "D", col = 1, row = 1 },
+            }
+            local colW = 74
+            for s = 1, #slots do
+                local slot = slots[s]
+                local choice = choiceForDir(slot.dir)
+                if choice then
+                    local tx = x + 6 + slot.col * colW
+                    local ty = y + 14 + slot.row * 12
                     local selected = preferred == choice
-                    local label = shortLabel(choice)
+                    if selected then
+                        g.setColor(chrome.selected[1], chrome.selected[2],
+                            chrome.selected[3], 1)
+                        g.rectangle("fill", tx - 2, ty - 1, colW - 4, 11)
+                        if type(Font.drawCode) == "function" then
+                            g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
+                            Font.drawCode(0xED, tx, ty)
+                        end
+                    end
+                    local label = shortReactLabel(choice)
                     if choice.disabled then
                         label = "(" .. label .. ")"
-                    end
-                    if selected then
-                        g.setColor(0.16, 0.30, 0.55, 1)
+                        g.setColor(chrome.muted[1], chrome.muted[2], chrome.muted[3], 1)
                     else
-                        g.setColor(0.99, 0.96, 0.88, 1)
+                        g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 1)
                     end
-                    g.rectangle("fill", slot.x, slot.y, slot.w, slot.h)
-                    g.setColor(0.10, 0.08, 0.06, 1)
-                    g.rectangle("line", slot.x + 0.5, slot.y + 0.5,
-                        slot.w - 1, slot.h - 1)
-                    local glyphX = slot.x + 7
-                    local glyphY = slot.y + 6
-                    if dir == "a" then
-                        drawAKey(glyphX, glyphY, not choice.disabled)
-                    else
-                        drawPadArrow(dir, glyphX, glyphY, not choice.disabled)
-                    end
+                    Font.draw(slot.letter, tx + 12, ty)
                     local scale = (#label > 6) and 0.72 or 0.85
-                    if selected then
-                        g.setColor(1, 1, 1, 1)
-                    else
-                        g.setColor(0.08, 0.06, 0.05, 1)
-                    end
                     g.push()
-                    g.translate(slot.x + 14, slot.y + 2)
+                    g.translate(tx + 22, ty)
                     g.scale(scale, scale)
                     Font.draw(label, 0, 0)
                     g.pop()
@@ -853,7 +1023,7 @@ local function newCalloutPickModal(game, opts)
             th = 13 - ty
         end
 
-        Font.drawBox(tx, ty, tw, th)
+        Font.drawBox(tx, ty, tw, th, reactChrome(self.game).fill255)
         love.graphics.setColor(0, 0, 0, 1)
         Font.draw(self.title, (tx + 1) * 8, (ty + 1) * 8)
         local row = ty + 2

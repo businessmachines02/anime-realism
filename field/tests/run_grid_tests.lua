@@ -475,6 +475,77 @@ function tests.move_hud_shows_b_pause_hint()
       rectangle = function() end,
       push = function() end,
       pop = function() end,
+      translate = function() end,
+      scale = function() end,
+    },
+  }
+  local battle = {
+    _arAnimeField = true,
+    phase = "moveSelect",
+    moveIndex = 1,
+    player = {
+      curMoves = {
+        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+      },
+    },
+    data = {
+      moves = {
+        TACKLE = { name = "TACKLE", type = "NORMAL" },
+        GROWL = { name = "GROWL", type = "NORMAL" },
+        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL" },
+        SCRATCH = { name = "SCRATCH", type = "NORMAL" },
+      },
+    },
+    game = {
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+      overworld = { camera = { x = 0, y = 0 }, entities = {} },
+    },
+  }
+  UI.draw(battle)
+  love = prevLove
+  package.loaded["src.render.Font"] = nil
+  local hinted = false
+  local listed = false
+  local up, right, left, down = false, false, false, false
+  for i = 1, #drawn do
+    if drawn[i] == "B PAUSE" then
+      hinted = true
+    end
+    if drawn[i] == "TACKLE" then
+      listed = true
+    end
+    if drawn[i] == "U" then up = true end
+    if drawn[i] == "R" then right = true end
+    if drawn[i] == "L" then left = true end
+    if drawn[i] == "D" then down = true end
+  end
+  truthy(hinted, "classic MOVE HUD tells the player to pause with B")
+  truthy(listed, "classic MOVE HUD lists move names")
+  truthy(up and right and left and down,
+    "classic MOVE HUD labels slots U/R/L/D")
+end
+
+function tests.diamond_move_hud_uses_compass()
+  local drawn = {}
+  package.loaded["src.render.Font"] = {
+    draw = function(text)
+      drawn[#drawn + 1] = text
+    end,
+    width = function()
+      return 8
+    end,
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      push = function() end,
+      pop = function() end,
     },
   }
   local battle = {
@@ -503,17 +574,33 @@ function tests.move_hud_shows_b_pause_hint()
       overworld = { camera = { x = 0, y = 0 }, entities = {} },
     },
   }
-  UI.draw(battle)
+  UI.draw(battle, "DIAMOND")
   love = prevLove
   package.loaded["src.render.Font"] = nil
-  local hinted = false
+  local hinted, up, right = false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then
-      hinted = true
-      break
-    end
+    if drawn[i] == "B PAUSE" then hinted = true end
+    if drawn[i] == "U" then up = true end
+    if drawn[i] == "R" then right = true end
   end
-  truthy(hinted, "move HUD tells the player to pause with B")
+  truthy(hinted, "diamond MOVE HUD keeps the B pause hint")
+  truthy(up and right, "diamond MOVE HUD paints the U/R compass labels")
+end
+
+function tests.move_hud_style_defaults_to_classic()
+  eq(UI.moveHudStyle(nil), "CLASSIC", "unset style is classic")
+  eq(UI.moveHudStyle("classic"), "CLASSIC", "classic is case-insensitive")
+  eq(UI.moveHudStyle("DIAMOND"), "DIAMOND", "diamond is opt-in")
+  eq(FieldBattle.moveHudStyle({
+    options = { get = function() return nil end },
+  }), "CLASSIC", "missing option is classic")
+  eq(FieldBattle.moveHudStyle({
+    options = {
+      get = function(_, key)
+        if key == "move_hud" then return "DIAMOND" end
+      end,
+    },
+  }), "DIAMOND", "option selects diamond")
 end
 
 function tests.hp_chip_stays_on_screen_near_top()

@@ -207,7 +207,11 @@ function Hooks.installDraw(FBV, mod, ctx)
         mod.hooks:wrap("battle.move_grid_navigation", function(next, battle)
             if battle and isFieldBattle(battle) then
                 local phase = battle.phase
-                return phase == "moveSelect" or phase == "mimicSelect"
+                if phase ~= "moveSelect" and phase ~= "mimicSelect" then
+                    return false
+                end
+                return type(FBV.moveHudStyle) == "function"
+                    and FBV.moveHudStyle(mod) == "DIAMOND"
             end
             return next(battle)
         end)

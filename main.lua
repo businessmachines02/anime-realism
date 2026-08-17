@@ -120,6 +120,16 @@ return function(mod)
                 },
             },
             {
+                key = "move_hud",
+                type = "choice",
+                label = "MOVE HUD",
+                default = "CLASSIC",
+                choices = {
+                    { "CLASSIC", "CLASSIC" },
+                    { "DIAMOND", "DIAMOND" },
+                },
+            },
+            {
                 key = "momentum_counter",
                 type = "toggle",
                 label = "REACTIVE DEF",
@@ -134,6 +144,16 @@ return function(mod)
                     { "ALWAYS", "ALWAYS" },
                     { "THREAT", "THREAT" },
                     { "OFF",    "OFF" },
+                },
+            },
+            {
+                key = "react_hud",
+                type = "choice",
+                label = "REACT HUD",
+                default = "GRID",
+                choices = {
+                    { "GRID", "GRID" },
+                    { "TABS", "TABS" },
                 },
             },
             {
@@ -272,6 +292,14 @@ return function(mod)
             while #lines > dev.linesMax do
                 table.remove(lines, 1)
             end
+        end
+
+        local function reactHudStyle()
+            local raw = tostring(mod.options:get("react_hud") or "GRID"):upper()
+            if raw == "TABS" then
+                return "TABS"
+            end
+            return "GRID"
         end
 
         local function calloutPickMode()
@@ -3372,6 +3400,7 @@ return function(mod)
                     end
                 end,
                 pickMode = calloutPickMode,
+                reactHudStyle = reactHudStyle,
                 calloutStyle = calloutStyle,
                 lowHpRatio = lowHpRatio,
                 foeMoveIsSpecial = foeMoveIsSpecial,

@@ -282,8 +282,10 @@ Water-types can swap to a swim sheet on surveyed water cells.
 ### Compact UI vs engine UI
 
 `BattleState` still owns phases, cursors, and input. FIELD paints a small
-command menu and U/R/L/D move diamond, then injects **A** for instant cast.
-**B** pauses back to FIGHT/PKMN/ITEM/RUN. Classic anim paint is
+command menu and a **MOVE HUD** (`CLASSIC`, default: compact full-width 2×2
+with U/R/L/D labels, D-pad + **A**) or compass (`DIAMOND`, instant-cast).
+**B** pauses back to
+FIGHT/PKMN/ITEM/RUN. Classic anim paint is
 suppressed; engine anim *rows* still advance for timing. HP is a tiny bar
 over each mon (world→UI mapped). Party/Bag stay engine screens.
 

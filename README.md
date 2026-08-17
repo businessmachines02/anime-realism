@@ -152,12 +152,17 @@ remain on their normal presentation path.
 - During FIELD message beats, the large bottom panel yields to small speech
   popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
   `MISSED!`) and speaker bubbles track the active Pokémon. Lines auto-advance
-  about every 1.5 seconds so fights flow into the directional move grid. On the
-  move diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
+  about every 1.5 seconds so fights flow into the move HUD. On the
+  move list or diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
   Pick FIGHT to return to moves. During dialogue, **B** pauses a
   toast; **A** or **B** again resumes.
-- FIELD move selection is a diamond `U/R/L/D` compass (covers the classic
-  TYPE/PP panel). Pressing that direction immediately casts the matching move.
+- FIELD move selection defaults to a compact full-width **classic** 2×2
+  (U/R/L/D labels, D-pad moves the cursor, **A** confirms). **MOVE HUD**
+  `DIAMOND` keeps the compass layout and instant-casts on that direction.
+  The **REACT!** menu defaults to that same 2×2 (`REACT HUD` **GRID**) and
+  tints from the player's **COLORS** option. **TABS** slides a one-row strip
+  up from the bottom of the screen, each choice a slightly different soft
+  color.
   Trainers step aside when a Pokémon moves onto or beside them.
 - Trainers and Pokémon begin on a compact 5×3 formation, then move across a
   read-only surveyed fight envelope (normally about 9×7 nearby tiles).
@@ -190,8 +195,10 @@ remain on their normal presentation path.
 |--------|---------|-------------|
 | **BATTLE STAGE** | FIELD | `FIELD` keeps wild/trainer singles on the live map; `AUTO` leaves other presentation mods alone |
 | **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
+| **MOVE HUD** | CLASSIC | FIELD fight menu. `CLASSIC` is a compact full-width 2×2 with U/R/L/D labels (D-pad + **A**). `DIAMOND` is the compass with instant-cast |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
+| **REACT HUD** | GRID | `GRID` is the compact 2×2 (U/R/L/D + **A**). `TABS` is a one-row strip that slides up from the bottom, each choice a soft tint |
 | **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away, then idle 1–2 tiles off instead of returning home. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 

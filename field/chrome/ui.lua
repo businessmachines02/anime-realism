@@ -3,7 +3,7 @@
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module only paints:
 --   menu         → FIGHT / PKMN / ITEM / RUN (or Safari set)
---   moveSelect   → diamond U/R/L/D move compass (opaque wipe covers TYPE/PP)
+--   moveSelect   → CLASSIC vertical fight list, or DIAMOND U/R/L/D compass
 --   messages     → fallback dialogue box when speech toasts are not active
 --
 -- World-anchored HP bars paint on the battle UI overlay with world→UI mapping
@@ -388,7 +388,53 @@ local function moveName(battle, move)
     return def and def.name or tostring(move.id or "-")
 end
 
-local function drawMoves(g, Font, battle)
+function UI.moveHudStyle(style)
+    if type(style) == "string" and string.upper(style) == "DIAMOND" then
+        return "DIAMOND"
+    end
+    return "CLASSIC"
+end
+
+local function drawMovesClassic(g, Font, battle)
+    -- Compact full-width 2×2. Slot letters match the diamond compass
+    -- (U=1, R=2, L=3, D=4). D-pad moves the cursor; A confirms.
+    local rows = moveRows(battle)
+    local index = battle.phase == "mimicSelect"
+        and (battle.mimicIndex or 1) or (battle.moveIndex or 1)
+    local x, y, w, h = 4, 100, 152, 40
+    box(g, x, y, w, h)
+    if Font and type(Font.draw) == "function" then
+        g.setColor(0.35, 0.30, 0.25, 1)
+        Font.draw("B PAUSE", x + 6, y + 3)
+    end
+    local slots = {
+        { i = 1, label = "U", col = 0, row = 0 },
+        { i = 2, label = "R", col = 1, row = 0 },
+        { i = 3, label = "L", col = 0, row = 1 },
+        { i = 4, label = "D", col = 1, row = 1 },
+    }
+    local colW = 74
+    for s = 1, #slots do
+        local slot = slots[s]
+        local move = rows[slot.i]
+        if move then
+            local tx = x + 6 + slot.col * colW
+            local ty = y + 14 + slot.row * 12
+            local selected = slot.i == index
+            if selected then
+                drawCodeScaled(g, Font, 0xED, tx, ty, 0.9)
+            end
+            local name = fitText(Font, moveName(battle, move), 52)
+            if Font and type(Font.draw) == "function" then
+                g.setColor(0.08, 0.06, 0.05, 1)
+                Font.draw(slot.label, tx + 12, ty)
+                Font.draw(name, tx + 22, ty)
+            end
+        end
+    end
+end
+
+local function drawMovesDiamond(g, Font, battle)
     -- Diamond compass: direction matches slot. Opaque panel covers TYPE/PP ghosts.
     --   U = 1, R = 2, L = 3, D = 4
     local rows = moveRows(battle)
@@ -437,13 +483,21 @@ local function drawMoves(g, Font, battle)
     end
 end
 
+local function drawMoves(g, Font, battle, style)
+    if UI.moveHudStyle(style) == "DIAMOND" then
+        drawMovesDiamond(g, Font, battle)
+    else
+        drawMovesClassic(g, Font, battle)
+    end
+end
+
 
 local function drawDialogue(g, Font, battle)
     return
 end
 
 
-function UI.draw(battle)
+function UI.draw(battle, style)
     -- Paint at most one bottom chrome layer per frame (command XOR moves XOR dialogue).
     if not (UI.active(battle) and love and love.graphics) then
         return
@@ -458,7 +512,7 @@ function UI.draw(battle)
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then
-        drawMoves(g, Font, battle)
+        drawMoves(g, Font, battle, style)
     elseif state.showDialogue then
         drawDialogue(g, Font, battle)
     end

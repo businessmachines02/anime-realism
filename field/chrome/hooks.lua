@@ -5,10 +5,10 @@
 --   • Drive present-clock ticks so idle bob keeps moving under menus
 --   • FIELD input UX on top of vanilla BattleState phases:
 --       - Start on FIGHT / PKMN / ITEM / RUN until the player picks FIGHT
---       - After FIGHT, keep opening the move diamond each turn until PAUSE
+--       - After FIGHT, keep opening the move HUD each turn until PAUSE
 --       - B = PAUSE back to the command menu (clears move latch)
 --       - While ENTRENCHED, stay on command so FIGHT opens HOLD/BREAK
---       - U/R/L/D instantly cast that slot (inject A) while on the diamond
+--       - DIAMOND MOVE HUD: U/R/L/D instantly casts that slot (inject A)
 --   • Redraw compact UI last so Move Inspector / typed-move panels cannot cover it
 --   • Forward battle.* cues into Lifecycle / Cues / Projectiles
 --

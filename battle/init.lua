@@ -18,6 +18,7 @@ return function(env)
     Battle.OPTION_KEYS = {
         "momentum_counter",
         "callout_pick",
+        "react_hud",
         "focus_bar",
         "dev_overlay",
     }

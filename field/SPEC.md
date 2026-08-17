@@ -147,6 +147,10 @@ All step helpers mutate **pad** only; convert at boundaries (staging, draw, FX, 
   the visible canvas so a mon near the top of the view cannot hide its bar.
 - Compact command and move cursors read `battle.menuIndex` / `battle.moveIndex`; input
   and phase transitions remain owned by `BattleState`.
+- **MOVE HUD** (`move_hud`, default CLASSIC): CLASSIC is a compact full-width
+  2×2 with U/R/L/D slot labels (D-pad moves the cursor, A confirms). DIAMOND
+  is the compass layout; that direction instant-casts. Both keep **B** as
+  pause back to FIGHT/PKMN/ITEM/RUN.
 - Dialogue reuses `battle.shown`, waits, and typewriter progress in a narrow
   bottom panel.
 - Party, Bag, naming, and forced-switch states stay engine-owned.

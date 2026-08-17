@@ -147,7 +147,7 @@ return function(env)
     UI = UI,
     Callouts = Callouts,
     Intercept = Intercept,
-    OPTION_KEYS = { "battle_stage", "field_sprites", "close_the_gap" },
+    OPTION_KEYS = { "battle_stage", "field_sprites", "move_hud", "close_the_gap" },
   }
 
   function FBV.session(battle)
@@ -304,7 +304,7 @@ return function(env)
       battle._arAnimeField = true
     end
     if UI and type(UI.draw) == "function" then
-      UI.draw(battle)
+      UI.draw(battle, FBV.moveHudStyle(mod))
     end
     -- Attack FX on the same overlay as HP (world→UI mapped).
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
@@ -366,6 +366,20 @@ return function(env)
 
   function FBV.enabled(mod)
     return FBV.stage(mod) == "FIELD"
+  end
+
+  -- MOVE HUD: CLASSIC is a vertical fight list (D-pad + A). DIAMOND is the
+  -- U/R/L/D compass with instant-cast. Unknown / unset → CLASSIC.
+  function FBV.moveHudStyle(modRef)
+    modRef = modRef or mod
+    if not (modRef and modRef.options and type(modRef.options.get) == "function") then
+      return "CLASSIC"
+    end
+    local raw = tostring(modRef.options:get("move_hud") or "CLASSIC"):upper()
+    if raw == "DIAMOND" then
+      return "DIAMOND"
+    end
+    return "CLASSIC"
   end
 
   -- FIELD owns ordinary single wild and trainer encounters. Link, demo,
