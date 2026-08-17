@@ -1,7 +1,7 @@
 -- Battle systems — traditional battle layer
 --
 --   rules/   → Focus math, REACT pipeline, dialogue rewrite
---   chrome/  → pick HUD, speech bubbles, trainer cameo
+--   chrome/  → pick HUD, speech bubbles, trainer cameo, notice stack
 --   fx.lua   → classic vs FIELD animation policy
 --   strings.lua → callout / banter copy
 --
@@ -39,6 +39,7 @@ return function(env)
     local ReactiveDefense = loadMod("rules/reactive_defense.lua")
     local Pick = loadMod("chrome/pick.lua")
     local BubblesChrome = loadMod("chrome/bubbles.lua")
+    local Notices = loadMod("chrome/notices.lua")
     local React = loadMod("rules/react.lua")
     local Fx = loadMod("fx.lua")
     local Strings = loadMod("strings.lua")
@@ -56,6 +57,7 @@ return function(env)
     Battle.Fx = Fx
     Battle.Dialogue = Dialogue
     Battle.Strings = Strings
+    Battle.Notices = Notices
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do

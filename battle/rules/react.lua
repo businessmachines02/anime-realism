@@ -493,23 +493,6 @@ local function queueReactCounterStrike(battle, result, ctx)
 
     local me = hostCall("playerMonName", battle) or "POKéMON"
     local line = result.counter.line or (me .. " countered!")
-    local delay = S().CALLOUT_AUTO_DELAY or 55
-    hostCall("enqueueAutoAfter", battle, line, delay, "player", {
-        side = "player",
-        kind = "attack",
-        category = "physical",
-        moveId = moveId,
-    })
-    local toast = battle.queue and battle.queue[battle.nextInsert]
-    if toast then
-        if not toast.arFieldCue then
-            hostCall("tagFieldCue", toast, "player", "attack", "physical", nil, moveId)
-        end
-        if toast.arFieldCue then
-            toast.arFieldCue.category = "physical"
-            toast.arFieldCue.moveId = moveId
-        end
-    end
 
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
@@ -518,9 +501,9 @@ local function queueReactCounterStrike(battle, result, ctx)
             if not battle.player or not battle.enemy then
                 return
             end
+            hostCall("pushNotice", battle, line, { kind = "counter" })
             hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
                 isCalled = true,
-                presentationOnly = true,
             })
         end,
     })
@@ -595,11 +578,9 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
         host.playFocusReactFx(battle, result.action or action, result)
     end
 
+    -- Beat flavor rides the top-right notice stack so it cannot bury the swing.
     for i = 1, #(result.lines or {}) do
-        local line = result.lines[i]
-        local item = { text = line, auto = true, autoDelay = (S().CALLOUT_AUTO_DELAY or 55) }
-        hostCall("markBubbleWait", item, "player", true, battle)
-        table.insert(battle.queue, 1, item)
+        hostCall("pushNotice", battle, result.lines[i], { kind = "react" })
     end
 
     log(battle, "REACT " .. tostring(action),

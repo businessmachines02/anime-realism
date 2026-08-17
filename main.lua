@@ -793,6 +793,9 @@ return function(mod)
                 resolvePendingDamage(ev.battle)
                 clearCalloutPickState(ev.battle)
                 clearAmbientStance(ev.battle)
+                if Battle and Battle.Notices and type(Battle.Notices.clear) == "function" then
+                    Battle.Notices.clear(ev.battle)
+                end
                 ev.battle._arRestoreMap = nil
                 if type(dev.clearFocusCoverVisual) == "function" then
                     dev.clearFocusCoverVisual(ev.battle, false)
@@ -3439,6 +3442,12 @@ return function(mod)
                 enqueueAutoAfter = enqueueAutoAfter,
                 markBubbleWait = markBubbleWait,
                 pushPlayerCallout = pushPlayerCallout,
+                pushNotice = function(battle, text, opts)
+                    local Notices = Battle and Battle.Notices
+                    if Notices and type(Notices.push) == "function" then
+                        return Notices.push(battle, text, opts)
+                    end
+                end,
                 tagFieldCue = tagFieldCue,
                 pickCounterStrikeMove = function(battle, kind)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
@@ -3480,12 +3489,18 @@ return function(mod)
                     and type(FieldBattleViewer.drawCallouts) == "function" then
                     FieldBattleViewer.drawCallouts(battle)
                 end
+                if Battle and Battle.Notices and type(Battle.Notices.draw) == "function" then
+                    Battle.Notices.draw(battle)
+                end
                 return
             end
             BanterCameo.draw(battle)
             local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
             if side then
                 hud.drawSpeechBubble(battle, side)
+            end
+            if Battle and Battle.Notices and type(Battle.Notices.draw) == "function" then
+                Battle.Notices.draw(battle)
             end
         end)
 
