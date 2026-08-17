@@ -1,17 +1,15 @@
 -- Battle systems — traditional battle layer
 --
--- Reactive Defense (Focus), anime move callouts, speech bubbles, trainer
--- banter, status/focus chips. Works on CLASSIC battles and under FIELD for
--- menus/logic. Presentation of FIELD itself is field_battle/; this package
--- is the fight systems on top of BattleState.
+--   rules/   → Focus math, REACT pipeline, dialogue rewrite
+--   chrome/  → pick HUD, speech bubbles, trainer cameo
+--   fx.lua   → classic vs FIELD animation policy
+--   strings.lua → callout / banter copy
 --
---   immersion/     → HP/EXP hide + rewards
---   battle/        → this package
---   field_battle/  → overworld viewer
+-- Sibling files load via env.load (zip-safe). Public surface stays
+-- Battle.ReactiveDefense / React / Fx / Dialogue / Strings.
 
 return function(env)
     local loadFile = env and env.load
-    local mod = env and env.mod
 
     local Battle = {
         id = "battle",
@@ -21,20 +19,43 @@ return function(env)
     Battle.OPTION_KEYS = {
         "momentum_counter",
         "callout_pick",
+        "react_hud",
         "focus_bar",
         "dev_overlay",
     }
 
-    local ReactiveDefense
-    if type(loadFile) == "function" then
-        local ok, value = pcall(loadFile, "reactive_defense.lua")
-        if ok and type(value) == "table" then
-            ReactiveDefense = value
-        else
-            print("[anime_realism] battle/reactive_defense: " .. tostring(value))
+    local function loadMod(name)
+        if type(loadFile) ~= "function" then
+            return nil
         end
+        local ok, value = pcall(loadFile, name)
+        if ok and type(value) == "table" then
+            return value
+        end
+        print("[anime_realism] battle/" .. name .. ": " .. tostring(value))
+        return nil
     end
+
+    local ReactiveDefense = loadMod("rules/reactive_defense.lua")
+    local Pick = loadMod("chrome/pick.lua")
+    local BubblesChrome = loadMod("chrome/bubbles.lua")
+    local React = loadMod("rules/react.lua")
+    local Fx = loadMod("fx.lua")
+    local Strings = loadMod("strings.lua")
+    local Dialogue = loadMod("rules/dialogue.lua")
+
+    if React and type(React.attachHud) == "function" then
+        React.attachHud(Pick)
+    end
+    if Dialogue and type(Dialogue.attachChrome) == "function" then
+        Dialogue.attachChrome(BubblesChrome)
+    end
+
     Battle.ReactiveDefense = ReactiveDefense
+    Battle.React = React
+    Battle.Fx = Fx
+    Battle.Dialogue = Dialogue
+    Battle.Strings = Strings
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do
@@ -45,6 +66,8 @@ return function(env)
         return false
     end
 
+    -- React.bind / Fx.bind / Dialogue.bind + React.install run from main
+    -- after host presentation callbacks exist.
     function Battle.install(_mod)
         return true
     end

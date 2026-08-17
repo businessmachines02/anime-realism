@@ -1,4 +1,4 @@
-local script = (arg and arg[0]) or "field_battle/tests/run_grid_tests.lua"
+local script = (arg and arg[0]) or "field/tests/run_grid_tests.lua"
 local root = script:gsub("[/\\]tests[/\\][^/\\]+$", "")
 
 local function load(name)
@@ -16,27 +16,44 @@ local function truthy(value, label)
   assert(value, label or "expected truthy value")
 end
 
-local Coords = load("coords.lua")
+local Coords = load("pad/coords.lua")
 package.loaded.coords = Coords
-local Themes = load("themes.lua")
+local Themes = load("stage/themes.lua")
 package.loaded.themes = Themes
-local Grid = load("grid.lua")
-local Layout = load("layout.lua")
-local Arena = load("arena.lua")
-local Survey = load("survey.lua")
-local Cues = load("cues.lua")
-local Callouts = load("callouts.lua")
-local Projectiles = load("projectiles.lua")
-local UI = load("ui.lua")
-local Lifecycle = load("lifecycle.lua")
-local Compat = load("compat.lua")
-local Sprites = load("sprites.lua")
-local Cast = load("cast.lua")
-local Spectators = load("spectators.lua")
-local Wildlife = load("wildlife.lua")
+local FxCatalog = load("fx/fx_catalog.lua")
+package.loaded.fx_catalog = FxCatalog
+local Grid = load("pad/grid.lua")
+local Layout = load("pad/layout.lua")
+local Arena = load("stage/arena.lua")
+local Survey = load("pad/survey.lua")
+local Cues = load("fx/cues.lua")
+local Callouts = load("chrome/callouts.lua")
+local Projectiles = load("fx/projectiles.lua")
+local UI = load("chrome/ui.lua")
+local Lifecycle = load("session/lifecycle.lua")
+local Compat = load("session/compat.lua")
+local Sprites = load("fx/sprites.lua")
+local Cast = load("pad/cast.lua")
+local Spectators = load("session/spectators.lua")
+local Wildlife = load("session/wildlife.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
-local Hooks = load("hooks.lua")
+local Hooks = load("chrome/hooks.lua")
+load("chrome/hooks_draw.lua")(Hooks)
+load("chrome/hooks_input.lua")(Hooks)
+load("chrome/hooks_events.lua")(Hooks)
+
+do
+  local ids = {
+    "cave", "city", "forest", "grave", "gym", "indoor", "mountain", "route", "water",
+  }
+  for i = 1, #ids do
+    local ok, layout = pcall(load, "stage/arenas/" .. ids[i] .. ".lua")
+    if ok and type(layout) == "table" then
+      Themes.registerLayout(layout.id or ids[i], layout)
+    end
+  end
+end
 
 local tests = {}
 
@@ -182,6 +199,10 @@ function tests.supported_battle_gate()
     "double battle stays vanilla")
   truthy(not FieldBattle.shouldUse(mod, { kind = "link", link = true }), "link stays vanilla")
   truthy(not FieldBattle.shouldUse(mod, { kind = "wild", demo = true }), "demo stays vanilla")
+  mod.options.get = function() return "STADIUM" end
+  truthy(FieldBattle.shouldUse(mod, { kind = "wild" }), "legacy STADIUM keeps FIELD")
+  mod.options.get = function() return nil end
+  truthy(FieldBattle.shouldUse(mod, { kind = "wild" }), "unset stage defaults to FIELD")
   mod.options.get = function() return "AUTO" end
   truthy(not FieldBattle.shouldUse(mod, { kind = "wild" }), "disabled stage stays vanilla")
 end
@@ -454,6 +475,77 @@ function tests.move_hud_shows_b_pause_hint()
       rectangle = function() end,
       push = function() end,
       pop = function() end,
+      translate = function() end,
+      scale = function() end,
+    },
+  }
+  local battle = {
+    _arAnimeField = true,
+    phase = "moveSelect",
+    moveIndex = 1,
+    player = {
+      curMoves = {
+        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+      },
+    },
+    data = {
+      moves = {
+        TACKLE = { name = "TACKLE", type = "NORMAL" },
+        GROWL = { name = "GROWL", type = "NORMAL" },
+        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL" },
+        SCRATCH = { name = "SCRATCH", type = "NORMAL" },
+      },
+    },
+    game = {
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+      overworld = { camera = { x = 0, y = 0 }, entities = {} },
+    },
+  }
+  UI.draw(battle)
+  love = prevLove
+  package.loaded["src.render.Font"] = nil
+  local hinted = false
+  local listed = false
+  local up, right, left, down = false, false, false, false
+  for i = 1, #drawn do
+    if drawn[i] == "B PAUSE" then
+      hinted = true
+    end
+    if drawn[i] == "TACKLE" then
+      listed = true
+    end
+    if drawn[i] == "U" then up = true end
+    if drawn[i] == "R" then right = true end
+    if drawn[i] == "L" then left = true end
+    if drawn[i] == "D" then down = true end
+  end
+  truthy(hinted, "classic MOVE HUD tells the player to pause with B")
+  truthy(listed, "classic MOVE HUD lists move names")
+  truthy(up and right and left and down,
+    "classic MOVE HUD labels slots U/R/L/D")
+end
+
+function tests.diamond_move_hud_uses_compass()
+  local drawn = {}
+  package.loaded["src.render.Font"] = {
+    draw = function(text)
+      drawn[#drawn + 1] = text
+    end,
+    width = function()
+      return 8
+    end,
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      push = function() end,
+      pop = function() end,
     },
   }
   local battle = {
@@ -482,17 +574,33 @@ function tests.move_hud_shows_b_pause_hint()
       overworld = { camera = { x = 0, y = 0 }, entities = {} },
     },
   }
-  UI.draw(battle)
+  UI.draw(battle, "DIAMOND")
   love = prevLove
   package.loaded["src.render.Font"] = nil
-  local hinted = false
+  local hinted, up, right = false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then
-      hinted = true
-      break
-    end
+    if drawn[i] == "B PAUSE" then hinted = true end
+    if drawn[i] == "U" then up = true end
+    if drawn[i] == "R" then right = true end
   end
-  truthy(hinted, "move HUD tells the player to pause with B")
+  truthy(hinted, "diamond MOVE HUD keeps the B pause hint")
+  truthy(up and right, "diamond MOVE HUD paints the U/R compass labels")
+end
+
+function tests.move_hud_style_defaults_to_classic()
+  eq(UI.moveHudStyle(nil), "CLASSIC", "unset style is classic")
+  eq(UI.moveHudStyle("classic"), "CLASSIC", "classic is case-insensitive")
+  eq(UI.moveHudStyle("DIAMOND"), "DIAMOND", "diamond is opt-in")
+  eq(FieldBattle.moveHudStyle({
+    options = { get = function() return nil end },
+  }), "CLASSIC", "missing option is classic")
+  eq(FieldBattle.moveHudStyle({
+    options = {
+      get = function(_, key)
+        if key == "move_hud" then return "DIAMOND" end
+      end,
+    },
+  }), "DIAMOND", "option selects diamond")
 end
 
 function tests.hp_chip_stays_on_screen_near_top()
@@ -684,6 +792,7 @@ function tests.compact_arena_keeps_cast_lanes_clear()
   local arena = Arena.generate(nil, plan, 12345)
   eq(arena.pad.sizeU, 4, "tight arena width")
   eq(arena.pad.sizeV, 3, "arena height")
+  truthy(not arena.handcrafted, "tight pad ignores 10x5 hand layouts")
 
   local homes = {
     { plan.pMonX, plan.pMonY },
@@ -2020,6 +2129,13 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   truthy(not (session._trainerCallouts and session._trainerCallouts.foe
       and session._trainerCallouts.foe[1]),
     "emitted callout is not replayed after the hold")
+
+  truthy(Callouts.push(session, "player", "PIKACHU!\nDodge it!", { kind = "react" }),
+    "player react order uses the dialogue strip")
+  eq(session._trainerCallouts.player[1].text, "PIKACHU!\nDodge it!",
+    "player order is live")
+  truthy(Callouts.ownsText(session, "PIKACHU!\nDodge it!"),
+    "owns the player order")
 
   -- Re-arm a shout to test dismiss on menu / learn-move.
   truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
@@ -3880,6 +3996,38 @@ function tests.resolve_sheet_prefers_wilds_export()
   local sheet = Sprites.resolveSheet(mod, nil, "PIKACHU")
   eq(sheet.image, "/wilds/pokemmo/PIKACHU.png", "Wilds resolver used for HGSS")
   eq(sheet.providerId, "pokemmo", "provider id kept")
+end
+
+function tests.projectile_style_registry_is_public()
+  eq(type(Projectiles.registerStyle), "function", "styles register by name")
+end
+
+function tests.hand_arena_layout_matches_authored_pad()
+  local route = Themes.layout("route")
+  truthy(route and route.id == "route", "arenas/route.lua registered")
+  local kit = Themes.kit("route")
+  truthy(kit.layout, "hand layout attached to kit")
+  eq(kit.layout.sizeU, 10, "authored route width")
+  local pad = Coords.layoutPad({ minX = 0, maxX = 9, minY = 0, maxY = 4 }, 1, 0)
+  eq(pad.sizeU, 10, "matching pad width")
+  eq(pad.sizeV, 5, "matching pad height")
+  local plan = {
+    pCellX = 0, pCellY = 2, eCellX = 9, eCellY = 2,
+    pMonX = 3, pMonY = 2, eMonX = 6, eMonY = 2,
+    sx = 1, sy = 0, midX = 4.5, midY = 2,
+  }
+  local battle = { currentMapId = function() return "ROUTE_1" end }
+  local arena = Arena.generate(battle, plan, 1, {
+    pad = pad,
+    gridRect = { minX = 0, maxX = 9, minY = 0, maxY = 4 },
+  })
+  truthy(arena.handcrafted, "matching pad uses arenas/route.lua")
+end
+
+function tests.hooks_wrap_groups_attach()
+  eq(type(Hooks.installDraw), "function", "draw wraps")
+  eq(type(Hooks.installInput), "function", "input wraps")
+  eq(type(Hooks.installEvents), "function", "event wraps")
 end
 
 local count = 0

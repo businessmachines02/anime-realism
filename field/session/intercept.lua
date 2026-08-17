@@ -262,7 +262,7 @@ function Intercept.install(FBV, mod)
 
   local OverworldState = resolveOverworldState()
   if not OverworldState then
-    print("[anime_realism] field_battle: OverworldState.pushBattle not found")
+    print("[anime_realism] field: OverworldState.pushBattle not found")
     return false
   end
 

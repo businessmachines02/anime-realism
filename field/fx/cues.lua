@@ -13,6 +13,10 @@
 -- the first FIELD swing, then replay contact/cast FX on each extra
 -- engine anim row so landed hits stay readable.
 
+-- Cue kinds register via Cues.register(kind, handler). Cues.apply keeps the
+-- existing signature and dispatches the table. Add a kind here instead of
+-- growing the old if-chain.
+
 local Cues = {}
 
 -- Gen1 semi-invulnerable charge moves → field vanish flavor.
@@ -432,55 +436,43 @@ function Cues.flushHeldHit(session, battle)
   return true
 end
 
---- Apply a cue kind to a side. opts.category = "physical"|"special"
-function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
-  if not (session and session.live and session.grid) then
-    return false
+local HANDLERS = {}
+
+function Cues.register(kind, handler)
+  if type(kind) ~= "string" or kind == "" or type(handler) ~= "function" then
+    return Cues
   end
+  HANDLERS[kind] = handler
+  return Cues
+end
+
+Cues.register("dodge", function(session, side, kind, Grid, nudgeCamera, battle, opts)
   local ent = (side == "player") and session.playerMon or session.enemyMon
-  if not ent or ent._removed then
+  if not ent then
     return false
   end
-  kind = tostring(kind or "attack")
   opts = opts or {}
-  local category = normCategory(opts.category)
-  session._lastCueSide = side
-  session._lastCueKind = kind
-  session._lastCueAt = now(session)
-  if category then
-    session._lastAttackCategory = category
-  end
-  if kind == "attack" or kind == "status" then
-    local mid = opts.moveId and tostring(opts.moveId):upper() or nil
-    if mid == "" then
-      mid = nil
-    end
-    session._lastCueMoveId = mid
-    session._lastCueMoveType = opts.moveType
-    if kind == "attack" and not opts.followUp and Cues.isMultiHitMove(mid) then
-      -- First FIELD swing already presented; the engine's hit-1 anim
-      -- row must not replay it. Hits 2+ reuse that skip flag.
-      session._arSkipEngineStrike = true
-      session._multiHitMoveId = mid
-      session._multiHitSide = side
-    end
-  end
   local foe = foeOf(session, side)
   local g = session.grid
+  local category = normCategory(opts.category)
 
-  ent.returning = nil
-  ent.wanderTx, ent.wanderTy = nil, nil
-  ent._wanderCD = 2.4
-
-  if kind == "dodge" then
     Grid.dodge(g, ent, foe)
     if type(ent.play) == "function" then
       ent:play("dodge")
     end
     return true
-  end
+end)
 
-  if kind == "cover" or kind == "hide" then
+Cues.register("cover", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     local tucked = false
     if type(Grid.seekCover) == "function" then
       tucked = Grid.seekCover(g, ent, foe) == true
@@ -499,16 +491,36 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       end
     end
     return true
-  end
+end)
 
-  if kind == "brace" then
+Cues.register("hide", HANDLERS["cover"])
+
+Cues.register("brace", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     if type(ent.play) == "function" then
       ent:play("brace")
     end
     return true
-  end
+end)
 
-  if kind == "status" then
+Cues.register("status", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     local Projectiles = session._deps and session._deps.Projectiles
     local Audio = session._deps and session._deps.Audio
     if Audio and type(Audio.playMove) == "function" then
@@ -522,9 +534,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play("cast")
     end
     return true
-  end
+end)
 
-  if kind == "vanish" then
+Cues.register("vanish", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     local flavor = opts.vanish or Cues.vanishKind(opts.moveId) or "dig"
     ent._vanishKind = flavor
     ent._fieldVanished = nil
@@ -541,9 +562,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play(flavor == "fly" and "vanish_fly" or "vanish_dig")
     end
     return true
-  end
+end)
 
-  if kind == "emerge" then
+Cues.register("emerge", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     local flavor = opts.vanish or ent._vanishKind
       or Cues.vanishKind(opts.moveId) or "dig"
     ent._vanishKind = flavor
@@ -559,9 +589,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play(flavor == "fly" and "emerge_fly" or "emerge_dig")
     end
     return true
-  end
+end)
 
-  if kind == "attack" then
+Cues.register("attack", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     -- Dig / Fly charge turn: disappear instead of striking.
     if not opts.releaseStrike then
       local charging, flavor = isChargeTurn(ent, opts.moveId)
@@ -695,15 +734,26 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       end
     end
     return true
-  end
+end)
 
-  if kind == "hit" then
+Cues.register("hit", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     if type(nudgeCamera) == "function" and battle then
       nudgeCamera(battle, side, 0.35)
     end
     local Audio = session._deps and session._deps.Audio
     if Audio and type(Audio.playHit) == "function" then
-      pcall(Audio.playHit, battle or session._battle, opts.typeMult)
+      pcall(Audio.playHit, battle or session._battle, opts.typeMult, {
+        category = category or session._lastAttackCategory,
+      })
     end
     local Projectiles = session._deps and session._deps.Projectiles
     local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
@@ -741,9 +791,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play("hit")
     end
     return true
-  end
+end)
 
-  if kind == "selfhit" then
+Cues.register("selfhit", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     -- Confusion / recoil / crash: the user damages itself. Stumble in place
     -- with a bonk burst — never knock away from the foe.
     if type(nudgeCamera) == "function" and battle then
@@ -761,9 +820,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play("selfhit")
     end
     return true
-  end
+end)
 
-  if kind == "faint" then
+Cues.register("faint", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     -- Owned by the HP bar hitting 0, not the "fainted!" dialogue.
     if isExitPlaying(ent) then
       return true
@@ -790,9 +858,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       end
     end
     return true
-  end
+end)
 
-  if kind == "recall" then
+Cues.register("recall", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent then
+    return false
+  end
+  opts = opts or {}
+  local foe = foeOf(session, side)
+  local g = session.grid
+  local category = normCategory(opts.category)
+
     if isExitPlaying(ent) then
       return true
     end
@@ -812,8 +889,50 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       ent:play("recall")
     end
     return true
+end)
+
+--- Apply a cue kind to a side. opts.category = "physical"|"special"
+function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
+  if not (session and session.live and session.grid) then
+    return false
+  end
+  local ent = (side == "player") and session.playerMon or session.enemyMon
+  if not ent or ent._removed then
+    return false
+  end
+  kind = tostring(kind or "attack")
+  opts = opts or {}
+  local category = normCategory(opts.category)
+  session._lastCueSide = side
+  session._lastCueKind = kind
+  session._lastCueAt = now(session)
+  if category then
+    session._lastAttackCategory = category
+  end
+  if kind == "attack" or kind == "status" then
+    local mid = opts.moveId and tostring(opts.moveId):upper() or nil
+    if mid == "" then
+      mid = nil
+    end
+    session._lastCueMoveId = mid
+    session._lastCueMoveType = opts.moveType
+    if kind == "attack" and not opts.followUp and Cues.isMultiHitMove(mid) then
+      -- First FIELD swing already presented; the engine's hit-1 anim
+      -- row must not replay it. Hits 2+ reuse that skip flag.
+      session._arSkipEngineStrike = true
+      session._multiHitMoveId = mid
+      session._multiHitSide = side
+    end
   end
 
+  ent.returning = nil
+  ent.wanderTx, ent.wanderTy = nil, nil
+  ent._wanderCD = 2.4
+
+  local fn = HANDLERS[kind]
+  if fn then
+    return fn(session, side, kind, Grid, nudgeCamera, battle, opts)
+  end
   if type(ent.play) == "function" and not ent._pendingCloseStrike then
     ent:play("attack")
   end

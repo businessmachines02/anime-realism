@@ -13,16 +13,31 @@ need=(
   "$MAIN"
   "$ROOT/LICENSE"
   "$ROOT/lib/modload.lua"
-  "$ROOT/immersion/init.lua"
+  "$ROOT/hud/init.lua"
+  "$ROOT/hud/rewards.lua"
+  "$ROOT/hud/hide.lua"
   "$ROOT/battle/init.lua"
-  "$ROOT/battle/reactive_defense.lua"
-  "$ROOT/field_battle/init.lua"
-  "$ROOT/field_battle/audio.lua"
-  "$ROOT/field_battle/spectators.lua"
-  "$ROOT/field_battle/wildlife.lua"
-  "$ROOT/field_battle/callouts.lua"
-  "$ROOT/field_battle/hooks.lua"
-  "$ROOT/field_battle/sprites.lua"
+  "$ROOT/battle/rules/reactive_defense.lua"
+  "$ROOT/battle/rules/react.lua"
+  "$ROOT/battle/rules/dialogue.lua"
+  "$ROOT/battle/chrome/pick.lua"
+  "$ROOT/battle/chrome/bubbles.lua"
+  "$ROOT/battle/fx.lua"
+  "$ROOT/battle/strings.lua"
+  "$ROOT/field/init.lua"
+  "$ROOT/field/pad/coords.lua"
+  "$ROOT/field/fx/fx_catalog.lua"
+  "$ROOT/field/fx/audio.lua"
+  "$ROOT/field/fx/sprites.lua"
+  "$ROOT/field/session/spectators.lua"
+  "$ROOT/field/session/wildlife.lua"
+  "$ROOT/field/chrome/callouts.lua"
+  "$ROOT/field/chrome/hooks.lua"
+  "$ROOT/field/chrome/hooks_draw.lua"
+  "$ROOT/field/chrome/hooks_input.lua"
+  "$ROOT/field/chrome/hooks_events.lua"
+  "$ROOT/field/stage/arena.lua"
+  "$ROOT/field/stage/arenas/route.lua"
 )
 
 for f in "${need[@]}"; do
@@ -40,11 +55,11 @@ rm -f "$OUT"
 zip -q -r "$OUT" \
   main.lua manifest.json LICENSE \
   lib \
-  immersion \
+  hud \
   battle \
-  field_battle \
-  -x "field_battle/tests/*" \
-  -x "field_battle/tests/**" \
+  field \
+  -x "field/tests/*" \
+  -x "field/tests/**" \
   -x "*.DS_Store" \
   -x "**/.DS_Store"
 

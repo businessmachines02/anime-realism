@@ -138,7 +138,7 @@ function Cast.stageEnemy(session, battle, mod, Sprites, Grid)
     local ent = Sprites.makeMon(mod, game, species, plan.eMonX, plan.eMonY,
         plan.foeFace, "enemy", battle.enemy, session.grid)
     if not ent then
-        print("[anime_realism] field_battle: enemy mon failed to stage")
+        print("[anime_realism] field: enemy mon failed to stage")
         return nil
     end
     bindHome(ent, plan, "enemy", session.grid)
@@ -161,7 +161,7 @@ function Cast.stagePlayer(session, battle, mod, Sprites, Grid)
     local ent = Sprites.makeMon(mod, game, species, plan.pMonX, plan.pMonY,
         plan.playerFace, "player", battle.player, session.grid)
     if not ent then
-        print("[anime_realism] field_battle: player mon failed to stage")
+        print("[anime_realism] field: player mon failed to stage")
         return nil
     end
     bindHome(ent, plan, "player", session.grid)
@@ -181,7 +181,7 @@ function Cast.stagePlayer(session, battle, mod, Sprites, Grid)
 end
 
 function Cast.replace(session, battle, mod, Sprites, Grid, side, battler)
-    print("[anime_realism] field_battle: replace", side, battler, session.playerMon, session.enemyMon)
+    print("[anime_realism] field: replace", side, battler, session.playerMon, session.enemyMon)
     local game = battle.game
     local ow = game and game.overworld
     local plan = session.plan
@@ -264,7 +264,7 @@ end
 
 -- Called when a mon has fainted and is being removed from the field.
 function Cast.despawn(session, battle, Grid, side)
-    print("[anime_realism] field_battle: despawn", side, session.playerMon, session.enemyMon)
+    print("[anime_realism] field: despawn", side, session.playerMon, session.enemyMon)
     local ent = (side == "player") and session.playerMon or session.enemyMon
     if not ent then
         return

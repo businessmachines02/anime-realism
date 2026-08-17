@@ -949,10 +949,7 @@ function Lifecycle.begin(battle, mod, deps)
         return false
     end
 
-    local RD = nil
-    if mod and mod._arPackages and mod._arPackages.battle then
-        RD = mod._arPackages.battle.ReactiveDefense
-    end
+    local RD = deps and deps.ReactiveDefense
 
     local foe = Layout.findFoeTrainer(ow, battle)
     local fx, fy

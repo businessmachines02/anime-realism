@@ -136,13 +136,15 @@ function Callouts.ownsText(session, text)
   if n == "" then
     return false
   end
-  local q = session and session._trainerCallouts and session._trainerCallouts.foe
-  if not q then
+  local all = session and session._trainerCallouts
+  if not all then
     return false
   end
-  for i = 1, #q do
-    if Callouts.norm(q[i].text) == n then
-      return true
+  for _, q in pairs(all) do
+    for i = 1, #q do
+      if Callouts.norm(q[i].text) == n then
+        return true
+      end
     end
   end
   return false
@@ -196,8 +198,8 @@ function Callouts.push(session, side, text, opts)
   if not (session and side and side ~= "narrator") then
     return false
   end
-  -- Player lines stay in the white box; this box is foe-only.
-  if side ~= "foe" then
+  -- Player react orders use this box too (FIELD hides the vanilla white box).
+  if side ~= "foe" and side ~= "player" then
     return false
   end
   text = tostring(text or ""):gsub("\v", "\n"):match("^%s*(.-)%s*$") or ""
@@ -206,10 +208,10 @@ function Callouts.push(session, side, text, opts)
   end
   opts = type(opts) == "table" and opts or {}
   session._trainerCallouts = session._trainerCallouts or {}
-  local q = session._trainerCallouts.foe
+  local q = session._trainerCallouts[side]
   if not q then
     q = {}
-    session._trainerCallouts.foe = q
+    session._trainerCallouts[side] = q
   end
   local n = Callouts.norm(text)
   -- Same line already live: do not restart the hold (re-push used to make
@@ -222,7 +224,7 @@ function Callouts.push(session, side, text, opts)
   end
   -- A new shout replaces whatever was showing. Emitted lines are not queued
   -- to play again after the next attack.
-  session._trainerCallouts.foe = {
+  session._trainerCallouts[side] = {
     {
       text = text,
       age = 0,
@@ -322,7 +324,7 @@ local function toastAlpha(age, hold)
   return 1
 end
 
-local function drawBox(g, Font, text, vanillaTop, alpha)
+local function drawBox(g, Font, text, vanillaTop, alpha, fill)
   if alpha <= 0 then
     return
   end
@@ -344,9 +346,10 @@ local function drawBox(g, Font, text, vanillaTop, alpha)
   end
   local bh = math.max(23, padY * 2 + #lines * lineH)
   local x, y, bw = Callouts.dockRect(bh, vanillaTop)
+  fill = fill or { 0.84, 0.84, 0.86 }
 
   g.push("all")
-  g.setColor(0.84, 0.84, 0.86, alpha)
+  g.setColor(fill[1], fill[2], fill[3], alpha)
   g.rectangle("fill", x, y, bw, bh)
   g.setColor(0, 0, 0, alpha)
   g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
@@ -375,8 +378,17 @@ function Callouts.draw(session, battle)
   if Callouts.shouldHold(battle) then
     return
   end
-  local q = session._trainerCallouts.foe
-  if not q or #q == 0 then
+  local all = session._trainerCallouts
+  local playerQ = all.player
+  local foeQ = all.foe
+  local toast, fill
+  if playerQ and playerQ[1] then
+    toast = playerQ[1]
+    fill = { 0.96, 0.92, 0.82 }
+  elseif foeQ and foeQ[1] then
+    toast = foeQ[1]
+    fill = { 0.84, 0.84, 0.86 }
+  else
     return
   end
   local Font = font()
@@ -385,9 +397,8 @@ function Callouts.draw(session, battle)
   end
   local vanillaTop = battle and battle._arNarratorTop or nil
   local g = love.graphics
-  local toast = q[1]
   local alpha = toastAlpha(toast.age, toast.hold)
-  drawBox(g, Font, toast.text, vanillaTop, alpha)
+  drawBox(g, Font, toast.text, vanillaTop, alpha, fill)
 end
 
 return Callouts

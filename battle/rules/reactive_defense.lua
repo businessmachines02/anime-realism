@@ -1,7 +1,7 @@
 -- Anime Realism — Reactive Defense ~ REACT
 --
 -- Focus-meter reactions: Commit / Dodge / Take Cover / Brace / Entrench.
--- Pure logic module; main.lua owns menus, queue splicing, and engine hooks.
+-- Pure logic module; rules/react.lua owns menus, queue splicing, and engine hooks.
 
 
 -- We intentionally want to hide focus points from the player to create a sense of immersion.  

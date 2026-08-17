@@ -15,252 +15,12 @@ local Coords = require("coords")
 
 local Projectiles = {}
 
-local TYPE_COLORS = {
-  NORMAL = { 0.86, 0.86, 0.78 },
-  FIRE = { 1.00, 0.34, 0.12 },
-  WATER = { 0.20, 0.58, 1.00 },
-  ELECTRIC = { 1.00, 0.88, 0.18 },
-  GRASS = { 0.30, 0.82, 0.28 },
-  ICE = { 0.52, 0.90, 1.00 },
-  FIGHTING = { 0.78, 0.28, 0.22 },
-  POISON = { 0.66, 0.30, 0.78 },
-  GROUND = { 0.72, 0.52, 0.28 },
-  FLYING = { 0.62, 0.72, 0.96 },
-  PSYCHIC = { 0.92, 0.34, 0.82 },
-  BUG = { 0.66, 0.78, 0.20 },
-  ROCK = { 0.66, 0.56, 0.34 },
-  GHOST = { 0.52, 0.36, 0.72 },
-  DRAGON = { 0.45, 0.36, 0.88 },
-  DARK = { 0.40, 0.32, 0.28 },
-  STEEL = { 0.72, 0.74, 0.80 },
-  FAIRY = { 0.94, 0.58, 0.78 },
-}
+local Catalog = require("fx_catalog")
+local TYPE_COLORS = Catalog.TYPE_COLORS
+local MOVE_FX = Catalog.MOVE_FX
+local TYPE_STYLE = Catalog.TYPE_STYLE
+local TYPE_CONTACT = Catalog.TYPE_CONTACT
 
--- Named move overrides (style on effect/move; glitz tunes the paint).
-local MOVE_FX = {
-  HYPER_BEAM = { style = "beam", glitz = "thick", duration = 0.46 },
-  SOLARBEAM = { style = "beam", glitz = "thick", duration = 0.44, color = { 0.72, 1.00, 0.42 } },
-  ICE_BEAM = {
-    style = "beam",
-    glitz = "icebolt",
-    duration = 0.36,
-    color = { 0.48, 0.86, 1.00 },
-  },
-  AURORA_BEAM = { style = "beam", glitz = "frost" },
-  PSYBEAM = { style = "beam", glitz = "psy" },
-  THUNDERBOLT = { style = "beam", glitz = "bolt", duration = 0.36 },
-  THUNDERSHOCK = { style = "beam", glitz = "bolt", duration = 0.30 },
-  THUNDER = { style = "bolt", duration = 0.42 },
-  FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.52 },
-  FIRE_BLAST = { style = "blast", glitz = "flame", radius = 24, duration = 0.56 },
-  EMBER = { style = "ember", glitz = "flame", duration = 0.48, arc = 12 },
-  FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
-  HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
-  WATER_GUN = { style = "orb", glitz = "bubble" },
-  BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
-  BUBBLE_BEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
-  BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },
-  SURF = {
-    style = "surf",
-    glitz = "tide",
-    duration = 0.68,
-    radius = 18,
-    color = { 0.18, 0.62, 0.98 },
-  },
-  BLIZZARD = { style = "area", glitz = "frost", radius = 22 },
-  PSYCHIC = {
-    style = "aura",
-    glitz = "psy",
-    duration = 0.62,
-    color = { 0.92, 0.34, 0.82 },
-  },
-  PSYCHIC_M = {
-    style = "aura",
-    glitz = "psy",
-    duration = 0.62,
-    color = { 0.92, 0.34, 0.82 },
-  },
-  CONFUSION = {
-    style = "aura",
-    glitz = "confuse",
-    duration = 0.50,
-    color = { 0.86, 0.48, 0.96 },
-  },
-  DREAM_EATER = { style = "drain", glitz = "psy", duration = 0.52 },
-  MEGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.48 },
-  GIGA_DRAIN = { style = "drain", glitz = "leaf", duration = 0.52 },
-  ABSORB = { style = "drain", glitz = "leaf", duration = 0.42 },
-  RAZOR_LEAF = {
-    style = "razor",
-    glitz = "blade",
-    duration = 0.58,
-    color = { 0.42, 0.88, 0.22 },
-  },
-  PETAL_DANCE = { style = "multi", glitz = "leaf", duration = 0.44 },
-  VINE_WHIP = { style = "stream", glitz = "leaf" },
-  LEECH_SEED = {
-    style = "seed",
-    glitz = "leaf",
-    duration = 0.58,
-    color = { 0.28, 0.72, 0.24 },
-  },
-  SLUDGE = { style = "orb", glitz = "blob", arc = 9 },
-  SLUDGE_BOMB = { style = "orb", glitz = "blob", arc = 12 },
-  ACID = { style = "stream", glitz = "blob" },
-  SMOG = { style = "area", glitz = "blob", radius = 16 },
-  TOXIC = { style = "status", glitz = "blob", duration = 0.55 },
-  SUPERSONIC = {
-    style = "sonic",
-    glitz = "ring",
-    duration = 0.62,
-    color = { 0.70, 0.88, 1.00 },
-  },
-  CONFUSE_RAY = {
-    style = "ray",
-    glitz = "confuse",
-    duration = 0.48,
-    color = { 0.72, 0.32, 0.98 },
-  },
-  EARTHQUAKE = { style = "area", glitz = "quake", radius = 22, duration = 0.62 },
-  FISSURE = { style = "area", glitz = "quake", radius = 18 },
-  ROCK_SLIDE = { style = "area", glitz = "rock", radius = 20 },
-  ROCK_THROW = { style = "orb", glitz = "rock", arc = 16 },
-  EXPLOSION = { style = "area", glitz = "burst", radius = 28, duration = 0.55 },
-  SELFDESTRUCT = { style = "area", glitz = "burst", radius = 26, duration = 0.52 },
-  SWIFT = {
-    style = "swift",
-    glitz = "star",
-    duration = 0.52,
-    color = { 1.00, 0.92, 0.42 },
-  },
-  TRI_ATTACK = { style = "multi", glitz = "tri", duration = 0.40 },
-  NIGHT_SHADE = {
-    style = "shadow",
-    glitz = "shade",
-    duration = 0.52,
-    color = { 0.18, 0.08, 0.26 },
-  },
-  LICK = { style = "contact", glitz = "ghost" },
-  DRAGON_RAGE = { style = "stream", glitz = "dragon" },
-  HORN_DRILL = { style = "beam", glitz = "pierce" },
-  FLASH = { style = "area", glitz = "flash", radius = 18, duration = 0.32 },
-  RECOVER = { style = "heal" },
-  SOFTBOILED = { style = "heal" },
-  REST = { style = "heal" },
-  -- Physical contact signatures (still land at the foe).
-  SLASH = { style = "contact", glitz = "slash" },
-  CUT = { style = "contact", glitz = "slash" },
-  FURY_SWIPES = { style = "contact", glitz = "slash" },
-  FURY_ATTACK = { style = "contact", glitz = "pierce" },
-  HORN_ATTACK = { style = "contact", glitz = "pierce" },
-  PECK = { style = "contact", glitz = "pierce" },
-  DRILL_PECK = { style = "contact", glitz = "pierce" },
-  BITE = { style = "contact", glitz = "bite" },
-  CRUNCH = { style = "contact", glitz = "bite" },
-  BODY_SLAM = { style = "contact", glitz = "impact" },
-  TAKE_DOWN = { style = "contact", glitz = "impact" },
-  DOUBLE_EDGE = { style = "contact", glitz = "impact" },
-  TACKLE = { style = "contact", glitz = "impact" },
-  STRENGTH = { style = "contact", glitz = "impact" },
-  MEGA_PUNCH = { style = "contact", glitz = "impact" },
-  MEGA_KICK = { style = "contact", glitz = "impact" },
-  QUICK_ATTACK = { style = "contact", glitz = "dash" },
-  EXTREMESPEED = { style = "contact", glitz = "dash" },
-  -- Weak / early physicals: still get a readable contact signature.
-  POUND = { style = "contact", glitz = "slap" },
-  SCRATCH = { style = "contact", glitz = "slash" },
-  DOUBLE_SLAP = { style = "contact", glitz = "slap" },
-  DOUBLESLAP = { style = "contact", glitz = "slap" },
-  COMET_PUNCH = { style = "contact", glitz = "punch" },
-  KARATE_CHOP = { style = "contact", glitz = "slash" },
-  DOUBLE_KICK = { style = "contact", glitz = "kick" },
-  ROLLING_KICK = { style = "contact", glitz = "kick" },
-  JUMP_KICK = { style = "contact", glitz = "kick" },
-  HI_JUMP_KICK = { style = "contact", glitz = "kick" },
-  HIGH_JUMP_KICK = { style = "contact", glitz = "kick" },
-  LOW_KICK = { style = "contact", glitz = "kick" },
-  STOMP = { style = "contact", glitz = "impact" },
-  HEADBUTT = { style = "contact", glitz = "impact" },
-  WRAP = { style = "contact", glitz = "wrap" },
-  BIND = { style = "contact", glitz = "wrap" },
-  CONSTRICT = { style = "contact", glitz = "wrap" },
-  POISON_STING = { style = "contact", glitz = "sting" },
-  TWINEEDLE = { style = "contact", glitz = "sting" },
-  PIN_MISSILE = { style = "contact", glitz = "sting" },
-  SPIKE_CANNON = { style = "contact", glitz = "pierce" },
-  LEECH_LIFE = { style = "contact", glitz = "bite" },
-  PAY_DAY = { style = "contact", glitz = "coin" },
-  RAGE = { style = "contact", glitz = "impact" },
-  SUPER_FANG = { style = "contact", glitz = "bite" },
-  WING_ATTACK = { style = "contact", glitz = "wing" },
-  GUST = {
-    style = "gust",
-    glitz = "wind",
-    duration = 0.56,
-    color = { 0.70, 0.84, 1.00 },
-  },
-  FLY = { style = "contact", glitz = "wing" },
-  SKY_ATTACK = { style = "contact", glitz = "wing" },
-  BARRAGE = { style = "contact", glitz = "impact" },
-  BONE_CLUB = { style = "contact", glitz = "impact" },
-  BONEMERANG = { style = "orb", glitz = "rock", arc = 14 },
-  VICEGRIP = { style = "contact", glitz = "pinch" },
-  VICE_GRIP = { style = "contact", glitz = "pinch" },
-  VISE_GRIP = { style = "contact", glitz = "pinch" },
-  CLAMP = { style = "contact", glitz = "pinch" },
-  CRABHAMMER = { style = "contact", glitz = "impact" },
-  WATERFALL = { style = "stream", glitz = "bubble" },
-  SEISMIC_TOSS = { style = "contact", glitz = "impact" },
-  FIRE_PUNCH = { style = "contact", glitz = "punch" },
-  ICE_PUNCH = { style = "contact", glitz = "punch" },
-  THUNDERPUNCH = { style = "contact", glitz = "punch" },
-  THUNDER_PUNCH = { style = "contact", glitz = "punch" },
-  DIZZY_PUNCH = { style = "contact", glitz = "punch" },
-  HYPER_FANG = { style = "contact", glitz = "bite" },
-  THRASH = { style = "contact", glitz = "impact" },
-  STRUGGLE = { style = "contact", glitz = "impact" },
-  SLAM = { style = "contact", glitz = "impact" },
-  SKULL_BASH = { style = "contact", glitz = "impact" },
-  COUNTER = { style = "contact", glitz = "impact" },
-  SUBMISSION = { style = "contact", glitz = "impact" },
-}
-
-local TYPE_STYLE = {
-  FIRE = { style = "stream", glitz = "flame" },
-  WATER = { style = "orb", glitz = "bubble" },
-  ELECTRIC = { style = "beam", glitz = "bolt" },
-  ICE = { style = "beam", glitz = "frost" },
-  PSYCHIC = { style = "spiral", glitz = "psy" },
-  GHOST = { style = "beam", glitz = "ghost" },
-  GRASS = { style = "orb", glitz = "leaf" },
-  POISON = { style = "orb", glitz = "blob" },
-  DRAGON = { style = "stream", glitz = "dragon" },
-  GROUND = { style = "area", glitz = "quake", radius = 18 },
-  ROCK = { style = "orb", glitz = "rock", arc = 14 },
-  BUG = { style = "orb", glitz = "leaf" },
-  FLYING = { style = "gust", glitz = "wind" },
-  FIGHTING = { style = "contact", glitz = "impact" },
-  NORMAL = { style = "orb", glitz = "star" },
-}
-
-local TYPE_CONTACT = {
-  FIRE = "flame",
-  WATER = "bubble",
-  ELECTRIC = "bolt",
-  ICE = "frost",
-  POISON = "blob",
-  FIGHTING = "impact",
-  FLYING = "wing",
-  BUG = "slash",
-  GHOST = "ghost",
-  STEEL = "slash",
-  ROCK = "impact",
-  GROUND = "impact",
-  NORMAL = "slash",
-  DRAGON = "slash",
-  PSYCHIC = "psy",
-  GRASS = "leaf",
-}
 
 local COVER_FLAVORS = {
   rock = { color = { 0.52, 0.45, 0.36 }, lite = { 0.72, 0.64, 0.52 } },
@@ -2159,14 +1919,16 @@ local function drawLightHit(g, p, x, y, t)
   drawContact(g, p, x, y, math.min(1, t * 1.15))
 end
 
-local function drawEffect(g, p, x, y, ox, oy)
-  local c = p.color or { 0.92, 0.92, 1.00 }
-  local t = math.min(1, (p.age or 0) / math.max(0.01, p.duration or 1))
-  local glitz = p.glitz
-  ox = ox or x
-  oy = oy or y
 
-  if p.style == "beam" then
+local STYLE_PAINTERS = {}
+
+function Projectiles.registerStyle(name, fn)
+  if type(name) == "string" and type(fn) == "function" then
+    STYLE_PAINTERS[name] = fn
+  end
+end
+
+Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
     local thick = (glitz == "thick") and 7 or 5
     if glitz == "bolt" or glitz == "icebolt" then
       local ice = glitz == "icebolt"
@@ -2237,7 +1999,8 @@ local function drawEffect(g, p, x, y, ox, oy)
         end
       end
     end
-  elseif p.style == "shadow" then
+end)
+Projectiles.registerStyle("shadow", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Night Shade: slithering shadow ribbon → smoke burst on arrival.
     -- x,y is the traveling tip (interpolated); ox,oy stays at the caster.
     local age = p.age or 0
@@ -2275,9 +2038,11 @@ local function drawEffect(g, p, x, y, ox, oy)
       local smokeT = (t - 0.68) / 0.32
       drawShadeSmoke(g, tipX, tipY, smokeT, age, c)
     end
-  elseif p.style == "shade_smoke" then
+end)
+Projectiles.registerStyle("shade_smoke", function(g, p, x, y, ox, oy, t, c, glitz)
     drawShadeSmoke(g, x, y, t, p.age, c)
-  elseif p.style == "bolt" then
+end)
+Projectiles.registerStyle("bolt", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Vertical thunder strike onto the target (Thunder).
     local top = y - 30 + t * 6
     drawLightningBolt(g, x + math.sin((p.age or 0) * 8) * 2, top, x, y, p.age, c, {
@@ -2294,7 +2059,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("fill", x, y, 5 + t * 10)
     g.setColor(1, 1, 1, 0.55 * (1 - t))
     g.circle("line", x, y, 4 + t * 7)
-  elseif p.style == "area" then
+end)
+Projectiles.registerStyle("area", function(g, p, x, y, ox, oy, t, c, glitz)
     local radius = 3 + math.sin(t * math.pi) * (p.radius or 18)
     g.setColor(c[1], c[2], c[3], 0.30 * (1 - t))
     g.circle("fill", x, y, radius)
@@ -2327,7 +2093,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       end
       drawFlameTongue(g, x, y - 1, 0, 1.1, 0.9 * (1 - t))
     end
-  elseif p.style == "wave" then
+end)
+Projectiles.registerStyle("wave", function(g, p, x, y, ox, oy, t, c, glitz)
     local radius = 6 + t * (p.radius or 20)
     for i = 1, 3 do
       local r = radius - (i - 1) * 5
@@ -2337,19 +2104,26 @@ local function drawEffect(g, p, x, y, ox, oy)
         g.circle("line", x, y + 2, r)
       end
     end
-  elseif p.style == "surf" then
+end)
+Projectiles.registerStyle("surf", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSurfTide(g, x, y, ox, oy, t, p.age, c, p.radius)
-  elseif p.style == "razor" then
+end)
+Projectiles.registerStyle("razor", function(g, p, x, y, ox, oy, t, c, glitz)
     drawRazorVolley(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "swift" then
+end)
+Projectiles.registerStyle("swift", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "ember" then
+end)
+Projectiles.registerStyle("ember", function(g, p, x, y, ox, oy, t, c, glitz)
     drawEmberVolley(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "blast" then
+end)
+Projectiles.registerStyle("blast", function(g, p, x, y, ox, oy, t, c, glitz)
     drawFireBlast(g, x, y, ox, oy, t, p.age, c, p.radius)
-  elseif p.style == "gust" then
+end)
+Projectiles.registerStyle("gust", function(g, p, x, y, ox, oy, t, c, glitz)
     drawGustWind(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "spiral" then
+end)
+Projectiles.registerStyle("spiral", function(g, p, x, y, ox, oy, t, c, glitz)
     if glitz == "psy" then
       drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
     elseif glitz == "flame" then
@@ -2364,18 +2138,23 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.55 * (1 - t))
       g.circle("line", x, y, 5 + t * 8)
     end
-  elseif p.style == "aura" then
+end)
+Projectiles.registerStyle("aura", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPsyAura(g, x, y, ox, oy, t, p.age, c, {
       crush = (glitz ~= "confuse"),
       confuse = (glitz == "confuse"),
     })
-  elseif p.style == "seed" then
+end)
+Projectiles.registerStyle("seed", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSeedPlant(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "sonic" then
+end)
+Projectiles.registerStyle("sonic", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSonicWaves(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "ray" then
+end)
+Projectiles.registerStyle("ray", function(g, p, x, y, ox, oy, t, c, glitz)
     drawConfuseRay(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "stream" then
+end)
+Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Dense particle stream from caster origin → traveling tip.
     local age = p.age or 0
     local dx, dy = x - ox, y - oy
@@ -2430,7 +2209,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     if glitz ~= "flame" then
       drawMove(g, p, x, y)
     end
-  elseif p.style == "multi" then
+end)
+Projectiles.registerStyle("multi", function(g, p, x, y, ox, oy, t, c, glitz)
     local n = (glitz == "tri") and 3 or 5
     for i = 1, n do
       local a = (i / n) * math.pi * 2 + (p.age or 0) * 8
@@ -2442,7 +2222,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.8)
       g.circle("fill", px, py, 1)
     end
-  elseif p.style == "drain" then
+end)
+Projectiles.registerStyle("drain", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Particles drift from foe (x,y) toward attacker origin (ox,oy).
     for i = 1, 5 do
       local u = (t + i * 0.12) % 1
@@ -2453,11 +2234,14 @@ local function drawEffect(g, p, x, y, ox, oy)
     end
     g.setColor(c[1], c[2], c[3], 0.35 * (1 - t))
     g.circle("line", x, y, 6 + t * 4)
-  elseif p.style == "contact" then
+end)
+Projectiles.registerStyle("contact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawContact(g, p, x, y, t)
-  elseif p.style == "light_hit" then
+end)
+Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
-  elseif p.style == "bonk" then
+end)
+Projectiles.registerStyle("bonk", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Self-hit: impact ring plus popping stars.
     local r = 3 + math.sin(t * math.pi) * 8
     g.setColor(c[1], c[2], c[3], 0.55 * (1 - t))
@@ -2475,21 +2259,24 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.line(px - 2.2, py, px + 2.2, py)
       g.line(px, py - 2.2, px, py + 2.2)
     end
-  elseif p.style == "status" then
+end)
+Projectiles.registerStyle("status", function(g, p, x, y, ox, oy, t, c, glitz)
     for i = 1, 5 do
       local a = t * math.pi * 4 + i * math.pi * 0.4
       local r = 5 + t * 8
       g.setColor(c[1], c[2], c[3], 1 - t * 0.45)
       g.circle("fill", x + math.cos(a) * r, y + math.sin(a) * r, 2)
     end
-  elseif p.style == "heal" then
+end)
+Projectiles.registerStyle("heal", function(g, p, x, y, ox, oy, t, c, glitz)
     for i = 1, 3 do
       local hx = (i - 2) * 5
       g.setColor(c[1], c[2], c[3], 1 - t)
       g.rectangle("fill", x + hx - 1, y + 7 - t * 18, 3, 7)
       g.rectangle("fill", x + hx - 3, y + 9 - t * 18, 7, 3)
     end
-  elseif p.style == "puff" then
+end)
+Projectiles.registerStyle("puff", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Faint dust: rising wisps + a settling ring.
     local fade = 1 - t
     g.setColor(c[1], c[2], c[3], 0.28 * fade)
@@ -2507,7 +2294,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.25 * fade)
       g.circle("fill", px - 0.4, py - 0.6, 0.7)
     end
-  elseif p.style == "dig_burst" then
+end)
+Projectiles.registerStyle("dig_burst", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Dirt clods + dust ring as a mon burrows or erupts.
     local fade = 1 - t
     local age = p.age or 0
@@ -2526,7 +2314,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     end
     g.setColor(0.35, 0.22, 0.1, 0.5 * fade)
     g.ellipse("line", x, y + 3, 5 + t * 8, 2.5 + t * 3)
-  elseif p.style == "fly_gust" then
+end)
+Projectiles.registerStyle("fly_gust", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Wind ribbons climbing (or diving) with the flyer.
     local fade = 1 - t
     local age = p.age or 0
@@ -2544,11 +2333,14 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.setColor(c[1], c[2], c[3], 0.25 * fade)
     g.ellipse("fill", x, y + 2, 7 + t * 4, 2.5)
     drawWindSlash(g, x, y, ang, 1.15, c, 0.85 * fade)
-  elseif p.style == "power_hit" then
+end)
+Projectiles.registerStyle("power_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = false })
-  elseif p.style == "power_impact" then
+end)
+Projectiles.registerStyle("power_impact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
-  elseif p.style == "recall" then
+end)
+Projectiles.registerStyle("recall", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Anime red recall laser: irregular thunder forks trainer → mon.
     local fade = 1 - t * 0.25
     local flash = 0.55 + 0.45 * math.abs(math.sin((p.age or 0) * 30))
@@ -2602,6 +2394,18 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("fill", x, y, 3 + flash * 2)
     g.setColor(1, 1, 1, 0.8 * fade * flash)
     g.circle("fill", x, y, 1.6)
+end)
+
+local function drawEffect(g, p, x, y, ox, oy)
+  local c = p.color or { 0.92, 0.92, 1.00 }
+  local t = math.min(1, (p.age or 0) / math.max(0.01, p.duration or 1))
+  local glitz = p.glitz
+  ox = ox or x
+  oy = oy or y
+
+  local painter = STYLE_PAINTERS[p.style]
+  if painter then
+    painter(g, p, x, y, ox, oy, t, c, glitz)
   end
 end
 

@@ -2,7 +2,7 @@
 --
 -- Usage from main:
 --   local ModLoad = load("lib/modload.lua") -- via read+load
---   local pkg = ModLoad.loadPackage("field_battle")
+--   local pkg = ModLoad.loadPackage("field")
 
 return function(mod)
   local M = {}

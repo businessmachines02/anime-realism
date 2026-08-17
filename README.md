@@ -91,7 +91,7 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 - **Always on:** Levels and HP numbers/classic bars are hidden in battle, party,
   summary, and related UI. FIELD uses slim proportional bars without numbers.
   Generic level-up flavor, anime move callouts, speech bubbles, trainer banter,
-  status/focus chips, underdog EXP, and effort-faint consolations are part of
+  underdog EXP, and effort-faint consolations are part of
   the same feel (not extra toggles).
 - **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
 - **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
@@ -152,12 +152,18 @@ remain on their normal presentation path.
 - During FIELD message beats, the large bottom panel yields to small speech
   popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
   `MISSED!`) and speaker bubbles track the active Pokémon. Lines auto-advance
-  about every 1.5 seconds so fights flow into the directional move grid. On the
-  move diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
+  about every 1.5 seconds so fights flow into the move HUD. On the
+  move list or diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
   Pick FIGHT to return to moves. During dialogue, **B** pauses a
   toast; **A** or **B** again resumes.
-- FIELD move selection is a diamond `U/R/L/D` compass (covers the classic
-  TYPE/PP panel). Pressing that direction immediately casts the matching move.
+- FIELD move selection defaults to a compact full-width **classic** 2×2
+  (U/R/L/D labels, D-pad moves the cursor, **A** confirms). **MOVE HUD**
+  `DIAMOND` keeps the compass layout and instant-casts on that direction.
+  The **REACT!** menu defaults to that same 2×2 (`REACT HUD` **GRID**), in
+  the MOVE HUD cream (a bit darker). **TABS** is a full-width one-row strip
+  that slides up from the bottom. **DIAMOND** is the U/R/L/D compass plus **A**.
+  Picking a react shows your trainer order in a dialogue box
+  (`PIKACHU! Dodge it!`).
   Trainers step aside when a Pokémon moves onto or beside them.
 - Trainers and Pokémon begin on a compact 5×3 formation, then move across a
   read-only surveyed fight envelope (normally about 9×7 nearby tiles).
@@ -177,9 +183,8 @@ remain on their normal presentation path.
   found.
 - Hybrid voxel mode is preserved: the voxelized map remains active while the
   Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
-  suppresses classic/Stadium battle chrome and duplicate staged arenas; Stadium
-  visuals remain available when BATTLE STAGE is not FIELD. On battle exit the
-  pre-battle voxel pipeline level is restored so the free-roam overlay resets.
+  suppresses duplicate staged arenas. On battle exit the pre-battle voxel
+  pipeline level is restored so the free-roam overlay resets.
 - Generated cover remains session-only and is kept sparse and small so the live
   map—not an artificial arena—stays visually dominant.
 - Ending by victory, capture, run, or blackout restores the original map
@@ -191,8 +196,10 @@ remain on their normal presentation path.
 |--------|---------|-------------|
 | **BATTLE STAGE** | FIELD | `FIELD` keeps wild/trainer singles on the live map; `AUTO` leaves other presentation mods alone |
 | **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
+| **MOVE HUD** | CLASSIC | FIELD fight menu. `CLASSIC` is a compact full-width 2×2 with U/R/L/D labels (D-pad + **A**). `DIAMOND` is the compass with instant-cast |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
+| **REACT HUD** | GRID | `GRID` is the compact 2×2 (U/R/L/D + **A**). `TABS` is a full-width row that slides up from the bottom. `DIAMOND` is the U/R/L/D compass |
 | **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away, then idle 1–2 tiles off instead of returning home. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
@@ -203,11 +210,11 @@ Three packages under one mod:
 
 | Package | Role |
 |---------|------|
-| `immersion/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
+| `hud/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
 | `battle/` | The overhauled REACT battle system math |
-| `field_battle/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
+| `field/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
 
-`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field_battle/SPEC.md`](field_battle/SPEC.md).
+`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field/SPEC.md`](field/SPEC.md).
 
 ## License
 
@@ -223,9 +230,9 @@ Keep `LICENSE`, and note your changes.
 - `manifest.json` — mod metadata
 - `main.lua` — orchestrator + shared hooks
 - `lib/modload.lua` — package loader
-- `immersion/` — immersion package
-- `battle/` — battle systems (`reactive_defense.lua` lives here)
-- `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
+- `hud/` — hide numbers + EXP/effort rewards
+- `battle/` — battle systems (`rules/` math + pipeline, `chrome/` HUD paint)
+- `field/` — overworld FIELD combat (tile-grid movement tracker)
 - `LICENSE` — CC BY 4.0 (attribution required)
 - `DIFFERENCES.md` — what this mod changes from vanilla
 - `build.sh` — local zip for testing

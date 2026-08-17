@@ -1,6 +1,6 @@
 # FIELD combat SPEC (v4.5.36)
 
-Overworld FIELD battle presentation owned by `field_battle/`.
+Overworld FIELD battle presentation owned by `field/`.
 
 FIELD intercepts ordinary single `kind == "wild"` and `kind == "trainer"`
 battles. Link, demo, doubles, and other special hosts remain unchanged.
@@ -39,7 +39,7 @@ Pixels are presentation only; **pad cells are truth**.
    recoil, and jump-kick crashes play a self-hit stumble. Faints stagger,
    sink, and puff before despawn. Switch recalls (and trainer-side faints) fire a
    red thunder-laser into the ball. Move / hit SFX play from field cues
-   (`audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
+   (`field/fx/audio.lua`) in sync with those FX; engine `Sound.playMove` is muted for
    the session so nothing doubles. Engine anim rows still advance for timing.
 7. Exit restores poses + entity list, clears occupancy, unlocks player, emits `battle.ended` via `src.mods.Runtime`. Map tiles must already match the true overworld (nothing to rewind). Nearby spectator trainers restore to their pre-fight poses.
 8. **Present-clock continuity:** bob, foot-swap, cell lerp, attack/cast/hit anims, and delayed return-home keep advancing during any player prompt / overlay / `waitingUI`. Logic queue may wait; **sprites must not.**
@@ -57,14 +57,14 @@ Pixels are presentation only; **pad cells are truth**.
     capture exit anims also detach as
     soon as they finish so voxel never samples a nil `pose()` sprite.
     Capture resolves ball flight/shakes before shrinking a caught target away.
-11. **Spectator trainers** (`spectators.lua`): trainer NPCs within a 4-tile
+11. **Spectator trainers** (`session/spectators.lua`): trainer NPCs within a 4-tile
     Chebyshev radius of the fight mid soft-walk to a free watching tile, face
     the duel, and may emit uncommon floating shoutouts. Engaged player/foe
     trainers and followers are never recruited. Teardown is temporary.
     FIELD battlers are never parked as overworld followers (the follower
     lead lookup can otherwise hide the foe when the player send-out appears).
     Engaged trainers also keep facing each other (or the duel mid in wilds).
-12. **Wildlife scatter** (`wildlife.lua`): roaming overworld Pokémon
+12. **Wildlife scatter** (`session/wildlife.lua`): roaming overworld Pokémon
     (`overworldWildSpawn`) within ~7 tiles soft-walk outward away from the
     fight. Followers, ambient town décor, and FIELD cast are skipped. Poses
     restore on finish.
@@ -120,7 +120,7 @@ grid.home = { player, enemy, playerTrainer, enemyTrainer }  -- pad (u, v)
 
 World AABB (`minX`/`maxX`/`minY`/`maxY`) is kept for debug / carve identity only.
 
-### Conversion API (`coords.lua`)
+### Conversion API (`pad/coords.lua`)
 
 ```lua
 Coords.worldToPad(g, wx, wy) -> u, v
@@ -147,6 +147,10 @@ All step helpers mutate **pad** only; convert at boundaries (staging, draw, FX, 
   the visible canvas so a mon near the top of the view cannot hide its bar.
 - Compact command and move cursors read `battle.menuIndex` / `battle.moveIndex`; input
   and phase transitions remain owned by `BattleState`.
+- **MOVE HUD** (`move_hud`, default CLASSIC): CLASSIC is a compact full-width
+  2×2 with U/R/L/D slot labels (D-pad moves the cursor, A confirms). DIAMOND
+  is the compass layout; that direction instant-casts. Both keep **B** as
+  pause back to FIGHT/PKMN/ITEM/RUN.
 - Dialogue reuses `battle.shown`, waits, and typewriter progress in a narrow
   bottom panel.
 - Party, Bag, naming, and forced-switch states stay engine-owned.

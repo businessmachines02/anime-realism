@@ -74,8 +74,8 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          echo "==> luajit field_battle/tests/run_grid_tests.lua"
-          luajit field_battle/tests/run_grid_tests.lua
+          echo "==> luajit field/tests/run_grid_tests.lua"
+          luajit field/tests/run_grid_tests.lua
 
       - name: Build release ZIP
         run: chmod +x ./build.sh && ./build.sh
@@ -107,16 +107,16 @@ jobs:
               "main.lua",
               "LICENSE",
               "lib/modload.lua",
-              "immersion/init.lua",
+              "hud/init.lua",
               "battle/init.lua",
-              "field_battle/init.lua",
+              "field/init.lua",
           ]
           for req in required:
               if req not in names:
                   print(f"ERROR: ZIP missing {req} at archive root", file=sys.stderr)
                   sys.exit(1)
-          if any(n.startswith("field_battle/tests/") for n in names):
-              print("ERROR: field_battle tests included in ZIP", file=sys.stderr)
+          if any(n.startswith("field/tests/") for n in names):
+              print("ERROR: field tests included in ZIP", file=sys.stderr)
               sys.exit(1)
           print("ZIP root check: ok")
           print(f"  files: {len(names)}")
