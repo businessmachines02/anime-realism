@@ -302,15 +302,6 @@ return function(mod)
             return opt("hide_battle_hud")
         end
 
-        -- Levels and HP are always hidden everywhere.
-        local function hideLevelsNow()
-            return true
-        end
-
-        local function hideHpNow()
-            return true
-        end
-
         local function lowHpRatio()
             local choice = tostring(mod.options:get("low_hp_threshold") or "20")
             if choice == "40" then
@@ -753,12 +744,6 @@ return function(mod)
             local base = (state and state.foeWhiffDamage) or 10
             local mult = S.COUNTER_SNAPBACK_MULT or 0.50
             return math.max(1, math.floor(base * mult))
-        end
-
-        -- Entrenched: foe rarely punches through max DEF (~18%).
-        local function rollEntrenchBreakthrough()
-            local r = (love and love.math and love.math.random) or math.random
-            return r() < 0.18
         end
 
         mod.events:on("battle.started", function(ev)
@@ -1605,15 +1590,6 @@ return function(mod)
 
         local maybeEnqueueSendBanter
 
-        -- Dodge/hide cover only (EVADE / hidAway) — brace DEF must not use these lines.
-        -- Dodge/hide for miss-anim / whiff text (plain sidestep counts).
-        local function isDodgeCoverTemp(temp)
-            if not temp or not temp.cover then
-                return false
-            end
-            return (temp.evasion or 0) > 0 or temp.hidAway == true or temp.picHidden == true
-        end
-
         -- Only a real hide/fly spot earns "found in cover!" — not sidestep or brace.
         local function isPierceableHideTemp(temp)
             if not temp or temp.hidAway ~= true then
@@ -1907,14 +1883,6 @@ return function(mod)
             end
             item.auto = true
             item.autoDelay = S.FIELD_TOAST_DELAY
-        end
-
-        local function enqueuePromptAfter(battle, text)
-            if type(battle) ~= "table" or type(battle.queue) ~= "table" then
-                return
-            end
-            battle.nextInsert = (battle.nextInsert or 0) + 1
-            table.insert(battle.queue, battle.nextInsert, { text = text })
         end
 
         -- Route battle dialogue into player / foe / narrator bubbles.
@@ -2692,32 +2660,6 @@ return function(mod)
             return ok and true or false
         end
 
-        local function buildPickChoices(kind, battle)
-            local scene = battleScene(battle)
-            local tableFor = kind == "brace" and S.SCENE_BRACE_PICK or S.SCENE_PICK
-            local list = tableFor[scene] or tableFor.route or {}
-            local choices = {}
-            for i = 1, #list do
-                choices[#choices + 1] = list[i]
-            end
-            if kind == "dodge" then
-                local types = playerTypeSet(battle)
-                for ty, on in pairs(types) do
-                    if on and S.TYPE_PICK_EXTRA[ty] then
-                        choices[#choices + 1] = S.TYPE_PICK_EXTRA[ty]
-                    end
-                end
-            end
-            if #choices == 0 then
-                if kind == "brace" then
-                    choices[1] = { label = "BRACE", line = "%s!\nBrace yourself!", boost = 1 }
-                else
-                    choices[1] = { label = "DODGE", line = "%s!\nDodge it!", boost = 1 }
-                end
-            end
-            return choices
-        end
-
         local function indexOfMoveAnim(battle)
             if type(battle) ~= "table" or type(battle.queue) ~= "table" then
                 return nil
@@ -2783,19 +2725,6 @@ return function(mod)
             -- dodge/brace sparkles (TELEPORT / HARDEN / …) would steal the slot and
             -- shove menus/damage past the second mover.
             local idx = indexOfMoveAnim(battle) or indexOfNextTurnScript(battle)
-            if idx then
-                table.insert(battle.queue, idx, item)
-            else
-                table.insert(battle.queue, 1, item)
-            end
-        end
-
-        -- Same-turn COUNTER! must appear before the next executeAction / endOfTurn.
-        local function insertBeforeTurnScript(battle, item)
-            if type(battle) ~= "table" or type(battle.queue) ~= "table" then
-                return
-            end
-            local idx = indexOfNextTurnScript(battle)
             if idx then
                 table.insert(battle.queue, idx, item)
             else
@@ -3036,20 +2965,6 @@ return function(mod)
         local function insertQueueAfter(battle, item)
             battle.nextInsert = (battle.nextInsert or 0) + 1
             table.insert(battle.queue, battle.nextInsert, item)
-        end
-
-        local function queueThematicMoveAnim(battle, moveId)
-            if not moveId or not battle or type(battle.queue) ~= "table" then
-                return
-            end
-            if not (battle.data and battle.data.moves and battle.data.moves[moveId]) then
-                return
-            end
-            insertQueueAfter(battle, {
-                anim = moveId,
-                attackerIsPlayer = true,
-                arFx = true,
-            })
         end
 
         enqueueDodgeHideAnim = function(battle, choice)
@@ -3427,20 +3342,10 @@ return function(mod)
             return battleStage()
         end
 
-        -- FIELD presentation lives in field/ (lifecycle + tile grid).
-        dev.wantsAnimeField = function()
-            return FieldBattleViewer and type(FieldBattleViewer.enabled) == "function"
-                and FieldBattleViewer.enabled(mod)
-        end
-
         dev.installFieldFightSpriteHook = function()
             if FieldBattleViewer and type(FieldBattleViewer.install) == "function" then
                 pcall(FieldBattleViewer.install, mod)
             end
-        end
-
-        dev.owSpritePath = function()
-            return nil
         end
 
         -- Play dodge / cover / brace / entrench FX for Focus reacts.
@@ -3757,16 +3662,6 @@ return function(mod)
             dev.log(battle, "VANISH", "EV+" .. tostring(bonus))
             return bonus
         end
-
-        local function maybeQueueHighEvadeLine(battle, me, evadeBoost)
-            if (evadeBoost or 0) < 3 then
-                return
-            end
-            local line = pickFormatted(S.DODGE_EVADE_HIGH_CALLS, me)
-                or "Sharp instincts!"
-            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, nil)
-        end
-
 
         local function silentStageDelta(who, stat, delta)
             if not who or not who.stages or not stat or not delta or delta == 0 then
