@@ -5,14 +5,14 @@
 -- idle/attack/cast anims advancing while menus sit on top of BattleState.
 --
 -- Sibling packages:
---   immersion/     → HP/EXP hide + rewards
---   battle/        → traditional battle systems
---   field_battle/  → this package
+--   hud/     → HP/EXP hide + rewards
+--   battle/  → REACT rules, menus, FX policy, dialogue paint
+--   field/   → this package
 --
 -- Module map (loaded below):
 --   intercept   push BattleState as a transparent stack host (no wipe)
 --   lifecycle   Idle→Armed→Staging→Live→Finishing session owner
---   hooks       BattleState draw/input wraps + battle.* events
+--   hooks       BattleState wrap composer (draw / input / events siblings)
 --   ui          compact command / diamond moves / dialogue chrome
 --   survey      read-only walkable envelope around the encounter
 --   grid        pad occupancy + step helpers (pad is truth)
@@ -21,7 +21,7 @@
 --   sprites     OW follower sheets as battlers (+ bob / motion)
 --   projectiles world-space FX entities (camera/voxel aligned)
 --   anims       classic move FX affine → live pad centers
---   arena       themed overlay props on pad cells (session-only)
+--   arena       themed overlay props on pad cells (session-only; arenas/*.lua when pad size matches)
 --   themes      map-id → kit (cover/grass/pond colors)
 --   layout      tight adjacent-mon formation along the fight axis
 --   coords      pad ↔ world ↔ pixel conversions
@@ -37,11 +37,22 @@ return function(env)
   local loadFile = env and env.load
   local mod = env and env.mod
   if type(loadFile) ~= "function" then
-    error("field_battle/init.lua requires env.load", 2)
+    error("field/init.lua requires env.load", 2)
   end
 
   local Coords = loadFile("coords.lua")
   local Themes = loadFile("themes.lua")
+  do
+    local ids = {
+      "cave", "city", "forest", "grave", "gym", "indoor", "mountain", "route", "water",
+    }
+    for i = 1, #ids do
+      local ok, layout = pcall(loadFile, "arenas/" .. ids[i] .. ".lua")
+      if ok and type(layout) == "table" and type(Themes.registerLayout) == "function" then
+        Themes.registerLayout(layout.id or ids[i], layout)
+      end
+    end
+  end
   local FxCatalog = loadFile("fx_catalog.lua")
   do
     local loaded = package and package.loaded
@@ -83,6 +94,15 @@ return function(env)
     Wildlife = loadFile("wildlife.lua")
     Compat = loadFile("compat.lua")
     Hooks = loadFile("hooks.lua")
+    do
+      local attach = { "hooks_draw.lua", "hooks_input.lua", "hooks_events.lua" }
+      for i = 1, #attach do
+        local chunk = loadFile(attach[i])
+        if type(chunk) == "function" then
+          chunk(Hooks)
+        end
+      end
+    end
     Intercept = loadFile("intercept.lua")
     Debug = loadFile("debug.lua")
     UI = loadFile("ui.lua")
@@ -116,7 +136,7 @@ return function(env)
   }
 
   local FBV = {
-    id = "field_battle",
+    id = "field",
     title = "Field battle (standalone OW combat)",
     Layout = Layout,
     Sprites = Sprites,
@@ -143,6 +163,80 @@ return function(env)
 
   function FBV.session(battle)
     return Lifecycle.get(battle)
+  end
+
+  -- Hooks / main talk to these instead of Lifecycle / Cues guts.
+  function FBV.tryMouseLook(game, x, y, dx, dy)
+    if not (Lifecycle and type(Lifecycle.liveBattle) == "function") then
+      return
+    end
+    local session = select(2, Lifecycle.liveBattle(game))
+    if session and session.live and type(Lifecycle.tryMouseLook) == "function" then
+      return Lifecycle.tryMouseLook(session, x, y, nil, nil, dx, dy)
+    end
+  end
+
+  function FBV.vanishKind(moveId)
+    if Cues and type(Cues.vanishKind) == "function" then
+      return Cues.vanishKind(moveId)
+    end
+  end
+
+  function FBV.shouldHoldEngineHit(session, opts)
+    return Cues and type(Cues.shouldHoldEngineHit) == "function"
+      and Cues.shouldHoldEngineHit(session, opts)
+  end
+
+  function FBV.holdCloseHit(session, side, opts)
+    if Cues and type(Cues.holdCloseHit) == "function" then
+      return Cues.holdCloseHit(session, side, opts)
+    end
+  end
+
+  function FBV.isMeleeAttack(opts)
+    if Cues and type(Cues.isMeleeAttack) == "function" then
+      return Cues.isMeleeAttack(opts, Projectiles)
+    end
+  end
+
+  function FBV.closeGapHoldActive(session)
+    return Cues and type(Cues.closeGapHoldActive) == "function"
+      and Cues.closeGapHoldActive(session)
+  end
+
+  function FBV.tagSelfDamage(battle, text, side)
+    if Cues and type(Cues.tagSelfDamage) == "function" then
+      return Cues.tagSelfDamage(battle, text, side)
+    end
+  end
+
+  function FBV.tagChargeVanish(battle, text)
+    if Cues and type(Cues.tagChargeVanish) == "function" then
+      return Cues.tagChargeVanish(battle, text)
+    end
+  end
+
+  function FBV.liveBattle(game)
+    if Lifecycle and type(Lifecycle.liveBattle) == "function" then
+      return Lifecycle.liveBattle(game)
+    end
+  end
+
+  function FBV.drawWorldOverlay(battle)
+    if Lifecycle and type(Lifecycle.drawWorldOverlay) == "function" then
+      return Lifecycle.drawWorldOverlay(battle)
+    end
+  end
+
+  function FBV.unwedgeVoxelPass(mod)
+    if Compat and type(Compat.unwedgeVoxelPass) == "function" then
+      return Compat.unwedgeVoxelPass(mod)
+    end
+  end
+
+  function FBV.fieldAllowsStackedBottomUI(battle)
+    return Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
+      and Compat.fieldAllowsStackedBottomUI(battle)
   end
 
   function FBV.active(battle)

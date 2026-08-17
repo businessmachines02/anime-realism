@@ -1,10 +1,10 @@
 -- Battle systems — traditional battle layer
 --
--- Reactive Defense (Focus) math + REACT pipeline + animation policy.
--- Speech bubbles and trainer banter still live in main.lua.
---   immersion/     → HUD hide + rewards
---   battle/        → this package (rules, react menus, classic/FIELD FX policy)
---   field_battle/  → overworld viewer (pad cues, projectiles, compact HUD)
+-- Reactive Defense (Focus) math + REACT pipeline + animation policy +
+-- dialogue (strings, callout rewrite, say wraps, banter cameo, bubbles).
+--   hud/     → hide numbers + rewards
+--   battle/  → this package
+--   field/   → overworld viewer (pad cues, projectiles, compact HUD)
 
 return function(env)
     local loadFile = env and env.load
@@ -25,6 +25,8 @@ return function(env)
     local ReactiveDefense
     local React
     local Fx
+    local Dialogue
+    local Strings
     if type(loadFile) == "function" then
         local ok, value = pcall(loadFile, "reactive_defense.lua")
         if ok and type(value) == "table" then
@@ -44,10 +46,24 @@ return function(env)
         else
             print("[anime_realism] battle/fx: " .. tostring(value))
         end
+        ok, value = pcall(loadFile, "strings.lua")
+        if ok and type(value) == "table" then
+            Strings = value
+        else
+            print("[anime_realism] battle/strings: " .. tostring(value))
+        end
+        ok, value = pcall(loadFile, "dialogue.lua")
+        if ok and type(value) == "table" then
+            Dialogue = value
+        else
+            print("[anime_realism] battle/dialogue: " .. tostring(value))
+        end
     end
     Battle.ReactiveDefense = ReactiveDefense
     Battle.React = React
     Battle.Fx = Fx
+    Battle.Dialogue = Dialogue
+    Battle.Strings = Strings
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do
@@ -58,8 +74,8 @@ return function(env)
         return false
     end
 
-    -- React.bind / Fx.bind + React.install run from main after host
-    -- presentation callbacks exist.
+    -- React.bind / Fx.bind / Dialogue.bind + React.install run from main
+    -- after host presentation callbacks exist.
     function Battle.install(_mod)
         return true
     end

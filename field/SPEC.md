@@ -1,6 +1,6 @@
 # FIELD combat SPEC (v4.5.36)
 
-Overworld FIELD battle presentation owned by `field_battle/`.
+Overworld FIELD battle presentation owned by `field/`.
 
 FIELD intercepts ordinary single `kind == "wild"` and `kind == "trainer"`
 battles. Link, demo, doubles, and other special hosts remain unchanged.

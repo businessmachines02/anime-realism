@@ -1,4 +1,4 @@
-local script = (arg and arg[0]) or "field_battle/tests/run_grid_tests.lua"
+local script = (arg and arg[0]) or "field/tests/run_grid_tests.lua"
 local root = script:gsub("[/\\]tests[/\\][^/\\]+$", "")
 
 local function load(name)
@@ -39,6 +39,21 @@ local Wildlife = load("wildlife.lua")
 local FieldFactory = load("init.lua")
 local FieldBattle = FieldFactory({ load = function() return {} end })
 local Hooks = load("hooks.lua")
+load("hooks_draw.lua")(Hooks)
+load("hooks_input.lua")(Hooks)
+load("hooks_events.lua")(Hooks)
+
+do
+  local ids = {
+    "cave", "city", "forest", "grave", "gym", "indoor", "mountain", "route", "water",
+  }
+  for i = 1, #ids do
+    local ok, layout = pcall(load, "arenas/" .. ids[i] .. ".lua")
+    if ok and type(layout) == "table" then
+      Themes.registerLayout(layout.id or ids[i], layout)
+    end
+  end
+end
 
 local tests = {}
 
@@ -690,6 +705,7 @@ function tests.compact_arena_keeps_cast_lanes_clear()
   local arena = Arena.generate(nil, plan, 12345)
   eq(arena.pad.sizeU, 4, "tight arena width")
   eq(arena.pad.sizeV, 3, "arena height")
+  truthy(not arena.handcrafted, "tight pad ignores 10x5 hand layouts")
 
   local homes = {
     { plan.pMonX, plan.pMonY },
@@ -3886,6 +3902,38 @@ function tests.resolve_sheet_prefers_wilds_export()
   local sheet = Sprites.resolveSheet(mod, nil, "PIKACHU")
   eq(sheet.image, "/wilds/pokemmo/PIKACHU.png", "Wilds resolver used for HGSS")
   eq(sheet.providerId, "pokemmo", "provider id kept")
+end
+
+function tests.projectile_style_registry_is_public()
+  eq(type(Projectiles.registerStyle), "function", "styles register by name")
+end
+
+function tests.hand_arena_layout_matches_authored_pad()
+  local route = Themes.layout("route")
+  truthy(route and route.id == "route", "arenas/route.lua registered")
+  local kit = Themes.kit("route")
+  truthy(kit.layout, "hand layout attached to kit")
+  eq(kit.layout.sizeU, 10, "authored route width")
+  local pad = Coords.layoutPad({ minX = 0, maxX = 9, minY = 0, maxY = 4 }, 1, 0)
+  eq(pad.sizeU, 10, "matching pad width")
+  eq(pad.sizeV, 5, "matching pad height")
+  local plan = {
+    pCellX = 0, pCellY = 2, eCellX = 9, eCellY = 2,
+    pMonX = 3, pMonY = 2, eMonX = 6, eMonY = 2,
+    sx = 1, sy = 0, midX = 4.5, midY = 2,
+  }
+  local battle = { currentMapId = function() return "ROUTE_1" end }
+  local arena = Arena.generate(battle, plan, 1, {
+    pad = pad,
+    gridRect = { minX = 0, maxX = 9, minY = 0, maxY = 4 },
+  })
+  truthy(arena.handcrafted, "matching pad uses arenas/route.lua")
+end
+
+function tests.hooks_wrap_groups_attach()
+  eq(type(Hooks.installDraw), "function", "draw wraps")
+  eq(type(Hooks.installInput), "function", "input wraps")
+  eq(type(Hooks.installEvents), "function", "event wraps")
 end
 
 local count = 0

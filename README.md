@@ -202,11 +202,11 @@ Three packages under one mod:
 
 | Package | Role |
 |---------|------|
-| `immersion/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
+| `hud/` | HP / EXP / numbers feel (hide HUD, underdog EXP, effort faint) |
 | `battle/` | The overhauled REACT battle system math |
-| `field_battle/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
+| `field/` | Overworld FIELD combat (tile-grid cast + OW sprites) |
 
-`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field_battle/SPEC.md`](field_battle/SPEC.md).
+`main.lua` orchestrates options + shared hooks. `lib/modload.lua` loads folder packages for zip and loose installs. How the pieces connect: [`architecture.md`](architecture.md). FIELD pad rules: [`field/SPEC.md`](field/SPEC.md).
 
 ## License
 
@@ -222,9 +222,9 @@ Keep `LICENSE`, and note your changes.
 - `manifest.json` — mod metadata
 - `main.lua` — orchestrator + shared hooks
 - `lib/modload.lua` — package loader
-- `immersion/` — immersion package
+- `hud/` — hide numbers + EXP/effort rewards
 - `battle/` — battle systems (`reactive_defense.lua` lives here)
-- `field_battle/` — overworld FIELD combat (tile-grid movement tracker)
+- `field/` — overworld FIELD combat (tile-grid movement tracker)
 - `LICENSE` — CC BY 4.0 (attribution required)
 - `DIFFERENCES.md` — what this mod changes from vanilla
 - `build.sh` — local zip for testing

@@ -120,6 +120,18 @@ local KITS = {
 
 KITS.default = KITS.route
 
+local LAYOUTS = {}
+
+function Themes.registerLayout(id, layout)
+  if type(id) == "string" and type(layout) == "table" then
+    LAYOUTS[id] = layout
+  end
+end
+
+function Themes.layout(scene)
+  return LAYOUTS[scene]
+end
+
 function Themes.scene(battle)
   local mapId = ""
   if battle and type(battle.currentMapId) == "function" then
@@ -171,7 +183,24 @@ function Themes.scene(battle)
 end
 
 function Themes.kit(scene)
-  return KITS[scene] or KITS.default
+  local base = KITS[scene] or KITS.default
+  local hand = LAYOUTS[scene]
+  if type(hand) ~= "table" then
+    return base
+  end
+  return {
+    cover = hand.coverKind or (hand.cover and hand.cover[1] and hand.cover[1].kind) or base.cover,
+    coverN = base.coverN,
+    grassN = base.grassN,
+    grassKind = base.grassKind,
+    pondN = base.pondN,
+    floor = hand.floor or base.floor,
+    floor2 = hand.floor2 or base.floor2,
+    grass = hand.grassColor or base.grass,
+    pond = hand.pondColor or base.pond,
+    pond2 = hand.pondColor2 or base.pond2,
+    layout = hand,
+  }
 end
 
 return Themes

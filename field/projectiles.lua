@@ -1919,14 +1919,16 @@ local function drawLightHit(g, p, x, y, t)
   drawContact(g, p, x, y, math.min(1, t * 1.15))
 end
 
-local function drawEffect(g, p, x, y, ox, oy)
-  local c = p.color or { 0.92, 0.92, 1.00 }
-  local t = math.min(1, (p.age or 0) / math.max(0.01, p.duration or 1))
-  local glitz = p.glitz
-  ox = ox or x
-  oy = oy or y
 
-  if p.style == "beam" then
+local STYLE_PAINTERS = {}
+
+function Projectiles.registerStyle(name, fn)
+  if type(name) == "string" and type(fn) == "function" then
+    STYLE_PAINTERS[name] = fn
+  end
+end
+
+Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
     local thick = (glitz == "thick") and 7 or 5
     if glitz == "bolt" or glitz == "icebolt" then
       local ice = glitz == "icebolt"
@@ -1997,7 +1999,8 @@ local function drawEffect(g, p, x, y, ox, oy)
         end
       end
     end
-  elseif p.style == "shadow" then
+end)
+Projectiles.registerStyle("shadow", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Night Shade: slithering shadow ribbon → smoke burst on arrival.
     -- x,y is the traveling tip (interpolated); ox,oy stays at the caster.
     local age = p.age or 0
@@ -2035,9 +2038,11 @@ local function drawEffect(g, p, x, y, ox, oy)
       local smokeT = (t - 0.68) / 0.32
       drawShadeSmoke(g, tipX, tipY, smokeT, age, c)
     end
-  elseif p.style == "shade_smoke" then
+end)
+Projectiles.registerStyle("shade_smoke", function(g, p, x, y, ox, oy, t, c, glitz)
     drawShadeSmoke(g, x, y, t, p.age, c)
-  elseif p.style == "bolt" then
+end)
+Projectiles.registerStyle("bolt", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Vertical thunder strike onto the target (Thunder).
     local top = y - 30 + t * 6
     drawLightningBolt(g, x + math.sin((p.age or 0) * 8) * 2, top, x, y, p.age, c, {
@@ -2054,7 +2059,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("fill", x, y, 5 + t * 10)
     g.setColor(1, 1, 1, 0.55 * (1 - t))
     g.circle("line", x, y, 4 + t * 7)
-  elseif p.style == "area" then
+end)
+Projectiles.registerStyle("area", function(g, p, x, y, ox, oy, t, c, glitz)
     local radius = 3 + math.sin(t * math.pi) * (p.radius or 18)
     g.setColor(c[1], c[2], c[3], 0.30 * (1 - t))
     g.circle("fill", x, y, radius)
@@ -2087,7 +2093,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       end
       drawFlameTongue(g, x, y - 1, 0, 1.1, 0.9 * (1 - t))
     end
-  elseif p.style == "wave" then
+end)
+Projectiles.registerStyle("wave", function(g, p, x, y, ox, oy, t, c, glitz)
     local radius = 6 + t * (p.radius or 20)
     for i = 1, 3 do
       local r = radius - (i - 1) * 5
@@ -2097,19 +2104,26 @@ local function drawEffect(g, p, x, y, ox, oy)
         g.circle("line", x, y + 2, r)
       end
     end
-  elseif p.style == "surf" then
+end)
+Projectiles.registerStyle("surf", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSurfTide(g, x, y, ox, oy, t, p.age, c, p.radius)
-  elseif p.style == "razor" then
+end)
+Projectiles.registerStyle("razor", function(g, p, x, y, ox, oy, t, c, glitz)
     drawRazorVolley(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "swift" then
+end)
+Projectiles.registerStyle("swift", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "ember" then
+end)
+Projectiles.registerStyle("ember", function(g, p, x, y, ox, oy, t, c, glitz)
     drawEmberVolley(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "blast" then
+end)
+Projectiles.registerStyle("blast", function(g, p, x, y, ox, oy, t, c, glitz)
     drawFireBlast(g, x, y, ox, oy, t, p.age, c, p.radius)
-  elseif p.style == "gust" then
+end)
+Projectiles.registerStyle("gust", function(g, p, x, y, ox, oy, t, c, glitz)
     drawGustWind(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "spiral" then
+end)
+Projectiles.registerStyle("spiral", function(g, p, x, y, ox, oy, t, c, glitz)
     if glitz == "psy" then
       drawPsyAura(g, x, y, ox, oy, t, p.age, c, { crush = true })
     elseif glitz == "flame" then
@@ -2124,18 +2138,23 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.55 * (1 - t))
       g.circle("line", x, y, 5 + t * 8)
     end
-  elseif p.style == "aura" then
+end)
+Projectiles.registerStyle("aura", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPsyAura(g, x, y, ox, oy, t, p.age, c, {
       crush = (glitz ~= "confuse"),
       confuse = (glitz == "confuse"),
     })
-  elseif p.style == "seed" then
+end)
+Projectiles.registerStyle("seed", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSeedPlant(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "sonic" then
+end)
+Projectiles.registerStyle("sonic", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSonicWaves(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "ray" then
+end)
+Projectiles.registerStyle("ray", function(g, p, x, y, ox, oy, t, c, glitz)
     drawConfuseRay(g, x, y, ox, oy, t, p.age, c)
-  elseif p.style == "stream" then
+end)
+Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Dense particle stream from caster origin → traveling tip.
     local age = p.age or 0
     local dx, dy = x - ox, y - oy
@@ -2190,7 +2209,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     if glitz ~= "flame" then
       drawMove(g, p, x, y)
     end
-  elseif p.style == "multi" then
+end)
+Projectiles.registerStyle("multi", function(g, p, x, y, ox, oy, t, c, glitz)
     local n = (glitz == "tri") and 3 or 5
     for i = 1, n do
       local a = (i / n) * math.pi * 2 + (p.age or 0) * 8
@@ -2202,7 +2222,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.8)
       g.circle("fill", px, py, 1)
     end
-  elseif p.style == "drain" then
+end)
+Projectiles.registerStyle("drain", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Particles drift from foe (x,y) toward attacker origin (ox,oy).
     for i = 1, 5 do
       local u = (t + i * 0.12) % 1
@@ -2213,11 +2234,14 @@ local function drawEffect(g, p, x, y, ox, oy)
     end
     g.setColor(c[1], c[2], c[3], 0.35 * (1 - t))
     g.circle("line", x, y, 6 + t * 4)
-  elseif p.style == "contact" then
+end)
+Projectiles.registerStyle("contact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawContact(g, p, x, y, t)
-  elseif p.style == "light_hit" then
+end)
+Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
-  elseif p.style == "bonk" then
+end)
+Projectiles.registerStyle("bonk", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Self-hit: impact ring plus popping stars.
     local r = 3 + math.sin(t * math.pi) * 8
     g.setColor(c[1], c[2], c[3], 0.55 * (1 - t))
@@ -2235,21 +2259,24 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.line(px - 2.2, py, px + 2.2, py)
       g.line(px, py - 2.2, px, py + 2.2)
     end
-  elseif p.style == "status" then
+end)
+Projectiles.registerStyle("status", function(g, p, x, y, ox, oy, t, c, glitz)
     for i = 1, 5 do
       local a = t * math.pi * 4 + i * math.pi * 0.4
       local r = 5 + t * 8
       g.setColor(c[1], c[2], c[3], 1 - t * 0.45)
       g.circle("fill", x + math.cos(a) * r, y + math.sin(a) * r, 2)
     end
-  elseif p.style == "heal" then
+end)
+Projectiles.registerStyle("heal", function(g, p, x, y, ox, oy, t, c, glitz)
     for i = 1, 3 do
       local hx = (i - 2) * 5
       g.setColor(c[1], c[2], c[3], 1 - t)
       g.rectangle("fill", x + hx - 1, y + 7 - t * 18, 3, 7)
       g.rectangle("fill", x + hx - 3, y + 9 - t * 18, 7, 3)
     end
-  elseif p.style == "puff" then
+end)
+Projectiles.registerStyle("puff", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Faint dust: rising wisps + a settling ring.
     local fade = 1 - t
     g.setColor(c[1], c[2], c[3], 0.28 * fade)
@@ -2267,7 +2294,8 @@ local function drawEffect(g, p, x, y, ox, oy)
       g.setColor(1, 1, 1, 0.25 * fade)
       g.circle("fill", px - 0.4, py - 0.6, 0.7)
     end
-  elseif p.style == "dig_burst" then
+end)
+Projectiles.registerStyle("dig_burst", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Dirt clods + dust ring as a mon burrows or erupts.
     local fade = 1 - t
     local age = p.age or 0
@@ -2286,7 +2314,8 @@ local function drawEffect(g, p, x, y, ox, oy)
     end
     g.setColor(0.35, 0.22, 0.1, 0.5 * fade)
     g.ellipse("line", x, y + 3, 5 + t * 8, 2.5 + t * 3)
-  elseif p.style == "fly_gust" then
+end)
+Projectiles.registerStyle("fly_gust", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Wind ribbons climbing (or diving) with the flyer.
     local fade = 1 - t
     local age = p.age or 0
@@ -2304,11 +2333,14 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.setColor(c[1], c[2], c[3], 0.25 * fade)
     g.ellipse("fill", x, y + 2, 7 + t * 4, 2.5)
     drawWindSlash(g, x, y, ang, 1.15, c, 0.85 * fade)
-  elseif p.style == "power_hit" then
+end)
+Projectiles.registerStyle("power_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = false })
-  elseif p.style == "power_impact" then
+end)
+Projectiles.registerStyle("power_impact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
-  elseif p.style == "recall" then
+end)
+Projectiles.registerStyle("recall", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Anime red recall laser: irregular thunder forks trainer → mon.
     local fade = 1 - t * 0.25
     local flash = 0.55 + 0.45 * math.abs(math.sin((p.age or 0) * 30))
@@ -2362,6 +2394,18 @@ local function drawEffect(g, p, x, y, ox, oy)
     g.circle("fill", x, y, 3 + flash * 2)
     g.setColor(1, 1, 1, 0.8 * fade * flash)
     g.circle("fill", x, y, 1.6)
+end)
+
+local function drawEffect(g, p, x, y, ox, oy)
+  local c = p.color or { 0.92, 0.92, 1.00 }
+  local t = math.min(1, (p.age or 0) / math.max(0.01, p.duration or 1))
+  local glitz = p.glitz
+  ox = ox or x
+  oy = oy or y
+
+  local painter = STYLE_PAINTERS[p.style]
+  if painter then
+    painter(g, p, x, y, ox, oy, t, c, glitz)
   end
 end
 

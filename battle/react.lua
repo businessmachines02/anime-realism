@@ -4,7 +4,7 @@
 -- interactive REACT / COUNTER menus and the damage-pipeline deferral.
 -- Presentation helpers (bubbles, FX, queue inserts) are injected via
 -- React.bind(host) from main.lua so FIELD and classic can share the same
--- rules without this file requiring field_battle/.
+-- rules without this file requiring field/.
 
 local React = {}
 

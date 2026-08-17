@@ -222,6 +222,77 @@ function Arena.generate(battle, plan, seed, envelope)
     local seen = {}
     local coverSlots = {}
     local walkable = envelope and envelope.walkable or nil
+    local hand = kit.layout or (Themes.layout and Themes.layout(scene))
+    local useHand = type(hand) == "table"
+        and type(hand.cover) == "table"
+        and (hand.sizeU or 0) == (layout.sizeU or 0)
+        and (hand.sizeV or 0) == (layout.sizeV or 0)
+
+    if useHand then
+        for i = 1, #hand.cover do
+            local c = hand.cover[i]
+            if c and not reservedPad(plan, layout, c.u, c.v) then
+                local allowed = not walkable or walkable[Coords.key(c.u, c.v)]
+                if allowed then
+                    pushPadSlot(coverSlots, seen, layout, c.u, c.v, c.kind or kit.cover, scene)
+                end
+            end
+        end
+        local ponds = {}
+        for i = 1, #(hand.ponds or {}) do
+            local pond = hand.ponds[i]
+            if pond then
+                local allowed = not walkable or walkable[Coords.key(pond.u, pond.v)]
+                if allowed and not reservedPad(plan, layout, pond.u, pond.v) then
+                    pushPadSlot(coverSlots, seen, layout, pond.u, pond.v, "POND", scene)
+                    ponds[#ponds + 1] = coverSlots[#coverSlots]
+                end
+            end
+        end
+        local grass = {}
+        for i = 1, #(hand.grass or {}) do
+            local g = hand.grass[i]
+            if g then
+                local allowed = not walkable or walkable[Coords.key(g.u, g.v)]
+                if allowed and not reservedPad(plan, layout, g.u, g.v) then
+                    local wx, wy = Coords.padToWorld(layout, g.u, g.v)
+                    local px, py = Coords.padToPx(layout, g.u, g.v)
+                    grass[#grass + 1] = {
+                        u = g.u, v = g.v, cx = wx, cy = wy, px = px, py = py,
+                        w = 16, h = 16, kind = kit.grassKind,
+                    }
+                end
+            end
+        end
+        local overlay = {}
+        for i = 1, #coverSlots do
+            if coverSlots[i].kind ~= "POND" then
+                overlay[#overlay + 1] = coverSlots[i]
+            end
+        end
+        return {
+            gridRect = rect,
+            pad = layout,
+            walkable = envelope and envelope.walkable or nil,
+            water = envelope and envelope.water or nil,
+            coverSlots = (#coverSlots > 0) and coverSlots or nil,
+            overlay = (#overlay > 0) and overlay or nil,
+            grass = grass,
+            ponds = ponds,
+            kit = kit,
+            coverKind = kit.cover,
+            coverScene = scene,
+            scene = scene,
+            wroteMap = false,
+            midX = plan.midX,
+            midY = plan.midY,
+            sx = plan.sx or 1,
+            sy = plan.sy or 0,
+            seed = state[1],
+            handcrafted = true,
+        }
+    end
+
     local edge = edgePads(layout, plan, walkable)
     shuffle(edge, state)
     local coverN = ri(state, kit.coverN[1], kit.coverN[2])

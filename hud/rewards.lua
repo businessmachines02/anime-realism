@@ -1,5 +1,5 @@
--- Immersion rewards — underdog EXP and effort-faint consolations.
--- Installed from Immersion.install. Always-on (legacy option keys still honor
+-- HUD rewards — underdog EXP and effort-faint consolations.
+-- Installed from Hud.install. Always-on (legacy option keys still honor
 -- an explicit false if a save still has them).
 
 local Rewards = {}

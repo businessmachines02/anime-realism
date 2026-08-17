@@ -1,11 +1,10 @@
 -- Anime Realism
 --
 -- Three packages (see folders):
---   immersion/     — HUD hide + underdog EXP / effort
---   battle/        — rules, REACT menus, classic/FIELD FX policy
---                    (callouts, speech bubbles, banter still in main.lua)
---   field_battle/  — standalone overworld FIELD combat (BattleState on stack,
---                    transparent over the live map)
+--   hud/     — hide numbers + underdog EXP / effort
+--   battle/  — rules, REACT menus, FX policy, banter/bubble paint
+--              (say wraps + callout rewrite still in main.lua)
+--   field/   — overworld FIELD combat (BattleState on the live map)
 --
 -- main.lua is the orchestrator + remaining shared hooks (moving into packages
 -- over time). lib/modload.lua loads folder packages for zip + loose installs.
@@ -16,7 +15,7 @@
 
 
 return function(mod)
-    local Immersion
+    local Hud
     local Battle
     local FieldBattleViewer
     local ReactiveDefense
@@ -55,11 +54,11 @@ return function(mod)
     end
 
     if ModLoad and type(ModLoad.loadPackage) == "function" then
-        local value, err = ModLoad.loadPackage("immersion")
+        local value, err = ModLoad.loadPackage("hud")
         if type(value) == "table" then
-            Immersion = value
+            Hud = value
         else
-            print("[anime_realism] immersion: " .. tostring(err))
+            print("[anime_realism] hud: " .. tostring(err))
         end
 
         value, err = ModLoad.loadPackage("battle")
@@ -72,22 +71,22 @@ return function(mod)
             print("[anime_realism] battle: " .. tostring(err))
         end
 
-        value, err = ModLoad.loadPackage("field_battle")
+        value, err = ModLoad.loadPackage("field")
         if type(value) == "table" then
             FieldBattleViewer = value
         else
-            print("[anime_realism] field_battle: " .. tostring(err))
+            print("[anime_realism] field: " .. tostring(err))
         end
 
         -- Expose packages before install so FBV.bind can inject ReactiveDefense.
         mod._arPackages = {
-            immersion = Immersion,
+            hud = Hud,
             battle = Battle,
-            field_battle = FieldBattleViewer,
+            field = FieldBattleViewer,
         }
 
-        if Immersion then
-            pcall(Immersion.install, mod)
+        if Hud then
+            pcall(Hud.install, mod)
         end
         if Battle then
             pcall(Battle.install, mod)
@@ -320,19 +319,7 @@ return function(mod)
             return 0.20
         end
 
-        local S = {}
-        S.PLAYER_LOW = {
-            "Your POKéMON is\nlooking weak!",
-            "Your POKéMON is\nlooking tired!",
-            "Your POKéMON looks\nweak...",
-            "Your POKéMON looks\ntired...",
-        }
-        S.ENEMY_LOW = {
-            "The enemy POKéMON\nis looking weak!",
-            "The enemy POKéMON\nis looking tired!",
-            "The foe's POKéMON\nlooks weak!",
-            "The foe's POKéMON\nlooks tired...",
-        }
+        local S = (Battle and Battle.Strings) or {}
 
         local function pickLine(lines)
             local n = #lines
@@ -695,8 +682,6 @@ return function(mod)
 
         -- Paralysis: still react, but stiffer (~+25% fail). Small per-turn chance
         -- to shake it off (vanilla Gen 1 never wears PAR on its own).
-        S.PAR_REACT_FAIL_EXTRA = 0.25
-        S.PAR_SHAKE_OFF = 0.10
 
         local function rollDodgeSuccess()
             local r = (love and love.math and love.math.random) or math.random
@@ -739,9 +724,6 @@ return function(mod)
         end
 
         -- Light risk only — openings should feel rewarding, not coin-flippy.
-        S.COUNTER_EXTRA_MISS = 0.05
-        S.COUNTER_SNAPBACK_CHANCE = 0.40
-        S.COUNTER_SNAPBACK_MULT = 0.50 -- of the foe's stashed whiff estimate
         local function rollCounterExtraMiss()
             local r = (love and love.math and love.math.random) or math.random
             return r() < S.COUNTER_EXTRA_MISS
@@ -1162,381 +1144,43 @@ return function(mod)
 
         -- Replace "X grew to level N!" with a generic line. StatBox + move
         -- learning still queue right after via uiNext / learnMove.
-        S.LEVEL_UP_LINES = {
-            "Your POKéMON has grown stronger!",
-            "Your POKéMON looks more powerful!",
-            "Your POKéMON's power has surged!",
-            "Your POKéMON has become tougher!",
-        }
    
 
         -- Anime-style trainer callouts for "NAME\nused MOVE!" (not item use).
         -- Wild battles keep the vanilla line. Trainer foes use the trainer's name.
-        S.PLAYER_MOVE_CALLS = {
-            "%s! Use %s!",
-            "%s, use %s!",
-            "Go! %s! %s!",
-            "%s! %s!",
-            "%s! Now! %s!",
-            "%s! Quick, %s!",
-            "OK, %s! %s!",
-            "%s, go! Use %s!",
-            "That's it! %s! %s!",
-            "%s! Hit 'em! %s!",
-            "Come on! %s! %s!",
-            "%s! %s! Go!",
-        }
         -- When the foe looks weak (same threshold as LOW HP AT).
-        S.PLAYER_FINISH_CALLS = {
-            "Finish it! %s! %s!",
-            "%s! Finish it!",
-            "%s! Finish it! %s!",
-            "Now's our chance! %s! %s!",
-            "%s! End it! %s!",
-            "One more! %s! %s!",
-            "%s! Take 'em down!",
-            "Go for it! %s! %s!",
-            "%s! This is it! %s!",
-            "Finish them! %s! %s!",
-        }
         -- After your move announce, when a physical counter is armed.
         -- Going second (foe already acted): announce becomes this line.
-        S.AUTO_COUNTER_CALLS = {
-            "%s! Counter with %s!",
-            "Now, %s! Counter- %s!",
-            "%s! Hit back! %s!",
-            "Counter! %s, use %s!",
-        }
         -- formatAutoCounterCall is defined after pickFormatted (Lua locals are
         -- not visible above their declaration — calling early binds a nil global).
         local formatAutoCounterCall
-        S.PLAYER_COUNTER_CALLS = {
-            AUTO = {
-                "Now, %s! %s!",
-                "%s! Hit back! %s!",
-                "%s! Counter with %s!",
-                "That's our opening! %s! %s!",
-            },
-            BOLD = {
-                "%s! Strike back! %s!",
-                "%s! Hit 'em hard!",
-                "Now, %s! Smash back!",
-                "%s! Return it! %s!",
-            },
-            TRICKY = {
-                "%s! Turn it around!",
-                "Now, %s! Catch 'em!",
-                "%s! Use that opening!",
-                "%s! Slip in- %s!",
-            },
-            SHOWY = {
-                "Show 'em, %s! %s!",
-                "%s! Make it flashy!",
-                "That's it! %s! %s!",
-                "%s! Hero time! %s!",
-            },
-        }
         -- Style-flavored dodge / brace bases (mon name = %s).
-        S.DODGE_STYLE = {
-            AUTO = {
-                "%s! Dodge it!",
-                "Dodge, %s!",
-                "%s! Look out!",
-                "Quick, %s! Dodge!",
-            },
-            BOLD = {
-                "%s! Shrug it off!",
-                "%s! Stand tall-dodge!",
-                "No way, %s! Move!",
-                "%s! Break clear!",
-            },
-            TRICKY = {
-                "%s! Slip aside!",
-                "Fake 'em out, %s!",
-                "%s! Weave through!",
-                "Easy, %s! Sidestep!",
-            },
-            SHOWY = {
-                "%s! Dance aside!",
-                "Show off, %s! Dodge!",
-                "%s! Make it clean!",
-                "Stylish, %s! Move!",
-            },
-        }
-        S.BRACE_STYLE = {
-            AUTO = {
-                "%s! Get ready!",
-                "%s! Brace yourself!",
-                "Hold on, %s!",
-                "%s! We can counter!",
-            },
-            BOLD = {
-                "%s! Take it head-on!",
-                "Stand firm, %s!",
-                "%s! Don't flinch!",
-                "%s! Eat that hit!",
-            },
-            TRICKY = {
-                "%s! Roll with it!",
-                "Wait for it, %s!",
-                "%s! Let 'em commit!",
-                "%s! Then we hit!",
-            },
-            SHOWY = {
-                "%s! Make it look easy!",
-                "Chin up, %s!",
-                "%s! Pose-and brace!",
-                "Cool under fire, %s!",
-            },
-        }
         -- Terrain lines: first %s = mon. Keep short for the text box.
-        S.DODGE_SCENE = {
-            cave = {
-                "%s! Onto that rock!",
-                "%s! Behind the rocks!",
-                "Dodge-jump, %s! That ledge!",
-            },
-            forest = {
-                "%s! Behind that tree!",
-                "%s! Into the brush!",
-                "Dodge-leaf, %s! Hide!",
-            },
-            city = {
-                "%s! Behind that cart!",
-                "%s! Use that alley!",
-                "Dodge-corner, %s!",
-            },
-            route = {
-                "%s! Into the grass!",
-                "%s! Off the path!",
-                "Wide berth, %s!",
-            },
-            mountain = {
-                "%s! Up that cliff!",
-                "%s! Use the ledge!",
-                "Higher ground, %s!",
-            },
-            gym = {
-                "%s! Use the pillars!",
-                "%s! Around the court!",
-                "Sidestep, %s! Pillar!",
-            },
-            water = {
-                "%s! Along the shore!",
-                "%s! Splash aside!",
-                "Over the spray, %s!",
-            },
-            grave = {
-                "%s! Behind a stone!",
-                "%s! Into the dark!",
-                "Fade back, %s!",
-            },
-            indoor = {
-                "%s! Behind cover!",
-                "%s! Use the wall!",
-                "Clear the floor, %s!",
-            },
-        }
-        S.BRACE_SCENE = {
-            cave = {
-                "%s! Brace on the rock!",
-                "%s! Dig in here!",
-            },
-            forest = {
-                "%s! Root in place!",
-                "%s! Hold the line!",
-            },
-            city = {
-                "%s! Hold the street!",
-                "%s! Stand your ground!",
-            },
-            route = {
-                "%s! Hold firm!",
-                "%s! Hold the path!",
-            },
-            mountain = {
-                "%s! Brace on stone!",
-                "%s! Don't slip!",
-            },
-            gym = {
-                "%s! Center court-hold!",
-                "%s! Guard the mark!",
-            },
-            water = {
-                "%s! Brace in the surf!",
-                "%s! Hold the tide!",
-            },
-            grave = {
-                "%s! Stand your ground!",
-                "%s! Don't yield!",
-            },
-            indoor = {
-                "%s! Hold the room!",
-                "%s! Brace up!",
-            },
-        }
         -- Type spice (checked against player curTypes).
-        S.DODGE_TYPE = {
-            FLYING = {
-                "%s! Fly up high!",
-                "%s! Take the air!",
-                "Wing it, %s! Up!",
-            },
-            WATER = {
-                "%s! Dive aside!",
-                "%s! Ride the splash!",
-            },
-            FIRE = {
-                "%s! Burst aside!",
-                "%s! Heat-dash clear!",
-            },
-            ELECTRIC = {
-                "%s! Zip aside!",
-                "%s! Spark-step!",
-            },
-            GRASS = {
-                "%s! Into the leaves!",
-                "%s! Bloom-step clear!",
-            },
-            PSYCHIC = {
-                "%s! Sense-and move!",
-                "%s! Bend aside!",
-            },
-            GHOST = {
-                "%s! Fade through!",
-                "%s! Phase aside!",
-            },
-            BUG = {
-                "%s! Flutter clear!",
-                "%s! Buzz aside!",
-            },
-            GROUND = {
-                "%s! Dust-dash!",
-                "%s! Low and aside!",
-            },
-            ROCK = {
-                "%s! Stone-step clear!",
-            },
-            ICE = {
-                "%s! Slide clear!",
-            },
-            DRAGON = {
-                "%s! Soar clear!",
-            },
-            POISON = {
-                "%s! Slip aside!",
-            },
-            FIGHTING = {
-                "%s! Bob and weave!",
-            },
-        }
-        S.BRACE_TYPE = {
-            FIGHTING = {
-                "%s! Guard up!",
-                "%s! Tough it out!",
-            },
-            ROCK = {
-                "%s! Be the boulder!",
-                "%s! Rock-solid!",
-            },
-            GROUND = {
-                "%s! Root down!",
-            },
-            STEEL = {
-                "%s! Steel yourself!",
-            },
-            NORMAL = {
-                "%s! Tough it out!",
-            },
-            WATER = {
-                "%s! Roll with the wave!",
-            },
-            FLYING = {
-                "%s! Hover-and hold!",
-            },
-        }
         -- Named characters only (gym leaders, E4, etc.). Class titles like
         -- YOUNGSTER / JR.TRAINER use foe mon callouts instead — no "TRAINER!".
-        S.NAMED_TRAINERS = {
-            BROCK = true,
-            MISTY = true,
-            ["LT.SURGE"] = true,
-            ERIKA = true,
-            KOGA = true,
-            SABRINA = true,
-            BLAINE = true,
-            GIOVANNI = true,
-            LORELEI = true,
-            BRUNO = true,
-            AGATHA = true,
-            LANCE = true,
-            ["PROF.OAK"] = true,
-            CHIEF = true,
-            ROCKET = true,
-        }
         -- trainer, mon, move — softer "NAME:" lead-in, not "NAME!"
-        S.TRAINER_MOVE_CALLS = {
-            "%s:\n%s, use %s!",
-            "%s:\n%s! %s!",
-            "%s:\nGo, %s! %s!",
-            "%s:\n%s, %s!",
-            "%s:\n%s, now! %s!",
-            "%s:\nDo it, %s! %s!",
-        }
         -- Foe Pokémon callouts when the trainer label is a generic class.
-        S.FOE_MOVE_CALLS = {
-            "%s!\nUse %s!",
-            "%s, use\n%s!",
-            "Go, %s!\n%s!",
-            "%s!\n%s!",
-            "%s!\n%s, now!",
-            "%s!\nQuick, %s!",
-            "Come on,\n%s! %s!",
-        }
 
         local function isGrewToLevelText(text)
-            local s = tostring(text or ""):lower()
-            return s:find("grew", 1, true) and s:find("level", 1, true)
+            return Battle.Dialogue.isGrewToLevelText(text)
         end
 
         -- Engine move announce is "NAME\nused MOVE!". Item use is "NAME used\nITEM!".
         local function parseUsedMoveText(text)
-            local s = tostring(text or "")
-            local mon, move = s:match("^([^\n]+)\nused ([^\n!]+)!$")
-            if mon and move and mon ~= "" and move ~= "" then
-                return mon, move
-            end
-            return nil
+            return Battle.Dialogue.parseUsedMoveText(text)
         end
 
         local function stripEnemyPrefix(mon)
-            local bare = tostring(mon or ""):match("^[Ee]nemy%s+(.+)$")
-            if bare and bare ~= "" then
-                return bare, true
-            end
-            return mon, false
+            return Battle.Dialogue.stripEnemyPrefix(mon)
         end
 
         local function formatCall(template, a, b, c)
-            local _, n = template:gsub("%%s", "")
-            if n <= 0 then
-                return template
-            end
-            if n >= 3 then
-                return template:format(a, b, c)
-            end
-            if n >= 2 then
-                return template:format(a, b)
-            end
-            return template:format(a)
+            return Battle.Dialogue.formatCall(template, a, b, c)
         end
 
         local function pickFormatted(templates, a, b, c)
-            local t = pickLine(templates)
-            if not t then
-                return nil
-            end
-            return formatCall(t, a, b, c)
+            return Battle.Dialogue.pickFormatted(templates, a, b, c)
         end
 
         formatAutoCounterCall = function(me, moveName)
@@ -1585,7 +1229,6 @@ return function(mod)
         end
 
         -- Battle text box is 18 glyphs wide (Theme.textBox.maxCols).
-        S.BATTLE_TEXT_COLS = 18
 
         local function battleGlyphLen(s)
             local n = 0
@@ -1601,119 +1244,23 @@ return function(mod)
 
         -- Keep anime callouts inside the 2-line box; spill to a 3rd line or CONT.
         local function formatEnemyMoveCall(trainer, mon, move)
-            mon = tostring(mon or "POKéMON")
-            move = tostring(move or "MOVE")
-            if trainer and trainer ~= "" then
-                local head = tostring(trainer) .. ":"
-                local one = mon .. ", use " .. move .. "!"
-                if fitsBattleLine(head) and fitsBattleLine(one) then
-                    return head .. "\n" .. one
-                end
-                local mid = mon .. ", use"
-                local tail = move .. "!"
-                if fitsBattleLine(head) and fitsBattleLine(mid) and fitsBattleLine(tail) then
-                    return head .. "\n" .. mid .. "\n" .. tail
-                end
-                local short = mon .. "! " .. move .. "!"
-                if fitsBattleLine(head) and fitsBattleLine(short) then
-                    return head .. "\n" .. short
-                end
-                if fitsBattleLine(head) and fitsBattleLine(mon .. "!") and fitsBattleLine(tail) then
-                    return head .. "\n" .. mon .. "!\n" .. tail
-                end
-                -- Last resort: CONT so the move name isn't clipped.
-                return head .. "\n" .. mon .. "!\v" .. move .. "!"
-            end
-            local a = mon .. "!\nUse " .. move .. "!"
-            if fitsBattleLine(mon .. "!") and fitsBattleLine("Use " .. move .. "!") then
-                return a
-            end
-            if fitsBattleLine(mon .. ", use") and fitsBattleLine(move .. "!") then
-                return mon .. ", use\n" .. move .. "!"
-            end
-            return mon .. "!\n" .. move .. "!"
+            return Battle.Dialogue.formatEnemyMoveCall(trainer, mon, move)
         end
 
         local function rewriteMoveCallText(battle, text)
-            local mon, move = parseUsedMoveText(text)
-            if not mon then
-                return text
-            end
-            local bare, isEnemy = stripEnemyPrefix(mon)
-            -- Frozen / asleep: no trainer orders — leave the engine's status/move text.
-            if isEnemy and enemyStatusLocked(battle) then
-                return text
-            end
-            if (not isEnemy) and playerStatusLocked(battle) then
-                return text
-            end
-            -- Armed counter: announce IS "Counter with X!" — no generic callout under it.
-            if not isEnemy and playerHasCounter(battle) then
-                return formatAutoCounterCall(bare, move)
-            end
-            if not opt("anime_move_calls") then
-                return text
-            end
-            if isEnemy then
-                local kind = battle and battle.kind
-                -- Wild: leave "Enemy X used Y!" alone.
-                if kind ~= "trainer" and kind ~= "link" then
-                    return text
-                end
-                local trainer = personalTrainerName(battle)
-                if trainer then
-                    local fitted = formatEnemyMoveCall(trainer, bare, move)
-                    if fitted then
-                        return fitted
-                    end
-                    return pickFormatted(S.TRAINER_MOVE_CALLS, trainer, bare, move)
-                        or (trainer .. ":\n" .. bare .. ", use " .. move .. "!")
-                end
-                return formatEnemyMoveCall(nil, bare, move)
-                    or pickFormatted(S.FOE_MOVE_CALLS, bare, move)
-                    or (bare .. "!\nUse " .. move .. "!")
-            end
-            return pickFormatted(S.PLAYER_MOVE_CALLS, bare, move)
-                or (bare .. "!\nUse " .. move .. "!")
+            return Battle.Dialogue.rewriteMoveCallText(battle, text)
         end
 
         local function rewriteLevelUpText(text)
-            if opt("generic_level_up") and isGrewToLevelText(text) then
-                return pickLine(S.LEVEL_UP_LINES) or "Your POKéMON has\ngrown stronger!"
-            end
-            return text
+            return Battle.Dialogue.rewriteLevelUpText(text)
         end
 
-        -- Hide EXP share / EXP.ALL / boosted-EXP dialogue. Level-up lines stay.
         local function isExpGainDialogue(text)
-            local s = tostring(text or "")
-            if s == "" or isGrewToLevelText(s) then
-                return false
-            end
-            local lower = s:lower()
-            if lower:find("exp. points", 1, true) or lower:find("exp points", 1, true) then
-                return true
-            end
-            if lower:find("experience", 1, true) then
-                return true
-            end
-            if lower:find("exp.all", 1, true) or lower:find("exp all", 1, true) then
-                return true
-            end
-            if lower:find("gained", 1, true)
-                and (lower:find("exp", 1, true) or lower:find("boosted", 1, true)) then
-                return true
-            end
-            -- Scrolled second page: "123 EXP. Points!"
-            if lower:find("exp", 1, true) and lower:find("point", 1, true) then
-                return true
-            end
-            return false
+            return Battle.Dialogue.isExpGainDialogue(text)
         end
 
         local function rewriteBattleText(battle, text)
-            text = rewriteLevelUpText(text)
-            return rewriteMoveCallText(battle, text)
+            return Battle.Dialogue.rewriteBattleText(battle, text)
         end
 
         local function playerMonName(battle)
@@ -1866,18 +1413,7 @@ return function(mod)
             return line, entry.boost or 1
         end
 
-        S.DODGE_FAIL_CALLS = {
-            "...but it was\ntoo slow!",
-        }
         -- Narrator line for a failed dodge (bottom text box, not a speech bubble).
-        S.DODGE_TOO_SLOW = "...but it was\ntoo slow!"
-        S.PAR_REACT_FAIL = "...but it couldn't\nmove right!"
-        S.PAR_SHAKE_CALLS = {
-            "%s shook off\nthe paralysis!",
-            "%s's body\nlimbered up!",
-            "%s fought through\nthe paralysis!",
-            "The paralysis\nleft %s!",
-        }
         local function isDodgeFailNarrator(text)
             if type(text) ~= "string" then
                 return false
@@ -1898,308 +1434,18 @@ return function(mod)
             return S.PAR_REACT_FAIL
         end
         -- Real hide pierced — never plain sidestep, never brace/entrench.
-        S.COVER_HIT_CALLS = {
-            "But it found\n%s!",
-            "Still got hit,\n%s!",
-            "%s!\nHit through cover!",
-            "Cover wasn't\nenough!",
-        }
         -- Miss while dodging — replaces vanilla "attack missed!".
-        S.DODGE_WHIFF_CALLS = {
-            "But %s\ndodged aside!",
-            "%s slipped\naway!",
-            "Too slow!\n%s dodged!",
-            "The attack\nwhiffed past!",
-            "%s!\nSafe in cover!",
-        }
         -- Evasive hide (PATH / grass / fly / …): chance for extra EVADE.
         -- Light buff vs plain sidestep — brush/cover should feel worth picking.
-        S.VANISH_CHANCE = 0.40
-        S.VANISH_EVADE_BONUS = 1
-        S.VANISH_CALLS = {
-            "Vanished from\nthe foe's sight!",
-            "%s vanished from\nsight!",
-            "Out of the foe's\nsight!",
-            "%s slipped from\nview!",
-            "Gone from view!",
-            "%s melted into\ncover!",
-            "Can't be seen!",
-            "%s winked out of\nsight!",
-        }
         -- Weighted EVADE rolls so dodge strength isn't fixed by the menu pick.
         -- basic = plain DODGE sidestep; hide = PATH / grass / fly / dive / …
         -- Hide leans a touch higher so grass/cover reads as safer than a sidestep.
-        S.DODGE_EVADE_ROLL = {
-            basic = { 1, 1, 1, 1, 2, 2 },
-            hide = { 1, 2, 2, 2, 2, 3, 3, 3, 3, 4 },
-        }
-        S.DODGE_EVADE_HIGH_CALLS = {
-            "Sharp instincts!",
-            "Perfect timing!",
-            "%s moved like\na blur!",
-            "What a read!",
-        }
         -- Foe punches through your entrenched guard (DEF stripped for this hit).
-        S.BREAKTHROUGH_CALLS = {
-            "Broke through\nthe guard!",
-            "The defense\nshattered!",
-            "Pushed past\n%s!",
-            "Guard broken!\n%s!",
-        }
-        S.LEAVE_COVER_CALLS = {
-            "%s!\nLeft cover!",
-            "Breaking cover,\n%s!",
-            "%s!\nComing out!",
-            "Leave cover,\n%s! Strike!",
-            "%s!\nCome out!",
-            "Out of hiding,\n%s!",
-            "%s!\nSurface and\nstrike!",
-        }
         -- Stay in a real hide — mon stays tucked away (pic hidden).
-        S.HOLD_POSITION_CALLS = {
-            "%s!\nHold on!",
-            "Stay in cover,\n%s!",
-            "%s!\nKeep hiding!",
-            "Hold tight,\n%s!",
-            "%s!\nDon't come out!",
-            "Stay put,\n%s!",
-            "%s!\nKeep cover!",
-            "Stay ready\nin cover, %s!",
-        }
         -- Random deep-cover lock: can't leave (tree / dive / boulder / …).
-        S.DEEP_COVER_CHANCE = 0.30
-        S.DEEP_COVER_CALLS = {
-            TREE = {
-                "%s is still\nup the tree!",
-                "%s can't climb\ndown yet!",
-                "Still perched-\n%s, hold!",
-            },
-            BRUSH = {
-                "%s is deep in\nthe brush!",
-                "Can't leave the\nthicket yet!",
-            },
-            GRASS = {
-                "%s is buried\nin the grass!",
-                "Still hidden in\nthe tall grass!",
-            },
-            ROCK = {
-                "%s is pinned\nbehind a rock!",
-                "Can't leave the\nboulder yet!",
-            },
-            STONE = {
-                "%s ducks behind\nthe stone!",
-                "Still behind the\nstone!",
-            },
-            CLIFF = {
-                "%s is stuck up\nthe cliff!",
-                "Can't descend\nyet!",
-            },
-            LEDGE = {
-                "%s clings to\nthe ledge!",
-                "Still on the\nledge!",
-            },
-            ["FLY UP"] = {
-                "%s is still\nhigh above!",
-                "%s can't land\nyet!",
-                "Still airborne-\nhold!",
-            },
-            DIVE = {
-                "%s is still\nunderwater!",
-                "%s can't surface\nyet!",
-                "Deep below-\nhold breath!",
-            },
-            SPLASH = {
-                "%s is still\nin the water!",
-                "Can't leave the\nwaves yet!",
-            },
-            SHORE = {
-                "%s hugs the\nshoreline!",
-                "Still along the\nshore!",
-            },
-            CART = {
-                "%s is tucked\nbehind the cart!",
-                "Still using the\ncart for cover!",
-            },
-            ALLEY = {
-                "%s is deep in\nthe alley!",
-                "Can't leave the\nalley yet!",
-            },
-            PILLAR = {
-                "%s stays behind\nthe pillar!",
-                "Still using the\npillar!",
-            },
-            SHADOW = {
-                "%s is lost in\nthe dark!",
-                "Still in the\nshadows!",
-            },
-            COVER = {
-                "%s can't leave\ncover yet!",
-                "Still dug in-\nhold!",
-            },
-            WALL = {
-                "%s presses to\nthe wall!",
-                "Still using the\nwall!",
-            },
-            _default = {
-                "%s can't leave\ncover yet!",
-                "%s is stuck in\nhiding!",
-                "Too deep in\ncover-hold!",
-                "%s needs a\nmoment more!",
-            },
-        }
-        S.SCENE_COVER_SPOT = {
-            forest = "TREE",
-            cave = "ROCK",
-            water = "DIVE",
-            mountain = "CLIFF",
-            grave = "STONE",
-            route = "GRASS",
-            city = "CART",
-            gym = "PILLAR",
-            indoor = "COVER",
-        }
         -- Idle pulses while braced / hiding during the command menu.
-        S.AMBIENT_DELAY = 2.2
-        S.AMBIENT_DELAY_JITTER = 1.0
-        S.AMBIENT_BRACE_MOVES = {
-            "HARDEN", "WITHDRAW", "DEFENSE_CURL", "HARDEN", "MEDITATE",
-        }
-        S.AMBIENT_ENTRENCH_MOVES = {
-            "HARDEN", "BARRIER", "WITHDRAW", "ACID_ARMOR", "HARDEN",
-        }
         -- Spot-themed loops (grass → GROWTH, dig spots → DIG, water → SURF…).
-        S.AMBIENT_HIDE_MOVES = {
-            GRASS = { "GROWTH", "RAZOR_LEAF", "GROWTH", "VINE_WHIP" },
-            BRUSH = { "GROWTH", "RAZOR_LEAF", "STUN_SPORE" },
-            TREE = { "GROWTH", "RAZOR_LEAF", "LEECH_SEED" },
-            DIVE = { "SURF", "WITHDRAW", "BUBBLE", "CLAMP" },
-            SPLASH = { "SURF", "WATER_GUN", "BUBBLE" },
-            SHORE = { "SURF", "WATER_GUN", "SAND_ATTACK" },
-            ROCK = { "DIG", "ROCK_THROW", "HARDEN" },
-            STONE = { "DIG", "ROCK_THROW", "HARDEN" },
-            LEDGE = { "DIG", "QUICK_ATTACK" },
-            CLIFF = { "DIG", "FLY", "ROCK_SLIDE" },
-            ["FLY UP"] = { "FLY", "GUST", "WING_ATTACK", "SKY_ATTACK" },
-            PATH = { "DIG", "SAND_ATTACK", "DOUBLE_TEAM" },
-            CART = { "DOUBLE_TEAM", "SMOKESCREEN", "DIG" },
-            ALLEY = { "SMOKESCREEN", "DOUBLE_TEAM", "DIG" },
-            SHADOW = { "NIGHT_SHADE", "TELEPORT", "LICK" },
-            PILLAR = { "BARRIER", "HARDEN", "REFLECT" },
-            WALL = { "BARRIER", "HARDEN", "REFLECT" },
-            COURT = { "DOUBLE_TEAM", "QUICK_ATTACK" },
-            COVER = { "DIG", "DOUBLE_TEAM", "MINIMIZE" },
-            ZIP = { "FLASH", "THUNDER_WAVE", "DOUBLE_TEAM" },
-            BURST = { "SMOKESCREEN", "EMBER", "FLAMETHROWER", "FIRE_SPIN" },
-            FADE = { "TELEPORT", "NIGHT_SHADE" },
-            SENSE = { "CONFUSION", "TELEPORT", "DISABLE" },
-        }
         -- Entrench hold: locked stance until a counter opening (or max turns).
-        S.ENTRENCH_MAX_TURNS = 3
-        S.STAY_ENTRENCHED_CALLS = {
-            "Stay entrenched, %s!",
-            "%s! Hold the trench!",
-            "Keep digging in, %s!",
-            "%s! Stay firm!",
-            "Don't break, %s!",
-            "%s! Weather it!",
-        }
-        S.BREAK_ENTRENCH_CALLS = {
-            "%s! Break stance!",
-            "Enough- %s, move!",
-            "%s! Can't hold!",
-        }
-        S.TRAINER_FOE_DODGE_CALLS = {
-            "%s: %s, dodge!",
-            "%s: Dodge it, %s!",
-            "%s: %s, get aside!",
-            "%s: Move, %s!",
-            "%s: %s, now-dodge!",
-        }
-        S.FOE_DODGE_CALLS = {
-            "%s! Dodge it!",
-            "%s, get aside!",
-            "%s! Move!",
-            "Quick, %s! Dodge!",
-        }
-        S.TRAINER_FOE_BRACE_CALLS = {
-            "%s: %s, brace!",
-            "%s: Dig in, %s!",
-            "%s: %s, hold firm!",
-            "%s: Stand firm, %s!",
-        }
-        S.FOE_BRACE_CALLS = {
-            "%s! Brace!",
-            "%s, dig in!",
-            "%s! Hold firm!",
-            "Stand firm, %s!",
-        }
-        S.TRAINER_FOE_COUNTER_CALLS = {
-            "%s: %s, hit back!",
-            "%s: Counter, %s!",
-            "%s: Now, %s! Strike!",
-        }
-        S.FOE_COUNTER_CALLS = {
-            "%s! Hit back!",
-            "%s! Counter!",
-            "Now, %s! Strike!",
-        }
-        S.TRAINER_FOE_COUNTER_BACK_CALLS = {
-            "%s: Too slow! %s, counter!",
-            "%s: %s! Punish that!",
-            "%s: Got you! Counter, %s!",
-        }
-        S.FOE_COUNTER_BACK_CALLS = {
-            "%s! Counters!",
-            "Too slow! %s hits back!",
-            "%s! Punished!",
-        }
-        S.TRAINER_FOE_AGAIN_CALLS = {
-            "%s: Again, %s!",
-            "%s: %s, once more!",
-            "%s: Don't stop, %s!",
-            "%s: They're open! %s, again!",
-            "%s: Keep going, %s!",
-            "%s: %s! One more!",
-            "%s: Don't let up!",
-            "%s: Hit 'em again, %s!",
-        }
-        S.FOE_AGAIN_CALLS = {
-            "%s! Again!",
-            "%s, once more!",
-            "Don't stop, %s!",
-            "They're open! %s, again!",
-            "%s! One more!",
-            "Don't let up! %s!",
-        }
-        S.TRAINER_FOE_LEAVE_COVER_CALLS = {
-            "%s: %s, break cover!",
-            "%s: Come out, %s!",
-            "%s: %s, now-strike!",
-        }
-        S.FOE_LEAVE_COVER_CALLS = {
-            "%s! Break cover!",
-            "Come out, %s!",
-            "%s, now-strike!",
-        }
-        S.AGAIN_CALLS = {
-            "%s! One more!",
-            "Don't stop, %s!",
-            "%s! Keep going!",
-            "There's an opening—hit again!",
-            "They're reeling—one more time!",
-            "Now's your chance, %s!",
-            "Don't let up, %s!",
-            "Press in! %s, again!",
-            "You've got them! Again!",
-            "They're open—strike again!",
-            "%s! Finish it!",
-            "Keep up the pressure!",
-            "One more hit, %s!",
-            "Go again, %s!",
-            "Don't give them space!",
-            "You have the opening—again!",
-            "%s! Hit again!",
-        }
    
 
         local function enemyMonName(battle)
@@ -2276,669 +1522,6 @@ return function(mod)
 
         -- speaker (+ optional mon). Persona lines when you or they send out.
         -- player lines: (speaker, your mon). enemy lines: (speaker, their mon).
-        S.BANTER = {
-            kid = {
-                player = {
-                    "%s: A %s, huh?! Looks tough!",
-                    "%s: Wow, a %s!",
-                    "%s: %s looks so cool!",
-                    "%s: Hi, %s! Let's play!",
-                    "%s: Whoa! A real %s!",
-                    "%s: %s?! I want one!",
-                    "%s: Your %s is awesome!",
-                    "%s: Neat! A %s!",
-                    "%s: Is %s your favorite?",
-                    "%s: A %s... I'm nervous!",
-                },
-                enemy = {
-                    "%s: Go, %s!",
-                    "%s: Do your best, %s!",
-                    "%s: I believe in %s!",
-                    "%s: You can do it, %s!",
-                    "%s: Show them, %s!",
-                    "%s: Ready, %s?!",
-                    "%s: Please win, %s!",
-                    "%s: Go go go, %s!",
-                },
-                idle = {
-                    "%s: This is fun!",
-                    "%s: You're good!",
-                    "%s: Nice moves!",
-                    "%s: Wow!",
-                    "%s: My heart's racing!",
-                    "%s: Best battle ever!",
-                    "%s: Don't go easy!",
-                    "%s: I'm learning so much!",
-                    "%s: Again! Again!",
-                    "%s: This rules!",
-                },
-                ahead = {
-                    "%s: Am I winning?!",
-                    "%s: Yes! Go me!",
-                    "%s: I'm doing it!",
-                    "%s: See? I'm good!",
-                },
-                behind = {
-                    "%s: Uh-oh...",
-                    "%s: Wait, no fair!",
-                    "%s: I can still catch up!",
-                    "%s: Don't cry... focus!",
-                },
-                player_weak = {
-                    "%s: One more? Maybe?",
-                    "%s: Your mon looks tired...",
-                    "%s: Hang in there!",
-                },
-                self_weak = {
-                    "%s: Ow ow ow!",
-                    "%s: We're okay! ...Right?",
-                    "%s: Don't give up!",
-                },
-                long = {
-                    "%s: So long... but cool!",
-                    "%s: My legs are tired!",
-                    "%s: Still going?!",
-                },
-            },
-            cocky = {
-                player = {
-                    "%s: A %s? That all?",
-                    "%s: %s? Hah! Weak!",
-                    "%s: Don't bore me with %s!",
-                    "%s: %s... Easy prey!",
-                    "%s: %s? Cute. Not enough!",
-                    "%s: Bringing %s? Bold.",
-                    "%s: I've beaten better than %s!",
-                    "%s: %s won't last a minute!",
-                    "%s: Stand aside, %s!",
-                    "%s: Try harder than %s next time!",
-                },
-                enemy = {
-                    "%s: Crush them, %s!",
-                    "%s: Show off, %s!",
-                    "%s: No contest!",
-                    "%s: Flex on them, %s!",
-                    "%s: End this, %s!",
-                    "%s: Make it flashy, %s!",
-                    "%s: Don't blink- %s!",
-                    "%s: Own the field, %s!",
-                },
-                idle = {
-                    "%s: Too easy!",
-                    "%s: Wake me when it's over!",
-                    "%s: Is that it?",
-                    "%s: Yawn...",
-                    "%s: Speed it up!",
-                    "%s: I'm barely trying!",
-                    "%s: Come on, impress me!",
-                    "%s: Predictable!",
-                    "%s: I've seen worse... barely!",
-                    "%s: Step it up!",
-                },
-                ahead = {
-                    "%s: Outmatched!",
-                    "%s: As expected!",
-                    "%s: Too slow!",
-                    "%s: Know your league!",
-                    "%s: This is why I'm top tier!",
-                    "%s: Don't look so surprised!",
-                },
-                behind = {
-                    "%s: Hmph-fine!",
-                    "%s: Don't celebrate!",
-                    "%s: A fluke. Nothing more!",
-                    "%s: Tch... lucky!",
-                    "%s: I'm just toying with you!",
-                },
-                player_weak = {
-                    "%s: Finish it!",
-                    "%s: They're done!",
-                    "%s: Tap out already!",
-                    "%s: One hit left. Maybe.",
-                    "%s: Smell the defeat!",
-                },
-                self_weak = {
-                    "%s: Whatever- still winning!",
-                    "%s: I meant to take that!",
-                    "%s: Cute hit. My turn!",
-                },
-                long = {
-                    "%s: Dragging this? Rude!",
-                    "%s: Wrap it up!",
-                    "%s: I'm getting bored again!",
-                },
-           
-            },
-            evil = {
-                player = {
-                    "%s: A %s...? Hand it over to Team Rocket!",
-                    "%s: %s? That's nothing special!",
-                    "%s: That %s is blocking our plans!",
-                    "%s: Hmm, a %s... Could be valuable!",
-                    "%s: %s looks easy to take!",
-                    "%s: We'll wipe out %s and take what we want!",
-                    "%s: Another %s to capture!",
-                    "%s: Keep %s out of Team Rocket's way!",
-                    "%s: %s... won't save you now!",
-                    "%s: We'll steal it later. Take down %s first!",
-                },
-                enemy = {
-                    "%s: Go, %s! Show them Team Rocket's strength!",
-                    "%s: Make them regret facing us!",
-                    "%s: No mercy, %s!",
-                    "%s: Crush them, %s!",
-                    "%s: Show no pity, %s!",
-                    "%s: Attack now, %s!",
-                    "%s: Obey, %s! No holding back!",
-                    "%s: Make them fear Team Rocket, %s!",
-                },
-           
-                idle = {
-                    "%s: This is Team Rocket's show!",
-                    "%s: Nobody outsmarts Team Rocket!",
-                    "%s: Heh heh heh...",
-                    "%s: You can't run from us!",
-                    "%s: Your journey ends here!",
-                    "%s: Team Rocket always comes out on top!",
-                    "%s: Squirm a bit more for us!",
-                    "%s: Crime pays—watch and learn!",
-                    "%s: You'll hand over your cash eventually!",
-                },
-                ahead = {
-                    "%s: You can't win!",
-                    "%s: Just as we planned!",
-                    "%s: Too easy for Team Rocket!",
-                    "%s: Music to our ears!",
-                    "%s: You fell for Team Rocket's trap!",
-                },
-                behind = {
-                    "%s: This can't be...!",
-                    "%s: You'll pay for that!",
-                    "%s: Just a minor setback!",
-                    "%s: The boss will hear about this...",
-                },
-                player_weak = {
-                    "%s: Give up already!",
-                    "%s: It's finished!",
-                    "%s: Down on your knees!",
-                    "%s: End them! Show no mercy!",
-                    "%s: That Pokémon is done for!",
-                },
-                self_weak = {
-                    "%s: You'll regret that!",
-                    "%s: You haven't won yet!",
-                    "%s: I'll double down on you!",
-                },
-                long = {
-                    "%s: We don't have all day—lose already!",
-                    "%s: A %s...? Hand it over!",
-                    "%s: %s? Pathetic!",
-                    "%s: That %s is in our way!",
-                    "%s: Hmm, a %s... Useful!",
-                    "%s: %s looks ripe for taking!",
-                    "%s: We'll crush %s and move on!",
-                    "%s: Another %s to break!",
-                    "%s: Keep %s out of Rocket business!",
-                    "%s: %s... won't save you!",
-                    "%s: Steal? Later. Beat %s first!",
-                },
-                enemy = {
-                    "%s: Get them, %s!",
-                    "%s: Make it hurt!",
-                    "%s: No mercy!",
-                    "%s: Ruin them, %s!",
-                    "%s: Show no pity, %s!",
-                    "%s: Tear in, %s!",
-                    "%s: Obey me, %s!",
-                    "%s: Make them scream, %s!",
-                },
-           
-                idle = {
-                    "%s: Prepare to suffer!",
-                    "%s: Heh heh heh...",
-                    "%s: No escape!",
-                    "%s: Your hopes end here!",
-                    "%s: We always win in the end!",
-                    "%s: Squirm a little more!",
-                    "%s: Crime pays- watch!",
-                },
-                ahead = {
-                    "%s: Yes... suffer!",
-                    "%s: All according to plan!",
-                    "%s: Broken already?",
-                    "%s: Fall for Team Rocket!",
-                },
-                behind = {
-                    "%s: How are you ahead? Impossible...!",
-                    "%s: You'll regret that!",
-                    "%s: A setback- nothing more!",
-                    "%s: Boss won't like this...",
-                },
-                player_weak = {
-                    "%s: Beg for mercy!",
-                    "%s: It's over!",
-                    "%s: Kneel!",
-                    "%s: Finish the worm!",
-                    "%s: Your mon is done!",
-                },
-                self_weak = {
-                    "%s: How dare you!",
-                    "%s: This changes nothing!",
-                    "%s: I'll make you pay double!",
-                },
-                long = {
-                    "%s: Stop stalling and lose!",
-                    "%s: Our time is money!",
-                    "%s: Endurance? How quaint!",
-                },
-           
-            },
-            gym = {
-                player = {
-                    "%s: A %s, huh? Interesting!",
-                    "%s: %s... Show me its skill!",
-                    "%s: So you chose %s!",
-                    "%s: That %s looks trained!",
-                    "%s: %s carries your pride, yes?",
-                    "%s: A worthy %s. Come then!",
-                    "%s: I see the care in that %s!",
-                    "%s: %s... let's test its spirit!",
-                    "%s: Gym rules: hold nothing back!",
-                    "%s: Your %s meets my standard!",
-                },
-                enemy = {
-                    "%s: Go, %s!",
-                    "%s: This is a real battle!",
-                    "%s: Don't hold back!",
-                    "%s: Show our gym's strength, %s!",
-                    "%s: Stand tall, %s!",
-                    "%s: Earn this win, %s!",
-                    "%s: Press the advantage, %s!",
-                    "%s: Battle with honor, %s!",
-                },
-                idle = {
-                    "%s: Stay focused!",
-                    "%s: Good-keep it up!",
-                    "%s: Not bad!",
-                    "%s: Prove yourself!",
-                    "%s: Read the next exchange!",
-                    "%s: Breathe. Then strike!",
-                    "%s: That's the spirit!",
-                    "%s: Pressure makes diamonds!",
-                    "%s: A Leader expects your best!",
-                    "%s: Don't freeze-adapt!",
-                },
-                ahead = {
-                    "%s: Feel the gap in skill!",
-                    "%s: Push harder!",
-                    "%s: This is gym-level play!",
-                    "%s: Can you climb back?",
-                    "%s: Experience talks!",
-                },
-                behind = {
-                    "%s: Well done-don't stop!",
-                    "%s: You've grown!",
-                    "%s: Impressive...again!",
-                    "%s: I won't yield easily!",
-                    "%s: Good! Make me work for it!",
-                },
-                player_weak = {
-                    "%s: Finish with pride!",
-                    "%s: One decisive blow!",
-                    "%s: Your mon is on the ropes!",
-                },
-                self_weak = {
-                    "%s: A Leader still stands!",
-                    "%s: Pain sharpens focus!",
-                    "%s: Now it gets serious!",
-                },
-                long = {
-                    "%s: A true test of endurance!",
-                    "%s: This is a fine battle!",
-                    "%s: Long battles forge trainers!",
-                    "%s: Neither backing down-good!",
-                },
-            },
-            rival = {
-                player = {
-                    "%s: A %s, huh?! Looks tough! ...As if!",
-                    "%s: %s?! Don't make me laugh!",
-                    "%s: That %s? Pathetic!",
-                    "%s: Oh, a %s... Smell ya later!",
-                    "%s: %s? Still weak!",
-                    "%s: Hah! A %s? What a joke!",
-                    "%s: Bringing %s? Outclassed!",
-                    "%s: %s won't save you!",
-                    "%s: %s again? Predictable!",
-                    "%s: Your precious %s? Please!",
-                    "%s: Gramps would laugh at %s!",
-                    "%s: I outgrew %s already!",
-                },
-                enemy = {
-                    "%s: Go! %s!",
-                    "%s: Watch this!",
-                    "%s: I'm the best!",
-                    "%s: Show them up, %s!",
-                    "%s: Crush this chump!",
-                    "%s: Easy win, %s!",
-                    "%s: Make it hurt, %s!",
-                    "%s: Don't hold back!",
-                    "%s: My %s eats losers!",
-                    "%s: Style points, %s!",
-                    "%s: Wipe that look off- %s!",
-                    "%s: Teach them, %s!",
-                },
-                idle = {
-                    "%s: Bored yet?",
-                    "%s: I'm just warming up!",
-                    "%s: You call this a fight?",
-                    "%s: Try harder!",
-                    "%s: Still think you can win?",
-                    "%s: Hahaha!",
-                    "%s: My grandpa's stronger!",
-                    "%s: Give it up!",
-                    "%s: You're wasting my time!",
-                    "%s: Come on, make it fun!",
-                    "%s: I've got places to be!",
-                    "%s: Smell ya-soon!",
-                    "%s: That all the fire you've got?",
-                    "%s: Keep up if you can!",
-                },
-                ahead = {
-                    "%s: Told you I was better!",
-                    "%s: This is too easy!",
-                    "%s: You're finished!",
-                    "%s: Hah! Know your place!",
-                    "%s: Maybe forfeit?",
-                    "%s: I'm in a whole other league!",
-                    "%s: Should've stayed home!",
-                    "%s: Who's the loser now?!",
-                },
-                behind = {
-                    "%s: Lucky shot...",
-                    "%s: Don't get cocky!",
-                    "%s: That won't happen again!",
-                    "%s: Tch-whatever!",
-                    "%s: I'm not done yet!",
-                    "%s: Beginner's luck!",
-                    "%s: You just got lucky, twerp!",
-                    "%s: I'll wipe that grin off!",
-                },
-                player_weak = {
-                    "%s: Look at that HP!",
-                    "%s: Almost done!",
-                    "%s: One more hit!",
-                    "%s: Going down!",
-                    "%s: Savor it-you lose!",
-                    "%s: Say goodbye!",
-                    "%s: Any last words?",
-                },
-                self_weak = {
-                    "%s: N-no big deal!",
-                    "%s: I meant to do that!",
-                    "%s: Shut up!",
-                    "%s: This isn't over!",
-                    "%s: You'll pay for that!",
-                    "%s: Don't you dare laugh!",
-                    "%s: I was going easy!",
-                },
-                long = {
-                    "%s: Still dragging this out?",
-                    "%s: Hurry up and lose!",
-                    "%s: I'm getting impatient!",
-                    "%s: End this already!",
-                    "%s: What, writing a novel?!",
-                    "%s: Finish strong or fold!",
-                },
-            },
-            spooky = {
-                player = {
-                    "%s: A %s... Ooooh...",
-                    "%s: %s... Spirits stir...",
-                    "%s: That %s... How dreadful!",
-                    "%s: %s walks with shadows...",
-                    "%s: I feel a chill from %s...",
-                    "%s: %s... will you scream for us?",
-                    "%s: The veil thins near %s...",
-                    "%s: Such a living %s... curious!",
-                },
-                enemy = {
-                    "%s: Rise, %s!",
-                    "%s: Haunt them!",
-                    "%s: From beyond...",
-                    "%s: Awaken, %s!",
-                    "%s: Drain their hope, %s!",
-                    "%s: Whisper ruin, %s!",
-                    "%s: Possess the field, %s!",
-                    "%s: Night falls- %s!",
-                },
-                idle = {
-                    "%s: I sense fear...",
-                    "%s: The spirits watch...",
-                    "%s: Hee hee hee...",
-                    "%s: Do you hear them too?",
-                    "%s: This place remembers...",
-                    "%s: Your pulse is loud...",
-                    "%s: Don't look behind you...",
-                    "%s: Cold air...good omen!",
-                    "%s: The candles flicker for you!",
-                    "%s: Join us...eventually!",
-                },
-                ahead = {
-                    "%s: Yes... sink...",
-                    "%s: Your light fades!",
-                    "%s: The spirits approve!",
-                    "%s: Terror suits you!",
-                },
-                behind = {
-                    "%s: Impossible warmth...!",
-                    "%s: The dead grow restless!",
-                    "%s: A bright spark ...annoying!",
-                },
-                player_weak = {
-                    "%s: One step from the grave!",
-                    "%s: Say goodnight!",
-                    "%s: Your soul wavers!",
-                },
-                self_weak = {
-                    "%s: Pain is only a whisper!",
-                    "%s: We do not stay down!",
-                    "%s: From ash...again!",
-                },
-                long = {
-                    "%s: An endless vigil...",
-                    "%s: Time means nothing here!",
-                    "%s: Still bound to this duel...",
-                },
-            },
-            nerd = {
-                player = {
-                    "%s: A %s! Fascinating!",
-                    "%s: %s... Statistically notable!",
-                    "%s: Hmm, %s... Interesting data!",
-                    "%s: %s matches my models... mostly!",
-                    "%s: Recording %s for science!",
-                    "%s: A %s specimen! Excellent!",
-                    "%s: %s's typing...intriguing!",
-                    "%s: I'll need notes on that %s!",
-                    "%s: Probability favors... wait!",
-                    "%s: %s appears well-trained!",
-                },
-                enemy = {
-                    "%s: Deploy %s!",
-                    "%s: Optimal pick: %s!",
-                    "%s: As calculated!",
-                    "%s: Initialize, %s!",
-                    "%s: Run protocol %s!",
-                    "%s: Variable %s-engage!",
-                    "%s: Hypothesis: %s wins!",
-                    "%s: Field test- %s!",
-                },
-                idle = {
-                    "%s: As expected! Just as my models predicted for this matchup.",
-                    "%s: Collecting data—your tactics are worth studying in battle.",
-                    "%s: Hypothesis holds! Your Pokémon fits the scenario perfectly.",
-                    "%s: Recalculating... Your move changed my equation.",
-                    "%s: Variance accepted! These results still fit my battle data.",
-                    "%s: Noted—your technique deserves further analysis.",
-                    "%s: This exchange is a fascinating clash of skill and stats.",
-                    "%s: My charts anticipated your last attack.",
-                    "%s: Awaiting peer review—these conclusions need more tests.",
-                    "%s: Science and skill are carrying me through this fight!",
-                },
-           
-                ahead = {
-                    "%s: Result matches forecast!",
-                    "%s: Superior parameters!",
-                    "%s: Your error margin grows!",
-                    "%s: Q.E.D.!",
-                },
-                behind = {
-                    "%s: Anomaly detected!",
-                    "%s: Recalibrate! Quickly!",
-                    "%s: Outliers...humbling!",
-                    "%s: I must revise my thesis!",
-                },
-                player_weak = {
-                    "%s: Critical HP threshold!",
-                    "%s: One more data point to KO!",
-                    "%s: Collapse is imminent!",
-                },
-                self_weak = {
-                    "%s: Unexpected damage spike!",
-                    "%s: Still within recovery!",
-                    "%s: Pain is just feedback!",
-                },
-                long = {
-                    "%s: Sample size: getting large!",
-                    "%s: A lengthy trial... good!",
-                    "%s: Endurance is a variable too!",
-                },
-            },
-            chill = {
-                player = {
-                    "%s: A %s, huh? Looks tough!",
-                    "%s: Fine %s you've got!",
-                    "%s: %s, eh? Good luck!",
-                    "%s: Nice pick- %s!",
-                    "%s: Respect for that %s!",
-                    "%s: %s seems well cared for!",
-                    "%s: A solid %s. Let's enjoy!",
-                    "%s: Hey there, %s!",
-                    "%s: No hard feelings either way!",
-                    "%s: %s... this'll be pleasant!",
-                },
-                enemy = {
-                    "%s: Go on, %s!",
-                    "%s: Steady now!",
-                    "%s: Let's enjoy this!",
-                    "%s: Easy does it, %s!",
-                    "%s: You've got this, %s!",
-                    "%s: Smooth and steady, %s!",
-                    "%s: Take your time, %s!",
-                    "%s: Have fun out there, %s!",
-                },
-                idle = {
-                    "%s: Nice pace!",
-                    "%s: Well fought!",
-                    "%s: Carry on!",
-                    "%s: Good clean fight!",
-                    "%s: Love a fair battle!",
-                    "%s: No rush-do your thing!",
-                    "%s: You're sharp today!",
-                    "%s: This is the good stuff!",
-                    "%s: Breathe in...battle out!",
-                    "%s: Respect either way!",
-                },
-                ahead = {
-                    "%s: Looks like my edge for now!",
-                    "%s: Hang in-you're doing fine!",
-                    "%s: I've got a bit of room!",
-                },
-                behind = {
-                    "%s: You've got me on the ropes!",
-                    "%s: Nicely done-truly!",
-                    "%s: I'm impressed! Really!",
-                },
-                player_weak = {
-                    "%s: Your mon's fading...",
-                    "%s: Tough spot-stay calm!",
-                    "%s: One more good hit maybe!",
-                },
-                self_weak = {
-                    "%s: Oof-that stung!",
-                    "%s: We're alright! Still in it!",
-                    "%s: Shaky... but smiling!",
-                },
-                long = {
-                    "%s: A leisurely slugfest!",
-                    "%s: No place I'd rather be!",
-                    "%s: Long battles are the best!",
-                },
-            },
-            generic = {
-                player = {
-                    "%s: A %s, huh?! Looks tough!",
-                    "%s: Oh, a %s!",
-                    "%s: %s, eh? Let's battle!",
-                    "%s: That %s looks ready!",
-                    "%s: So it's %s! Alright!",
-                    "%s: A %s... Here we go!",
-                    "%s: Facing %s? Okay!",
-                    "%s: Your %s looks sharp!",
-                    "%s: Bring it, %s!",
-                    "%s: I've trained for %s!",
-                },
-                enemy = {
-                    "%s: Go, %s!",
-                    "%s: You're up!",
-                    "%s: Do it!",
-                    "%s: I choose you, %s!",
-                    "%s: Let's win this, %s!",
-                    "%s: Trust me, %s!",
-                    "%s: Now, %s!",
-                    "%s: Give it your all, %s!",
-                },
-                idle = {
-                    "%s: Come on!",
-                    "%s: Let's go!",
-                    "%s: Keep it up!",
-                    "%s: Focus!",
-                    "%s: We can do this!",
-                    "%s: Stay sharp!",
-                    "%s: Nice exchange!",
-                    "%s: Don't blink!",
-                    "%s: Push forward!",
-                    "%s: Battle on!",
-                },
-                ahead = {
-                    "%s: We've got the lead!",
-                    "%s: Keep pressing!",
-                    "%s: Looking good!",
-                },
-                behind = {
-                    "%s: We're not out yet!",
-                    "%s: Turn it around!",
-                    "%s: Dig deep!",
-                },
-                player_weak = {
-                    "%s: They're nearly done!",
-                    "%s: Finish strong!",
-                    "%s: Almost there!",
-                },
-                self_weak = {
-                    "%s: Hold on!",
-                    "%s: We can still win!",
-                    "%s: Not yet!",
-                },
-                long = {
-                    "%s: What a drawn-out fight!",
-                    "%s: Endurance wins battles!",
-                    "%s: Still standing-good!",
-                },
-            },
-       
-        }
 
         local function rollTrainerBanter()
             local r = (love and love.math and love.math.random) or math.random
@@ -3204,110 +1787,6 @@ return function(mod)
         end
 
         -- Player-facing pick options per scene (label shown in menu).
-        S.SCENE_PICK = {
-            cave = {
-                { label = "ROCK",  line = "%s!\nOnto that rock!", boost = 2 },
-                { label = "LEDGE", line = "%s!\nUp that ledge!",  boost = 2 },
-                { label = "DODGE", line = "%s!\nDodge it!",       boost = 1 },
-            },
-            forest = {
-                { label = "TREE",  line = "%s!\nBehind that tree!", boost = 2 },
-                { label = "BRUSH", line = "%s!\nInto the brush!",   boost = 2 },
-                { label = "DODGE", line = "%s!\nDodge it!",         boost = 1 },
-            },
-            city = {
-                { label = "CART",  line = "%s!\nBehind that cart!", boost = 2 },
-                { label = "ALLEY", line = "%s!\nUse that alley!",   boost = 2 },
-                { label = "DODGE", line = "%s!\nDodge it!",         boost = 1 },
-            },
-            route = {
-                { label = "GRASS", line = "%s!\nInto the grass!", boost = 2 },
-                { label = "PATH",  line = "%s!\nOff the path!",   boost = 1 },
-                { label = "DODGE", line = "%s!\nDodge it!",       boost = 1 },
-            },
-            mountain = {
-                { label = "CLIFF", line = "%s!\nUp that cliff!", boost = 2 },
-                { label = "LEDGE", line = "%s!\nUse the ledge!", boost = 2 },
-                { label = "DODGE", line = "%s!\nDodge it!",      boost = 1 },
-            },
-            gym = {
-                { label = "PILLAR", line = "%s!\nUse the pillars!",  boost = 2 },
-                { label = "COURT",  line = "%s!\nAround the court!", boost = 1 },
-                { label = "DODGE",  line = "%s!\nDodge it!",         boost = 1 },
-            },
-            water = {
-                { label = "SHORE",  line = "%s!\nAlong the shore!", boost = 2 },
-                { label = "SPLASH", line = "%s!\nSplash aside!",    boost = 2 },
-                { label = "DODGE",  line = "%s!\nDodge it!",        boost = 1 },
-            },
-            grave = {
-                { label = "STONE",  line = "%s!\nBehind a stone!", boost = 2 },
-                { label = "SHADOW", line = "%s!\nInto the dark!",  boost = 2 },
-                { label = "DODGE",  line = "%s!\nDodge it!",       boost = 1 },
-            },
-            indoor = {
-                { label = "WALL",  line = "%s!\nUse the wall!", boost = 2 },
-                { label = "COVER", line = "%s!\nBehind cover!", boost = 2 },
-                { label = "DODGE", line = "%s!\nDodge it!",     boost = 1 },
-            },
-        }
-        S.SCENE_BRACE_PICK = {
-            cave = {
-                { label = "ROCK",   line = "%s!\nBrace on the rock!", boost = 2 },
-                { label = "DIG IN", line = "%s!\nDig in here!",       boost = 2 },
-                { label = "BRACE",  line = "%s!\nBrace yourself!",    boost = 1 },
-            },
-            forest = {
-                { label = "ROOTS", line = "%s!\nRoot in place!",  boost = 2 },
-                { label = "HOLD",  line = "%s!\nHold the line!",  boost = 1 },
-                { label = "BRACE", line = "%s!\nBrace yourself!", boost = 1 },
-            },
-            city = {
-                { label = "STREET", line = "%s!\nHold the street!",   boost = 2 },
-                { label = "GROUND", line = "%s!\nStand your ground!", boost = 1 },
-                { label = "BRACE",  line = "%s!\nBrace yourself!",    boost = 1 },
-            },
-            route = {
-                { label = "PATH",   line = "%s!\nHold the path!",  boost = 1 },
-                -- Strong brace: high DEF, but next attack is locked out (body-agnostic).
-                { label = "DIG IN", line = "%s!\nEntrench!",       boost = 2, entrench = true },
-                { label = "BRACE",  line = "%s!\nBrace yourself!", boost = 1 },
-            },
-            mountain = {
-                { label = "STONE", line = "%s!\nBrace on stone!", boost = 2 },
-                { label = "HOLD",  line = "%s!\nDon't slip!",     boost = 1 },
-                { label = "BRACE", line = "%s!\nBrace yourself!", boost = 1 },
-            },
-            gym = {
-                { label = "COURT", line = "%s!\nCenter court-hold!", boost = 2 },
-                { label = "GUARD", line = "%s!\nGuard the mark!",    boost = 1 },
-                { label = "BRACE", line = "%s!\nBrace yourself!",    boost = 1 },
-            },
-            water = {
-                { label = "SURF",  line = "%s!\nBrace in the surf!", boost = 2 },
-                { label = "TIDE",  line = "%s!\nHold the tide!",     boost = 1 },
-                { label = "BRACE", line = "%s!\nBrace yourself!",    boost = 1 },
-            },
-            grave = {
-                { label = "STAND", line = "%s!\nStand your ground!", boost = 1 },
-                { label = "HOLD",  line = "%s!\nDon't yield!",       boost = 2 },
-                { label = "BRACE", line = "%s!\nBrace yourself!",    boost = 1 },
-            },
-            indoor = {
-                { label = "ROOM",  line = "%s!\nHold the room!", boost = 1 },
-                { label = "BRACE", line = "%s!\nBrace up!",      boost = 1 },
-                { label = "GUARD", line = "%s!\nGuard up!",      boost = 2 },
-            },
-        }
-        S.TYPE_PICK_EXTRA = {
-            FLYING = { label = "FLY UP", line = "%s!\nFly up high!", boost = 2 },
-            WATER = { label = "DIVE", line = "%s!\nDive aside!", boost = 2 },
-            ELECTRIC = { label = "ZIP", line = "%s!\nZip aside!", boost = 2 },
-            FIRE = { label = "BURST", line = "%s!\nBurst aside!", boost = 2 },
-            PSYCHIC = { label = "SENSE", line = "%s!\nSense-and move!", boost = 2 },
-            GHOST = { label = "FADE", line = "%s!\nFade through!", boost = 2 },
-            GRASS = { label = "BRUSH", line = "%s!\nInto the leaves!", boost = 2 },
-        }
 
         local MoveEffects = require("src.battle.MoveEffects")
         local Menu = require("src.ui.Menu")
@@ -3335,16 +1814,10 @@ return function(mod)
         local origRunDamaging = ensureVanillaRunDamaging()
 
         -- Callout pages need a beat so they aren't instant.
-        S.CALLOUT_AUTO_DELAY = 55
         -- Trainer slides on-screen while their banter line plays.
-        S.BANTER_CAMEO_IN = 14
-        S.BANTER_CAMEO_OUT = 12
         -- Speech bubbles: slower glyphs; after typing they wait for A/B (no auto).
-        S.BUBBLE_AUTO_DELAY = 75 -- kept for non-bubble fallbacks / legacy callers
         -- Effective frames/glyph while a bubble is up (engine slow is 5).
-        S.BUBBLE_CHAR_DELAY = 7
         -- FIELD: ~1.5s hold after each condensed toast finishes typing.
-        S.FIELD_TOAST_DELAY = 90
 
         local function fieldFlowsText(battle)
             return type(battle) == "table"
@@ -3740,192 +2213,12 @@ return function(mod)
                 battle._arSendBanterArmFrames = nil
             end
         end
-        -- Banter cameo: slide the enemy trainer pic in from the right while their
-        -- line is up. Packed as one table for LuaJIT. 2D overlay only.
-        local BanterCameo = {}
-
-        function BanterCameo.image(battle)
-            if type(battle) ~= "table" then
-                return nil
-            end
-            local img = battle.enemyTrainerImage or battle.trainerPic
-            if not img then
-                return nil
-            end
-            if type(battle.picImage) == "function" and battle.trainerPic then
-                local ok, painted = pcall(battle.picImage, battle, battle.trainerPic)
-                if ok and painted then
-                    return painted
-                end
-            end
-            return img
-        end
-
-        function BanterCameo.stillShowing(battle, line)
-            if type(battle) ~= "table" then
-                return false
-            end
-            local session = liveFieldSession(battle)
-            local overlays = session and session._trainerCallouts
-            if overlays and overlays.foe and #overlays.foe > 0 then
-                return true
-            end
-            local cur = battle.current
-            if cur and cur.arBanter then
-                return true
-            end
-            if line and cur and cur.text == line then
-                return true
-            end
-            if line and battle._arLastBubbleText == line then
-                return true
-            end
-            return false
-        end
-
-        function BanterCameo.progress(cameo)
-            if not cameo then
-                return 0
-            end
-            local t
-            if cameo.mode == "in" then
-                local dur = S.BANTER_CAMEO_IN or 14
-                t = math.min(1, (cameo.frame or 0) / math.max(1, dur))
-            elseif cameo.mode == "out" then
-                local dur = S.BANTER_CAMEO_OUT or 12
-                t = 1 - math.min(1, (cameo.frame or 0) / math.max(1, dur))
-            else
-                t = 1
-            end
-            return t * t * (3 - 2 * t)
-        end
-
-        function BanterCameo.start(battle, line)
-            if not opt("trainer_banter") or not trainerFoeReactionsOn(battle) then
-                return
-            end
-            if battle.showEnemyTrainer then
-                return
-            end
-            if not BanterCameo.image(battle) then
-                return
-            end
-            local state = momentumState(battle)
-            state.banterCameoWanted = line or true
-        end
-
-        function BanterCameo.tick(battle)
-            if type(battle) ~= "table" then
-                return
-            end
-            local state = React.peek(battle)
-            if not state then
-                return
-            end
-            local cameo = state.banterCameo
-            local wanted = state.banterCameoWanted
-            local cur = battle.current
-
-            local session = liveFieldSession(battle)
-            local foeToasts = session and session._trainerCallouts
-                and session._trainerCallouts.foe
-            local overlayBanter = type(foeToasts) == "table" and #foeToasts > 0
-            if not cameo and wanted and (overlayBanter or (cur and cur.arBanter)) then
-                if not battle.showEnemyTrainer and BanterCameo.image(battle) then
-                    state.banterCameo = {
-                        mode = "in",
-                        frame = 0,
-                        line = (wanted ~= true and wanted)
-                            or (cur and cur.text) or nil,
-                    }
-                    cameo = state.banterCameo
-                end
-                state.banterCameoWanted = nil
-            end
-
-            if not cameo then
-                return
-            end
-
-            if cameo.mode == "in" then
-                cameo.frame = (cameo.frame or 0) + 1
-                if cameo.frame >= (S.BANTER_CAMEO_IN or 14) then
-                    cameo.mode = "hold"
-                    cameo.frame = 0
-                end
-            elseif cameo.mode == "hold" then
-                if not BanterCameo.stillShowing(battle, cameo.line) then
-                    cameo.mode = "out"
-                    cameo.frame = 0
-                end
-            elseif cameo.mode == "out" then
-                cameo.frame = (cameo.frame or 0) + 1
-                if cameo.frame >= (S.BANTER_CAMEO_OUT or 12) then
-                    state.banterCameo = nil
-                end
-            end
-        end
-
-        function BanterCameo.draw(battle)
-            if not opt("trainer_banter") then
-                return
-            end
-            local state = battle and React.peek(battle)
-            local cameo = state and state.banterCameo
-            if not cameo or not love or not love.graphics then
-                return
-            end
-            if battle.showEnemyTrainer then
-                return
-            end
-            local img = BanterCameo.image(battle)
-            if not img or type(img.getDimensions) ~= "function" then
-                return
-            end
-
-            local t = BanterCameo.progress(cameo)
-            if t <= 0 then
-                return
-            end
-
-            local iw, ih = img:getDimensions()
-            -- Same enemy-intro box Gen 2 / Gen3 switch overlay uses: tile (12,0), 7×7.
-            local boxX, boxY, boxSize = 96, 0, 56
-            local scale = 1
-            if type(battle.picScale) == "function" then
-                local path = battle.enemyTrainerPath
-                    or (battle.trainer and (battle.trainer.picJessieJames or battle.trainer.pic))
-                local ok, value = pcall(battle.picScale, battle, path, nil, false)
-                if ok and tonumber(value) then
-                    scale = tonumber(value)
-                end
-            end
-            local px = boxX + (boxSize - iw * scale) / 2
-            local py = boxY + (boxSize - ih * scale)
-            px = px + (1 - t) * boxSize
-
-            local g = love.graphics
-            g.push("all")
-            g.setColor(1, 1, 1, 1)
-            local drew = false
-            local okPal, Palettes = pcall(require, "src.world.gen2.Palettes")
-            local okGbc, GbcPalette = pcall(require, "src.render.GbcPalette")
-            local class = battle.enemyTrainerClass
-                or (battle.trainer and (battle.trainer.class or battle.trainer.id))
-            local colors = okPal and battle.palettes and type(Palettes.trainerColors) == "function"
-                and Palettes.trainerColors(battle.palettes, class) or nil
-            local function body()
-                g.draw(img, px, py, 0, scale, scale)
-            end
-            if colors and okGbc and GbcPalette and type(GbcPalette.with) == "function"
-                and (type(GbcPalette.available) ~= "function" or GbcPalette.available()) then
-                drew = pcall(GbcPalette.with, colors, body)
-            end
-            if not drew then
-                body()
-            end
-            g.pop()
-        end
+        -- Banter cameo paint lives in battle/dialogue.lua (Dialogue.Banter).
+        local BanterCameo = (Battle and Battle.Dialogue and Battle.Dialogue.Banter) or {
+            start = function() end,
+            tick = function() end,
+            draw = function() end,
+        }
 
         local function flushPendingSendBanter(battle)
             if type(battle) ~= "table" then
@@ -5035,7 +3328,7 @@ return function(mod)
         end
 
         -- Pick a stamped prop and tuck the mon on its far side from the foe.
-        -- FIELD fights use field_battle arena slots; DS arena uses stamped voxels.
+        -- FIELD fights use field arena slots; DS arena uses stamped voxels.
         dev.pickCoverHideSpot = function(battle)
             local state = momentumState(battle)
             local slots = state.coverPropSlots
@@ -5134,7 +3427,7 @@ return function(mod)
             return battleStage()
         end
 
-        -- FIELD presentation lives in field_battle/ (lifecycle + tile grid).
+        -- FIELD presentation lives in field/ (lifecycle + tile grid).
         dev.wantsAnimeField = function()
             return FieldBattleViewer and type(FieldBattleViewer.enabled) == "function"
                 and FieldBattleViewer.enabled(mod)
@@ -5879,12 +4172,7 @@ return function(mod)
             return nil
         end
 
-        local Font = require("src.render.Font")
-        local HudTiles = require("src.render.HudTiles")
         local BattleState = require("src.battle.BattleState")
-        local WideBattle = require("src.battle.WideBattle")
-        local PartyMenu = require("src.ui.PartyMenu")
-        local SummaryMenu = require("src.ui.SummaryMenu")
         -- Publish send-banter flush/enqueue after BattleState exists (hot-reload safe).
         BattleState._arSendBanterApi = sendBanterApi
 
@@ -5918,369 +4206,48 @@ return function(mod)
             end
             return nil
         end
-        -- SPEECH BUBBLE mode: all battle dialogue rides in bubbles; classic box hidden.
-        hud.bubbleSideActive = function(battle)
-            if not opt("speech_bubbles") or type(battle) ~= "table" then
-                return nil
-            end
-            if battle.phase ~= "messages" then
-                battle._arLastBubble = nil
-                battle._arLastBubbleText = nil
-                battle._arLastBubbleThreat = nil
-                return nil
-            end
-            local cur = battle.current
-            if cur and cur.text and cur.text ~= "" then
-                local side = cur.bubble
-                if not side then
-                    side = inferBubbleSide(battle, cur.text) or "narrator"
-                    cur.bubble = side
-                end
-                battle._arLastBubble = side
-                battle._arLastBubbleText = cur.text
-                -- Incoming foe move announce → reddish toast (QoL threat cue).
-                local cue = cur.arFieldCue
-                local threat = cur.arThreatToast == true
-                if not threat and cue and cue.side == "enemy" and cue.kind == "attack" then
-                    threat = true
-                end
-                if not threat then
-                    local mon, move = parseUsedMoveText(cur.text)
-                    if mon and move then
-                        local _, isEnemy = stripEnemyPrefix(mon)
-                        threat = isEnemy and true or false
-                    end
-                end
-                battle._arLastBubbleThreat = threat and true or nil
-                return side
-            end
-            -- Keep the last bubble up through move anim / CONT waits (pokered keeps
-            -- the announce text visible while the anim plays).
-            if battle._arLastBubbleText and (battle.animPlaying or battle.msgHold
-                    or battle.msgWaiting or battle.msgPrompt
-                    or (battle.shown and #battle.shown > 0)) then
-                return battle._arLastBubble
-            end
-            battle._arLastBubble = nil
-            battle._arLastBubbleText = nil
-            battle._arLastBubbleThreat = nil
-            return nil
-        end
-
-        hud.wrapBubbleText = function(text, maxPx)
-            local lines = {}
-            local raw = tostring(text or ""):gsub("\v", "\n")
-            local function flushWord(word)
-                while word ~= "" do
-                    if Font.width(word) <= maxPx then
-                        return word
-                    end
-                    local cut = 1
-                    while cut < #word and Font.width(word:sub(1, cut + 1)) <= maxPx do
-                        cut = cut + 1
-                    end
-                    if cut < 1 then
-                        cut = 1
-                    end
-                    lines[#lines + 1] = word:sub(1, cut)
-                    word = word:sub(cut + 1)
-                end
-                return ""
-            end
-            for chunk in (raw .. "\n"):gmatch("(.-)\n") do
-                chunk = chunk:match("^%s*(.-)%s*$") or chunk
-                if chunk ~= "" then
-                    local line = ""
-                    for word in chunk:gmatch("%S+") do
-                        local trial = (line == "") and word or (line .. " " .. word)
-                        if Font.width(trial) <= maxPx then
-                            line = trial
-                        else
-                            if line ~= "" then
-                                lines[#lines + 1] = line
-                            end
-                            line = flushWord(word)
-                        end
-                    end
-                    if line ~= "" then
-                        lines[#lines + 1] = line
-                    end
-                end
-            end
-            return lines
-        end
-
-        hud.fieldPopupText = function(text)
-            local s = tostring(text or ""):gsub("\v", "\n")
-                :match("^%s*(.-)%s*$") or ""
-            -- Keep short status callouts, but leave ordinary dialogue readable.
-            local flat = s:gsub("\n", " "):gsub("%s+", " ")
-            local upper = flat:upper()
-            local stat = upper:match("^.-'S%s+(.+)%s+GREATLY FELL!?$")
-                or upper:match("^.-'S%s+(.+)%s+FELL!?$")
-            if stat then return stat .. " DOWN!" end
-            stat = upper:match("^.-'S%s+(.+)%s+ROSE SHARPLY!?$")
-                or upper:match("^.-'S%s+(.+)%s+GREATLY ROSE!?$")
-                or upper:match("^.-'S%s+(.+)%s+ROSE!?$")
-            if stat then return stat .. " UP!" end
-            local move = upper:match("^.- USED%s+(.+)!$")
-            if move then return move .. "!" end
-            if upper:find("SUPER EFFECTIVE", 1, true) then return "SUPER EFFECTIVE!" end
-            if upper:find("NOT VERY EFFECTIVE", 1, true) then return "NOT VERY EFFECTIVE!" end
-            if upper:find("CRITICAL HIT", 1, true) then return "CRITICAL HIT!" end
-            if upper:find("BUT IT MISSED", 1, true)
-                or upper:find("ATTACK MISSED", 1, true) then
-                return "MISSED THE TARGET!"
-            end
-            if upper:find("NO EFFECT", 1, true) then return "NO EFFECT!" end
-            if upper:find("REGAINED HEALTH", 1, true) then return "HEALED!" end
-            return s
-        end
-
-        hud.bubbleVisibleText = function(battle)
-            local cur = battle and battle.current
-            local text
-            if cur and cur.text and cur.text ~= "" then
-                text = cur.text
-            else
-                text = (battle and battle._arLastBubbleText) or ""
-            end
-            if hud.fieldCompactActive(battle) then
-                return hud.fieldPopupText(text)
-            end
-            return text
-        end
-
-        hud.drawSpeechBubble = function(battle, side)
-            if not side or not love or not love.graphics then
-                return
-            end
-            local text = hud.bubbleVisibleText(battle)
-            if text == "" then
-                return
-            end
-            -- FIELD: trainer speech belongs on the tinted foe strip, not here.
-            if hud.fieldCompactActive(battle) then
-                local Callouts = FieldBattleViewer and FieldBattleViewer.Callouts
-                local session = liveFieldSession(battle)
-                local raw = (battle.current and battle.current.text)
-                    or battle._arLastBubbleText or text
-                if Callouts and type(Callouts.isTrainerSpeech) == "function"
-                    and Callouts.isTrainerSpeech(raw) then
-                    -- Already shown (or about to show) on the attack/react beat.
-                    return
-                end
-                if session and type(Callouts) == "table"
-                    and type(Callouts.ownsText) == "function"
-                    and (Callouts.ownsText(session, raw)
-                        or Callouts.ownsText(session, text)) then
-                    return
-                end
-                if side == "foe" then
-                    side = "narrator"
-                end
-            end
-            local g = love.graphics
-            local narrator = (side == "narrator")
-            local fieldToast = hud.fieldCompactActive(battle)
-            -- FIELD keeps a wide, readable bottom bubble (not a tiny tip).
-            local maxInner = fieldToast and 144 or (narrator and 128 or 112)
-            local padX, padY = fieldToast and 6 or 4, fieldToast and 4 or 3
-            local lineH = 8
-            local lines = hud.wrapBubbleText(text, maxInner)
-            if #lines == 0 then
-                lines[1] = ""
-            end
-            local maxLines = fieldToast and 4 or (narrator and 4 or 5)
-            if #lines > maxLines then
-                local trimmed = {}
-                for i = 1, maxLines - 1 do
-                    trimmed[i] = lines[i]
-                end
-                trimmed[maxLines] = "..."
-                lines = trimmed
-            end
-            local contentW = 0
-            for i = 1, #lines do
-                contentW = math.max(contentW, Font.width(lines[i]))
-            end
-            contentW = math.max(fieldToast and 120 or 32, math.min(maxInner, contentW))
-            local bw = contentW + padX * 2
-            local bh = padY * 2 + #lines * lineH
-            local floorY = 142
-            local x, y
-            local anchorX, anchorY
-            -- FIELD: pin to the bottom so multi-line toasts stay readable.
-            if fieldToast then
-                x = math.floor((160 - bw) / 2)
-                y = floorY - bh
-                if y < 1 then y = 1 end
-                battle._arNarratorTop = y
-            elseif hud.fieldCompactActive(battle) and not narrator then
-                local wanted = (side == "foe") and "enemy" or "player"
-                local ow = battle.game and battle.game.overworld
-                for i = 1, #(ow and ow.entities or {}) do
-                    local ent = ow.entities[i]
-                    if ent and ent._arFieldBattler and ent._arFieldSide == wanted
-                        and ent._fieldScreenX and ent._fieldScreenY then
-                        anchorX, anchorY = ent._fieldScreenX, ent._fieldScreenY
-                        break
-                    end
-                end
-            end
-            if fieldToast then
-                -- already placed
-            elseif anchorX then
-                x = math.floor(anchorX - bw / 2)
-                y = math.floor(anchorY - bh - 9)
-                x = math.max(1, math.min(159 - bw, x))
-            elseif narrator then
-                x = math.floor((160 - bw) / 2)
-                y = floorY - bh
-            elseif side == "foe" then
-                x = 160 - bw - 1
-                y = floorY - bh
-            else
-                x = 1
-                y = floorY - bh
-            end
-            if y < 1 then
-                y = 1
-            end
-
-            local totalGlyphs = 0
-            local encoded = {}
-            for i = 1, #lines do
-                encoded[i] = Font.encode(lines[i])
-                totalGlyphs = totalGlyphs + #encoded[i]
-            end
-            local shownBudget = totalGlyphs
-            if battle.total and battle.total > 0 and battle.charIndex then
-                shownBudget = math.floor(totalGlyphs * (battle.charIndex / battle.total) + 0.5)
-            end
-
-            -- Classic text-box look: white fill, double black border.
-            -- FIELD: the tinted foe strip owns threat red. This slab stays white
-            -- so "Enemy used X!" / switch prompts are not a second red order.
-            local threat = not fieldToast and (
-                battle._arLastBubbleThreat == true
-                or (battle.current and battle.current.arThreatToast == true)
-            )
-            local fillR, fillG, fillB = 1, 1, 1
-            if threat then
-                fillR, fillG, fillB = 1.00, 0.78, 0.74
-            end
-            g.push("all")
-            g.setColor(fillR, fillG, fillB, 1)
-            g.rectangle("fill", x, y, bw, bh)
-            g.setColor(0, 0, 0, 1)
-            g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
-            g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
-            if anchorX then
-                local tailX = math.max(x + 5, math.min(x + bw - 5, anchorX))
-                g.setColor(fillR, fillG, fillB, 1)
-                g.polygon("fill", tailX - 4, y + bh - 1,
-                    tailX + 4, y + bh - 1, anchorX, math.min(anchorY - 2, y + bh + 6))
-                g.setColor(0, 0, 0, 1)
-                g.line(tailX - 4, y + bh - 1,
-                    anchorX, math.min(anchorY - 2, y + bh + 6))
-                g.line(anchorX, math.min(anchorY - 2, y + bh + 6),
-                    tailX + 4, y + bh - 1)
-            elseif not narrator then
-                if side == "foe" then
-                    g.setColor(fillR, fillG, fillB, 1)
-                    g.polygon("fill", x + bw - 12, y + 1, x + bw - 4, y - 5, x + bw - 20, y + 1)
-                    g.setColor(0, 0, 0, 1)
-                    g.line(x + bw - 12, y + 1, x + bw - 4, y - 5)
-                    g.line(x + bw - 4, y - 5, x + bw - 20, y + 1)
-                else
-                    g.setColor(fillR, fillG, fillB, 1)
-                    g.polygon("fill", x + 12, y + 1, x + 4, y - 5, x + 20, y + 1)
-                    g.setColor(0, 0, 0, 1)
-                    g.line(x + 12, y + 1, x + 4, y - 5)
-                    g.line(x + 4, y - 5, x + 20, y + 1)
-                end
-            end
-
-            local textX = x + padX
-            g.setColor(0, 0, 0, 1)
-            local left = shownBudget
-            local ty = y + padY
-            for i = 1, #lines do
-                local codes = encoded[i]
-                local tx = textX
-                for j = 1, #codes do
-                    if left <= 0 then
-                        break
-                    end
-                    Font.drawCode(codes[j], tx, ty)
-                    tx = tx + (Font.advanceOf(codes[j]) or 8)
-                    left = left - 1
-                end
-                ty = ty + lineH
-                if left <= 0 then
-                    break
-                end
-            end
-            if (battle.msgWaiting or battle.msgPrompt) and (battle.frame or 0) % 60 < 30
-                and (not hud.fieldCompactActive(battle) or battle._arFieldToastPaused) then
-                Font.drawCode(0xED, x + bw - 10, y + bh - 9)
-            end
-            if hud.fieldCompactActive(battle) and battle._arFieldToastPaused
-                and Font and type(Font.draw) == "function" then
-                g.setColor(0, 0, 0, 1)
-                Font.draw("II", x + 2, y + 1)
-            end
-            g.setColor(1, 1, 1, 1)
-            g.pop()
-        end
-
-        -- True while chat bubbles own battle dialogue (hide classic / Gen3 text box).
-        hud.stackedPromptActive = function(battle)
-            local Compat = FieldBattleViewer and FieldBattleViewer.Compat
-            return Compat and type(Compat.fieldAllowsStackedBottomUI) == "function"
-                and Compat.fieldAllowsStackedBottomUI(battle)
-        end
-        hud.bubblesOwnDialogue = function(battle)
-            if not opt("speech_bubbles") or type(battle) ~= "table" then
-                return false
-            end
-            -- Learn-move / YES-NO overlays paint through the classic box path
-            -- (UIVisibility asks the enclosing battle). Don't hide them.
-            if hud.stackedPromptActive(battle) then
-                return false
-            end
-            if battle.phase ~= "messages" then
-                return false
-            end
-            if hud.bubbleSideActive(battle) then
-                return true
-            end
-            return battle.current ~= nil
-                or battle.animPlaying
-                or battle.msgHold
-                or battle.msgWaiting
-                or battle.msgPrompt
-                or (battle.shown and #battle.shown > 0)
-        end
-
-        -- Keep drawTextArea lifecycle (scroll / typewriter) but paint nothing.
+        -- Speech-bubble paint lives in battle/dialogue.lua (Dialogue.Bubbles).
+        hud.wrapBubbleText = function() return {} end
+        hud.fieldPopupText = function(text) return tostring(text or "") end
+        hud.bubbleVisibleText = function() return "" end
+        hud.drawSpeechBubble = function() end
+        hud.bubbleSideActive = function() return nil end
+        hud.bubblesOwnDialogue = function() return false end
+        hud.stackedPromptActive = function() return false end
         hud.runDrawInvisible = function(fn, self, ...)
-            if not (love and love.graphics and type(fn) == "function") then
-                if type(fn) == "function" then
-                    return fn(self, ...)
-                end
-                return
+            if type(fn) == "function" then
+                return fn(self, ...)
             end
-            local g = love.graphics
-            g.push("all")
-            g.setScissor(0, 0, 0, 0)
-            local ok, a, b, c = pcall(fn, self, ...)
-            g.pop()
-            if not ok then
-                error(a, 0)
+        end
+        if Battle and Battle.Dialogue then
+            Battle.Dialogue.bind({
+                opt = opt,
+                S = S,
+                React = React,
+                FieldBattleViewer = FieldBattleViewer,
+                momentumState = momentumState,
+                trainerFoeReactionsOn = trainerFoeReactionsOn,
+                liveFieldSession = liveFieldSession,
+                inferBubbleSide = inferBubbleSide,
+                parseUsedMoveText = parseUsedMoveText,
+                stripEnemyPrefix = stripEnemyPrefix,
+                fieldCompactActive = hud.fieldCompactActive,
+                enemyStatusLocked = enemyStatusLocked,
+                playerStatusLocked = playerStatusLocked,
+                playerHasCounter = playerHasCounter,
+                formatAutoCounterCall = formatAutoCounterCall,
+                personalTrainerName = personalTrainerName,
+            })
+            if Battle.Dialogue.Bubbles then
+                hud.wrapBubbleText = Battle.Dialogue.Bubbles.wrapText
+                hud.fieldPopupText = Battle.Dialogue.Bubbles.fieldPopupText
+                hud.bubbleVisibleText = Battle.Dialogue.Bubbles.visibleText
+                hud.drawSpeechBubble = Battle.Dialogue.Bubbles.draw
+                hud.bubbleSideActive = Battle.Dialogue.Bubbles.sideActive
+                hud.bubblesOwnDialogue = Battle.Dialogue.Bubbles.ownDialogue
+                hud.stackedPromptActive = Battle.Dialogue.Bubbles.stackedPromptActive
+                hud.runDrawInvisible = Battle.Dialogue.Bubbles.runDrawInvisible
             end
-            return a, b, c
         end
 
         mod.hooks:wrap("battle.bottom_ui_visible", function(next, who)
@@ -6996,213 +4963,48 @@ return function(mod)
             return false
         end
 
-        hud.wrapBattleSay = function(methodName)
-            -- Durable per-method guard (hud.patched is recreated on hot reload).
-            BattleState._arAnimeSayPatched = BattleState._arAnimeSayPatched or {}
-            if BattleState._arAnimeSayPatched[methodName] then
-                return
-            end
-            local original = BattleState[methodName]
-            if type(original) ~= "function" or hud.patched[original] then
-                return
-            end
-            local wrapped = function(self, text, ...)
-                -- Suppress EXP share / EXP.ALL / boosted-EXP pages; keep level-ups.
-                if isExpGainDialogue(text) then
-                    return
-                end
-                -- Parse the engine's original announce before anime rewrite.
-                local mon, moveName = parseUsedMoveText(text)
-                local bare, isEnemy = nil, false
-                if mon then
-                    bare, isEnemy = stripEnemyPrefix(mon)
-                end
-                local reaction, buffs, trackTemp, fieldCue = reactionAfterMoveAnnounce(self, text)
-                -- Dodge cover miss: keep anim + replace vanilla "attack missed!".
-                local dodgeWhiff
-                text, dodgeWhiff = rewriteDodgeMissText(self, text)
-                local displayText = rewriteBattleText(self, text)
-                -- FIELD: NPC move orders ride the attack cue so they open on
-                -- the same beat as the FX (issue #10). The box keeps narrative.
-                local pendingNpcOrder
-                if fieldFlowsText(self) and mon and isEnemy then
-                    local narrative = rewriteLevelUpText(text)
-                    if displayText ~= narrative then
-                        pendingNpcOrder = displayText
-                        displayText = narrative
-                    end
-                end
-                local result = original(self, displayText, ...)
-                -- Move announce → physical step-in or special cast-in-place on FIELD.
-                if mon and moveName then
-                    local moveDef = findMoveByName(self, moveName)
-                    if moveDef then
-                        local damaging = (moveDef.power or 0) > 0
-                            and moveDef.category ~= "status"
-                        local cat = foeMoveIsSpecial(moveDef) and "special" or "physical"
-                        local kind = damaging and "attack" or "status"
-                        local moveId = moveDef.id
-                            or tostring(moveName):upper():gsub("[^A-Z0-9]+", "_")
-                        tagLatestQueueFieldCue(self, isEnemy and "enemy" or "player",
-                            kind, damaging and cat or nil, moveDef.type, moveId)
-                    end
-                end
-                if pendingNpcOrder then
-                    if not stampNpcOrderOnAnnounce(self, displayText, pendingNpcOrder) then
-                        -- Announce row was not findable; still show the order
-                        -- so it is not dropped. Cue pump will refresh it.
-                        pushNpcCallout(self, pendingNpcOrder, true, {
-                            kind = "order",
-                            urgent = true,
-                        })
-                    end
-                end
-                if dodgeWhiff then
-                    local item = self.queue and self.queue[self.nextInsert]
-                    if type(item) == "table" and item.text then
-                        item.arDodgeWhiff = true
-                        -- Whiff narration lands as the dodge succeeding on-screen.
-                        tagFieldCue(item, "player", "dodge")
-                    end
-                end
-                -- After the foe's miss anim + "dodged aside!" text: offer COUNTER!.
-                if dodgeWhiff and maybeQueueSameTurnCounter then
-                    maybeQueueSameTurnCounter(self)
-                elseif type(text) == "string"
-                    and text:lower():find("attack missed", 1, true) then
-                    -- Foe whiff without dodge cover still arms next-turn openings.
-                end
-                -- Route every battle line into a bubble so the classic box can stay hidden.
-                -- Frozen / asleep: narrator bubble (no trainer voice), not the bottom box.
-                if opt("speech_bubbles") then
-                    if mon then
-                        local locked = isEnemy and enemyStatusLocked(self)
-                            or ((not isEnemy) and playerStatusLocked(self))
-                        if locked or (fieldFlowsText(self) and isEnemy) then
-                            -- FIELD: engine "Enemy used X!" stays narrative.
-                            tagQueueBubble(self, "narrator")
-                        else
-                            tagQueueBubble(self, isEnemy and "foe" or "player")
-                        end
-                    else
-                        -- Keep engine auto-advance when present; still draw as a bubble.
-                        local side = inferBubbleSide(self, text) or "narrator"
-                        local item = self.queue and self.queue[self.nextInsert]
-                        local keepAuto = item and item.auto == true
-                        tagQueueBubble(self, side, not keepAuto)
-                    end
-                end
-                -- FIELD: keep every line as a short auto toast so fights flow into the
-                -- directional move grid without A/B between announcements.
-                if fieldFlowsText(self) then
-                    local item = self.queue and self.queue[self.nextInsert]
-                    if item and item.text then
-                        applyFieldToastAuto(item)
-                    end
-                end
-                -- Opposing trainer shouts on send-outs (personality-flavored).
-                do
-                    local api = BattleState._arSendBanterApi
-                    if api and type(api.enqueue) == "function" then
-                        api.enqueue(self, text)
-                    else
-                        maybeEnqueueSendBanter(self, text)
-                    end
-                end
-                -- Let callouts finish (A/B) before dodge/brace or counter menus.
-                if (methodName == "sayNextAuto" or methodName == "sayAuto")
-                    and (hud.willShowCalloutPick(self, text) or hud.willShowCounterPick(self, text))
-                    and not fieldFlowsText(self) then
-                    local item = self.queue and self.queue[self.nextInsert]
-                    if item and item.text then
-                        item.auto = nil
-                        item.autoDelay = nil
-                    end
-                end
-                -- After your announce is queued: drop temp dodge/brace stages.
-                if mon and not isEnemy then
-                    resolveCoverOnPlayerAttack(self, bare or playerMonName(self))
-                    local st = momentumState(self)
-                    -- Same-round bonus counter: don't stack another foe dodge on top.
-                    if st.sameTurnCounterStrike then
-                        st.sameTurnCounterStrike = nil
-                    else
-                        -- Trainer foe may auto-dodge/brace before your hit resolves.
-                        -- Only stash while the same-turn COUNTER! menu is still pending —
-                        -- auto-counter from an entrench STRIKE / prior opening must react
-                        -- here (before the anim), or brace sparkles land after damage/faint.
-                        local moveDef = moveName and findMoveByName(self, moveName)
-                        local damaging = moveDef and (moveDef.power or 0) > 0
-                            and moveDef.category ~= "status"
-                        if damaging and (st.sameTurnCounterQueued or st.offerSameTurnCounter) then
-                            st.pendingFoeReaction = { moveDef = moveDef }
-                        elseif damaging then
-                            local foeLine, foeBuffs, foeTrack, failNarr =
-                                tryFoeCoverReaction(self, moveDef)
-                            if foeLine then
-                                local foeBubble = isDodgeFailNarrator(foeLine) and "narrator" or "foe"
-                                local foeCue = fieldCueForFoeCover(foeBuffs, foeLine)
-                                enqueueReactWithAttack(self, foeLine, S.CALLOUT_AUTO_DELAY,
-                                    foeBubble, foeCue)
-                                applyCalloutBuffs(self, foeBuffs, foeTrack)
-                                if foeTrack and foeBuffs then
-                                    local braced = false
-                                    for i = 1, #foeBuffs do
-                                        if foeBuffs[i].stat == "defense" then
-                                            braced = true
-                                            break
-                                        end
-                                    end
-                                    if braced then
-                                        enqueueBraceAnim(self, { foe = true })
-                                    end
-                                end
-                            end
-                            if failNarr then
-                                -- Narrator only — never a trainer speech bubble.
-                                enqueueAutoAfter(self, failNarr, S.CALLOUT_AUTO_DELAY, "narrator",
-                                    { side = "enemy", kind = "hit" })
-                            end
-                        end
-                    end
-                end
-                if reaction then
-                    -- Failed dodges use the narrator bubble, not a trainer bubble.
-                    local bubbleSide = "narrator"
-                    if not isDodgeFailNarrator(reaction) then
-                        bubbleSide = isEnemy and "foe" or "player"
-                    end
-                    enqueueReactWithAttack(self, reaction, S.CALLOUT_AUTO_DELAY, bubbleSide, fieldCue)
-                    applyCalloutBuffs(self, buffs, trackTemp)
-                    local st = React.peek(self)
-                    if isEnemy and st and st.temp and trackTemp then
-                        if st.temp.cover then
-                            if st.temp.hidAway then
-                                tryVanishEvasion(self, playerMonName(self))
-                            end
-                            enqueueDodgeHideAnim(self, nil)
-                        else
-                            enqueueBraceAnim(self, {
-                                entrenched = st.temp.entrenched == true,
-                            })
-                        end
-                    end
-                end
-                return result
-            end
-            hud.patched[original] = true
-            hud.patched[wrapped] = true
-            BattleState._arAnimeSayPatched[methodName] = true
-            BattleState[methodName] = wrapped
+        if Battle and Battle.Dialogue then
+            Battle.Dialogue.bind({
+                BattleState = BattleState,
+                patched = hud.patched,
+                reactionAfterMoveAnnounce = reactionAfterMoveAnnounce,
+                rewriteDodgeMissText = rewriteDodgeMissText,
+                fieldFlowsText = fieldFlowsText,
+                findMoveByName = findMoveByName,
+                foeMoveIsSpecial = foeMoveIsSpecial,
+                tagLatestQueueFieldCue = tagLatestQueueFieldCue,
+                stampNpcOrderOnAnnounce = stampNpcOrderOnAnnounce,
+                pushNpcCallout = pushNpcCallout,
+                tagFieldCue = tagFieldCue,
+                maybeQueueSameTurnCounter = maybeQueueSameTurnCounter,
+                tagQueueBubble = tagQueueBubble,
+                applyFieldToastAuto = applyFieldToastAuto,
+                maybeEnqueueSendBanter = maybeEnqueueSendBanter,
+                willShowCalloutPick = hud.willShowCalloutPick,
+                willShowCounterPick = hud.willShowCounterPick,
+                resolveCoverOnPlayerAttack = resolveCoverOnPlayerAttack,
+                tryFoeCoverReaction = tryFoeCoverReaction,
+                fieldCueForFoeCover = fieldCueForFoeCover,
+                enqueueReactWithAttack = enqueueReactWithAttack,
+                applyCalloutBuffs = applyCalloutBuffs,
+                enqueueBraceAnim = enqueueBraceAnim,
+                isDodgeFailNarrator = isDodgeFailNarrator,
+                enqueueAutoAfter = enqueueAutoAfter,
+                playerMonName = playerMonName,
+                tryVanishEvasion = tryVanishEvasion,
+                enqueueDodgeHideAnim = enqueueDodgeHideAnim,
+            })
+            hud.wrapBattleSay = Battle.Dialogue.wrapBattleSay
+        else
+            hud.wrapBattleSay = function() end
         end
-
         hud.wrapBattleSay("sayNext")
         hud.wrapBattleSay("say")
         hud.wrapBattleSay("sayNextAuto")
         hud.wrapBattleSay("sayAuto")
 
-        if Immersion and Immersion.Hide then
-            Immersion.Hide.bind({
+        if Hud and Hud.Hide then
+            Hud.Hide.bind({
                 opt = opt,
                 hideAllHud = hideAllHud,
                 partyRowHint = partyRowHint,
@@ -7218,7 +5020,7 @@ return function(mod)
                     end
                 end,
             })
-            pcall(Immersion.Hide.install, mod)
+            pcall(Hud.Hide.install, mod)
         end
 
         -- FIELD intercept needs OverworldState, which may load after boot.

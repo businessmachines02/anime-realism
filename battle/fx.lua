@@ -1,6 +1,6 @@
 -- Battle animation policy — classic picFx vs FIELD sprite cues.
 --
--- FIELD presentation lives in field_battle/ (Cues.apply / Projectiles).
+-- FIELD presentation lives in field/ (Cues.apply / Projectiles).
 -- This module decides which layer to fire and tags engine queue rows so
 -- FIELD can play them. Classic dodge/brace queue helpers stay in main.lua
 -- and are injected via Fx.bind(host).

@@ -224,6 +224,7 @@ local function wildsExportSheet(mod, game, species, style, shiny, surface)
     style = style,
     game = game,
     surface = surface or "land",
+    -- Wilds/follower API token (stable; not the package folder name).
     role = "field_battle",
   }
   -- AUTO with Wilds present: omit style so Wilds uses its own Sprite Style.
@@ -1299,9 +1300,9 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
     return finalizeEntity(ent, battler, visual.lift, mod, game, species)
   end
   if sheet and sheet.image then
-    print("[anime_realism] field_battle: Assets.image failed for " .. tostring(sheet.image))
+    print("[anime_realism] field: Assets.image failed for " .. tostring(sheet.image))
   else
-    print("[anime_realism] field_battle: no follower path for " .. tostring(species))
+    print("[anime_realism] field: no follower path for " .. tostring(species))
   end
 
   -- Last resort: try live party follower's sprite on the map.
@@ -1319,7 +1320,7 @@ function Sprites.makeMon(mod, game, species, cellX, cellY, facing, side, battler
     end
   end
 
-  print("[anime_realism] field_battle: OW sprite missing for " .. tostring(species)
+  print("[anime_realism] field: OW sprite missing for " .. tostring(species)
     .. " — enable PokePCFollowers_VoxelMerge")
   -- Tiny colored square only if every loader failed.
   local r, g, b = 0.2, 0.55, 0.9

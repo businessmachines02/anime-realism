@@ -13,21 +13,26 @@ need=(
   "$MAIN"
   "$ROOT/LICENSE"
   "$ROOT/lib/modload.lua"
-  "$ROOT/immersion/init.lua"
-  "$ROOT/immersion/rewards.lua"
-  "$ROOT/immersion/hide.lua"
+  "$ROOT/hud/init.lua"
+  "$ROOT/hud/rewards.lua"
+  "$ROOT/hud/hide.lua"
   "$ROOT/battle/init.lua"
   "$ROOT/battle/reactive_defense.lua"
   "$ROOT/battle/react.lua"
   "$ROOT/battle/fx.lua"
-  "$ROOT/field_battle/init.lua"
-  "$ROOT/field_battle/fx_catalog.lua"
-  "$ROOT/field_battle/audio.lua"
-  "$ROOT/field_battle/spectators.lua"
-  "$ROOT/field_battle/wildlife.lua"
-  "$ROOT/field_battle/callouts.lua"
-  "$ROOT/field_battle/hooks.lua"
-  "$ROOT/field_battle/sprites.lua"
+  "$ROOT/battle/dialogue.lua"
+  "$ROOT/battle/strings.lua"
+  "$ROOT/field/init.lua"
+  "$ROOT/field/fx_catalog.lua"
+  "$ROOT/field/audio.lua"
+  "$ROOT/field/spectators.lua"
+  "$ROOT/field/wildlife.lua"
+  "$ROOT/field/callouts.lua"
+  "$ROOT/field/hooks.lua"
+  "$ROOT/field/hooks_draw.lua"
+  "$ROOT/field/hooks_input.lua"
+  "$ROOT/field/hooks_events.lua"
+  "$ROOT/field/sprites.lua"
 )
 
 for f in "${need[@]}"; do
@@ -45,11 +50,11 @@ rm -f "$OUT"
 zip -q -r "$OUT" \
   main.lua manifest.json LICENSE \
   lib \
-  immersion \
+  hud \
   battle \
-  field_battle \
-  -x "field_battle/tests/*" \
-  -x "field_battle/tests/**" \
+  field \
+  -x "field/tests/*" \
+  -x "field/tests/**" \
   -x "*.DS_Store" \
   -x "**/.DS_Store"
 
