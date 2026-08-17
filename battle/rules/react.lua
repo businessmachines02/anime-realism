@@ -443,6 +443,95 @@ local function enqueueTrainerReactCall(battle, me, moveName, action)
     table.insert(battle.queue, 1, item)
 end
 
+-- After the incoming swing: counter toast + physical jab + HP drain.
+-- Dodge/brace flavor stays on the first beat (result.lines).
+local function queueReactCounterStrike(battle, result, ctx)
+    if not (battle and result and result.counter and ctx) then
+        return
+    end
+    if type(battle.queue) ~= "table" then
+        return
+    end
+    local player = battle.player
+    local foe = battle.enemy
+    if not (player and player.mon and (player.mon.hp or 0) > 0) then
+        return
+    end
+    if not (foe and foe.mon and (foe.mon.hp or 0) > 0) then
+        return
+    end
+
+    -- Sit after the incoming hit's text/anim, before endOfTurn / executeAction.
+    local q = battle.queue
+    local fnIdx = nil
+    for i = 1, #q do
+        local row = q[i]
+        if type(row) == "table" and type(row.fn) == "function" and not row.arFx then
+            fnIdx = i
+            break
+        end
+    end
+    if fnIdx then
+        battle.nextInsert = fnIdx - 1
+    else
+        battle.nextInsert = #q
+    end
+
+    local frac = result.counter.powerFrac or 0.35
+    if result.counter.absorbScale and result.counter.reduction then
+        frac = 0.25 + (result.counter.reduction or 0) * 0.5
+    end
+    local dealt = math.max(1, math.floor(
+        ((ctx.move and ctx.move.power) or 40) * frac * 0.4))
+
+    local kind = result.counter.kind
+    local moveId = hostCall("pickCounterStrikeMove", battle, kind) or "TACKLE"
+    local moves = battle.data and battle.data.moves
+    local move = (type(moves) == "table" and type(moves[moveId]) == "table")
+        and moves[moveId]
+        or { id = moveId, category = "physical", power = 40, type = "NORMAL" }
+
+    local me = hostCall("playerMonName", battle) or "POKéMON"
+    local line = result.counter.line or (me .. " countered!")
+
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    table.insert(battle.queue, battle.nextInsert, {
+        arFx = true,
+        fn = function()
+            if not battle.player or not battle.enemy then
+                return
+            end
+            hostCall("pushNotice", battle, line, { kind = "counter" })
+            hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
+                isCalled = true,
+            })
+        end,
+    })
+    local savedAnimRow = battle.moveAnimRow
+    hostCall("queueMoveAttackAnim", battle, move, true)
+    battle.moveAnimRow = savedAnimRow
+
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    table.insert(battle.queue, battle.nextInsert, {
+        arFx = true,
+        arFieldCue = { side = "enemy", kind = "hit", category = "physical" },
+        fn = function()
+            local target = battle.enemy
+            if not target or not target.mon or (target.mon.hp or 0) <= 0 then
+                return
+            end
+            if type(battle.applyDamage) ~= "function" then
+                return
+            end
+            battle:applyDamage(target, dealt)
+            if target.mon.hp <= 0 and type(battle.onFaint) == "function" then
+                battle:onFaint(target)
+            end
+        end,
+    })
+    log(battle, "REACT counter", tostring(kind or "?") .. "→" .. tostring(moveId))
+end
+
 local function finishCalloutPick(battle, me, moveName, action, braceCall)
     local state = momentumState(battle)
     -- Latch BEFORE resolving so a nested runDamaging / sticky pad press
@@ -489,11 +578,9 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
         host.playFocusReactFx(battle, result.action or action, result)
     end
 
+    -- Beat flavor rides the top-right notice stack so it cannot bury the swing.
     for i = 1, #(result.lines or {}) do
-        local line = result.lines[i]
-        local item = { text = line, auto = true, autoDelay = (S().CALLOUT_AUTO_DELAY or 55) }
-        hostCall("markBubbleWait", item, "player", true, battle)
-        table.insert(battle.queue, 1, item)
+        hostCall("pushNotice", battle, result.lines[i], { kind = "react" })
     end
 
     log(battle, "REACT " .. tostring(action),
@@ -524,28 +611,7 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                     { presentationOnly = true })
                 origRunDamaging(battle, pending.ctx, pending.record)
             end
-            -- Lightweight reactive counters (Focus Dodge/Brace).
-            if result.counter and pending.ctx.user and battle.player then
-                local frac = result.counter.powerFrac or 0.35
-                if result.counter.absorbScale and result.counter.reduction then
-                    frac = 0.25 + (result.counter.reduction or 0) * 0.5
-                end
-                local dealt = math.max(1, math.floor(
-                    ((pending.ctx.move and pending.ctx.move.power) or 40) * frac * 0.4))
-                battle.nextInsert = hostCall("resumeInsertIndex", battle)
-                if type(battle.sayNext) == "function" then
-                    battle:sayNext(string.format("%s countered!", hostCall("playerMonName", battle) or "Your Pokémon"))
-                end
-                if type(battle.applyDamage) == "function" then
-                    local foe = battle.enemy
-                    if foe and foe.mon and (foe.mon.hp or 0) > 0 then
-                        battle:applyDamage(foe, dealt)
-                        if foe.mon.hp <= 0 and type(battle.onFaint) == "function" then
-                            battle:onFaint(foe)
-                        end
-                    end
-                end
-            end
+            queueReactCounterStrike(battle, result, pending.ctx)
         end)
         if not okDmg then
             -- Keep suppressReactDefer latched for the rest of the turn;
