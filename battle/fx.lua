@@ -175,6 +175,17 @@ local function pickLine(lines)
     return lines[r(n)]
 end
 
+-- Physical jab used when a Focus Dodge/Brace/Entrench counter lands.
+function Fx.pickCounterStrikeMove(battle, kind)
+    kind = tostring(kind or "")
+    local byKind = {
+        dodge = { "QUICK_ATTACK", "TACKLE", "POUND", "SCRATCH", "DOUBLE_KICK" },
+        brace = { "MEGA_PUNCH", "TACKLE", "STRENGTH", "HEADBUTT", "BODY_SLAM", "POUND" },
+        entrench = { "TACKLE", "HEADBUTT", "POUND", "MEGA_PUNCH" },
+    }
+    return Fx.pickHideMoveAnim(battle, byKind[kind] or byKind.brace) or "TACKLE"
+end
+
 -- Pick a Gen1 move id that exists in this battle's data.
 function Fx.pickHideMoveAnim(battle, candidates)
     local moves = battle and battle.data and battle.data.moves

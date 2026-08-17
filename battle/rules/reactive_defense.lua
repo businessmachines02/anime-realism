@@ -544,21 +544,19 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
  
       if (side.dodgeCounterCd or 0) <= 0 and rng() < RD.DODGE_COUNTER_CHANCE then
         side.dodgeCounterCd = RD.DODGE_COUNTER_CD
+        local counterLines = {
+          "It's a counterattack!",
+          "Struck back right away!",
+          "Counter! Hit them back!",
+          "A sudden counter!",
+          "Retaliated with a strike!",
+        }
         result.counter = {
           kind = "dodge",
           powerFrac = RD.DODGE_COUNTER_POWER,
           useSpeed = true,
+          line = counterLines[math.random(#counterLines)],
         }
-        local counterLines = {
-          "It's a counterattack!",
-          "But it countered right away!",
-          "Counter! The foe strikes back!",
-          "A sudden counter!",
-          "It retaliated with a counter move!",
-        }
-   
-        result.lines[#result.lines + 1] = counterLines[math.random(#counterLines)]
-   
       end
     else
       result.damageMult = RD.DODGE_FAIL_MULT
@@ -618,8 +616,8 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
           -- power scales with absorbed fraction later
           absorbScale = true,
           reduction = red,
+          line = "Countered\nthe blow!",
         }
-        result.lines[#result.lines + 1] = "Countered\nthe blow!"
       end
     else
       result.damageMult = RD.BRACE_WRONG_MULT
@@ -652,8 +650,12 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
       result.damageMult = 1
       result.lines[#result.lines + 1] = "It broke\nthrough!"
       if rng() < RD.ENTRENCH_COUNTER_CHANCE then
-        result.counter = { kind = "entrench", powerFrac = 0.25, useSpeed = false }
-        result.lines[#result.lines + 1] = "Clipped them\non the way in!"
+        result.counter = {
+          kind = "entrench",
+          powerFrac = 0.25,
+          useSpeed = false,
+          line = "Clipped them\non the way in!",
+        }
       end
     else
       local mit = RD.entrenchMitigation(target, cat)

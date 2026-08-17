@@ -1863,7 +1863,8 @@ return function(mod)
                 item.autoDelay = delay or S.CALLOUT_AUTO_DELAY
             end
             if type(fieldCue) == "table" then
-                tagFieldCue(item, fieldCue.side, fieldCue.kind, fieldCue.category)
+                tagFieldCue(item, fieldCue.side, fieldCue.kind, fieldCue.category,
+                    fieldCue.moveType, fieldCue.moveId)
             end
             table.insert(battle.queue, battle.nextInsert, item)
         end
@@ -3439,6 +3440,12 @@ return function(mod)
                 markBubbleWait = markBubbleWait,
                 pushPlayerCallout = pushPlayerCallout,
                 tagFieldCue = tagFieldCue,
+                pickCounterStrikeMove = function(battle, kind)
+                    if Fx and type(Fx.pickCounterStrikeMove) == "function" then
+                        return Fx.pickCounterStrikeMove(battle, kind)
+                    end
+                end,
+                queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 signalAttackPresentation = signalAttackPresentation,
