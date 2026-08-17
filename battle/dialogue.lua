@@ -1,7 +1,7 @@
 -- Battle dialogue chrome — trainer banter cameo + speech-bubble paint.
 --
--- Callout rewrite ("NAME used MOVE!" → trainer orders) and BattleState.say
--- wraps stay in main.lua. FIELD world-anchored trainer strips live in
+-- Callout rewrite, say wraps, and banter enqueue live here.
+-- FIELD world-anchored trainer strips live in
 -- field/chrome/callouts.lua. This module is the packed BanterCameo + bubble
 -- HUD tables, injected via Dialogue.bind(host).
 
@@ -1007,6 +1007,471 @@ function Dialogue.wrapBattleSay(methodName)
     BattleState._arAnimeSayPatched[methodName] = true
     BattleState[methodName] = wrapped
 end
+
+
+-- Call pools + send/idle banter enqueue (classic queue).
+function Dialogue.buildCallPool(kind, battle)
+    local style = hostCall("calloutStyle")
+    local scene = hostCall("battleScene", battle)
+    local types = hostCall("playerTypeSet", battle) or {}
+    local pool = {}
+    -- Each entry: { line = "...", boost = 1|2 } for dodge/brace tiers.
+
+    local function add(list, boost)
+        if type(list) ~= "table" then
+            return
+        end
+        for i = 1, #list do
+            pool[#pool + 1] = { line = list[i], boost = boost or 1 }
+        end
+    end
+
+    if kind == "dodge" then
+        add(strings().DODGE_STYLE[style] or strings().DODGE_STYLE.AUTO, style == "SHOWY" and 2 or 1)
+        add(strings().DODGE_SCENE[scene], 2)
+        for ty, on in pairs(types) do
+            if on then
+                add(strings().DODGE_TYPE[ty], 2)
+            end
+        end
+    elseif kind == "brace" then
+        add(strings().BRACE_STYLE[style] or strings().BRACE_STYLE.AUTO, 1)
+        add(strings().BRACE_SCENE[scene], 1)
+        for ty, on in pairs(types) do
+            if on then
+                add(strings().BRACE_TYPE[ty], 2)
+            end
+        end
+    elseif kind == "counter" then
+        local lines = strings().PLAYER_COUNTER_CALLS[style] or strings().PLAYER_COUNTER_CALLS.AUTO
+        local defDrop = (style == "SHOWY" or style == "BOLD") and 2 or 1
+        add(lines, defDrop)
+    end
+
+    return pool
+end
+
+function Dialogue.pickCallEntry(kind, battle, monName, moveName)
+    local pool = Dialogue.buildCallPool(kind, battle)
+    if #pool == 0 then
+        return nil, 1
+    end
+    local entry = pickLine(pool)
+    if not entry then
+        return nil, 1
+    end
+    local line = Dialogue.formatCall(entry.line, monName, moveName)
+    return line, entry.boost or 1
+end
+
+
+-- Personality buckets from oppClass / trainer name (Gen 1 classes).
+function Dialogue.trainerPersona(battle)
+    local cls = tostring(battle and battle.oppClass or ""):upper()
+    local name = tostring(battle and battle.trainer and battle.trainer.name or ""):upper()
+    local blob = cls .. " " .. name
+    local function has(s)
+        return blob:find(s, 1, true) ~= nil
+    end
+    if has("RIVAL") then
+        return "rival"
+    end
+    if has("ROCKET") or has("BURGLAR") or has("GIOVANNI") then
+        return "evil"
+    end
+    if has("BROCK") or has("MISTY") or has("SURGE") or has("ERIKA")
+        or has("KOGA") or has("SABRINA") or has("BLAINE")
+        or has("LORELEI") or has("BRUNO") or has("AGATHA") or has("LANCE") then
+        return "gym"
+    end
+    if has("YOUNGSTER") or has("BUG_CATCHER") or has("BUG CATCHER")
+        or has("LASS") or has("JR_TRAINER") or has("JR.TRAINER")
+        or has("SCHOOL") then
+        return "kid"
+    end
+    if has("COOLTRAINER") or has("ACE") or has("BLACKBELT")
+        or has("BLACKBELT") or has("BIKER") or has("CUE_BALL")
+        or has("BIRD_KEEPER") or has("TAMER") then
+        return "cocky"
+    end
+    if has("CHANNELER") or has("GHOST") then
+        return "spooky"
+    end
+    if has("SUPER_NERD") or has("SCIENTIST") or has("POKEMANIAC")
+        or has("ENGINEER") or has("PSYCHIC") then
+        return "nerd"
+    end
+    if has("GENTLEMAN") or has("BEAUTY") or has("SAILOR")
+        or has("HIKER") or has("FISHER") or has("SWIMMER") then
+        return "chill"
+    end
+    return "generic"
+end
+
+function Dialogue.banterSpeaker(battle)
+    return hostCall("personalTrainerName", battle)
+        or (battle.trainer and battle.trainer.name)
+        or "TRAINER"
+end
+
+-- speaker (+ optional mon). Persona lines when you or they send out.
+-- player lines: (speaker, your mon). enemy lines: (speaker, their mon).
+
+function Dialogue.rollTrainerBanter()
+    local r = (love and love.math and love.math.random) or math.random
+    return r() < 0.70
+end
+
+function Dialogue.battlerHpRatio(battler)
+    local mon = battler and battler.mon
+    local max = mon and mon.stats and mon.stats.hp
+    if not max or max <= 0 then
+        return 1
+    end
+    return (mon.hp or 0) / max
+end
+
+-- Build a context-weighted idle pool (ahead/behind/low HP/long fight).
+
+function Dialogue.pickContextualIdleLine(battle, persona, speaker)
+    local pack = strings().BANTER[persona] or strings().BANTER.generic
+    local pools = {}
+    local function add(list, weight)
+        if type(list) ~= "table" or #list == 0 then
+            return
+        end
+        weight = weight or 1
+        for _ = 1, weight do
+            pools[#pools + 1] = list
+        end
+    end
+    add(pack.idle or strings().BANTER.generic.idle, 1)
+    local pr = Dialogue.battlerHpRatio(battle.player)
+    local er = Dialogue.battlerHpRatio(battle.enemy)
+    local turn = tonumber(battle.turnCount) or 0
+    if er > pr + 0.18 then
+        add(pack.ahead, persona == "rival" and 3 or 2)
+    elseif pr > er + 0.18 then
+        add(pack.behind, persona == "rival" and 3 or 2)
+    end
+    if pr <= 0.35 then
+        add(pack.player_weak, persona == "rival" and 3 or 2)
+    end
+    if er <= 0.35 then
+        add(pack.self_weak, persona == "rival" and 3 or 2)
+    end
+    if turn >= 6 then
+        add(pack.long, persona == "rival" and 2 or 1)
+    end
+    if #pools == 0 then
+        return Dialogue.pickFormatted(strings().BANTER.generic.idle, speaker)
+    end
+    local r = (love and love.math and love.math.random) or math.random
+    local list = pools[r(1, #pools)]
+    local ms = hostCall("momentumState", battle)
+    -- Prefer a line we didn't just use.
+    for _ = 1, 6 do
+        local line = Dialogue.pickFormatted(list, speaker)
+        if line and line ~= ms.lastIdleBanterLine then
+            return line
+        end
+    end
+    return Dialogue.pickFormatted(list, speaker)
+end
+
+-- True send-outs only. Anime move callouts like "Go! PIKACHU!\nTHUNDER!"
+-- must NOT arm send-in banter (they share the "Go! " prefix).
+function Dialogue.isPlayerSendOutText(text)
+    local s = tostring(text or "")
+    if s:match("^Go! [^\n]+!$")
+        or s:match("^Do it! [^\n]+!$")
+        or s:match("^Get'm! [^\n]+!$") then
+        return true
+    end
+    local low = s:lower()
+    return low:find("enemy's weak", 1, true) ~= nil
+        and low:find("get'm!", 1, true) ~= nil
+end
+
+function Dialogue.isEnemySendOutText(text)
+    return tostring(text or ""):find("sent\nout ", 1, true) ~= nil
+end
+
+
+function Dialogue.queueHasBanter(battle)
+    if type(battle) ~= "table" then
+        return false
+    end
+    if battle.current and battle.current.arBanter then
+        return true
+    end
+    local q = battle.queue
+    if type(q) ~= "table" then
+        return false
+    end
+    for i = 1, #q do
+        if q[i] and q[i].arBanter then
+            return true
+        end
+    end
+    return false
+end
+
+-- Battle box is 2 lines; extra \n scrolls like separate callouts.
+function Dialogue.clampBanterText(line)
+    local parts = {}
+    for chunk in (tostring(line or "") .. "\n"):gmatch("(.-)\n") do
+        chunk = chunk:match("^%s*(.-)%s*$") or chunk
+        if chunk ~= "" then
+            parts[#parts + 1] = chunk
+        end
+    end
+    if #parts <= 2 then
+        return table.concat(parts, "\n")
+    end
+    local speaker = parts[1]
+    local body = table.concat(parts, " ", 2)
+    if fitsBattleLine(body) then
+        return speaker .. "\n" .. body
+    end
+    return speaker .. "\n" .. parts[2]
+end
+
+function Dialogue.maybeEnqueueSendBanter(battle, originalText)
+    if not opt("trainer_banter") or not hostCall("trainerFoeReactionsOn", battle) then
+        return
+    end
+    if type(battle) ~= "table" then
+        return
+    end
+    local aboutPlayer = Dialogue.isPlayerSendOutText(originalText)
+    local aboutEnemy = Dialogue.isEnemySendOutText(originalText)
+    if not aboutPlayer and not aboutEnemy then
+        return
+    end
+    -- Pending / cooldown live on the battle object so they survive
+    -- clearBattleMomentum (battle.started) and stay shared across any
+    -- accidental double-wraps of say / updateQueue from hot reload.
+    -- Prefer the player's Go! when both foe-send and Go! land in one wave.
+    local replacing = battle._arPendingSendBanter
+        and aboutPlayer
+        and battle._arPendingSendBanter.side == "enemy"
+    if battle._arPendingSendBanter and not replacing then
+        return
+    end
+    if not replacing then
+        if (battle._arSendBanterCooldown or 0) > 0 then
+            return
+        end
+        if Dialogue.queueHasBanter(battle) then
+            return
+        end
+        if not Dialogue.rollTrainerBanter() then
+            return
+        end
+    end
+    -- Do not bake the mon name here. The engine's "Go!" names party[1]
+    -- (often the overworld follower). choose_lead and other send-out
+    -- mods rebind battle.player after that line is queued.
+    battle._arPendingSendBanter = {
+        side = aboutPlayer and "player" or "enemy",
+        persona = Dialogue.trainerPersona(battle),
+        speaker = Dialogue.banterSpeaker(battle),
+    }
+    battle._arSendBanterArmFrames = 8
+    if aboutPlayer and battle.sendingOut then
+        battle._arSendBanterSawOut = true
+        battle._arSendBanterArmFrames = nil
+    elseif aboutEnemy and battle.enemySendingOut then
+        battle._arSendBanterSawOut = true
+        battle._arSendBanterArmFrames = nil
+    end
+end
+function Dialogue.flushPendingSendBanter(battle)
+    if type(battle) ~= "table" then
+        return
+    end
+    if (battle._arSendBanterCooldown or 0) > 0 then
+        battle._arSendBanterCooldown = battle._arSendBanterCooldown - 1
+    end
+    local pending = battle._arPendingSendBanter
+    if not pending then
+        return
+    end
+
+    local function pickerOpen()
+        local stack = battle.game and battle.game.stack
+        if not (stack and type(stack.top) == "function") then
+            return false
+        end
+        local top = stack:top()
+        if not top or top == battle then
+            return false
+        end
+        if top.battle ~= nil and top.battle ~= battle then
+            return false
+        end
+        if top.forceSwitch then
+            return true
+        end
+        local id = tostring(top.id or top.screenId or "")
+        if id == "PartyMenu" or id == "Gen2PartyMenu" then
+            return top.forceSwitch == true or top.battle == battle
+        end
+        return false
+    end
+
+    local function queueStillHasSendOut()
+        local function match(text)
+            if pending.side == "player" then
+                return Dialogue.isPlayerSendOutText(text)
+            end
+            return Dialogue.isEnemySendOutText(text)
+        end
+        if battle.current and match(battle.current.text) then
+            return true
+        end
+        local q = battle.queue
+        if type(q) ~= "table" then
+            return false
+        end
+        for i = 1, #q do
+            if q[i] and match(q[i].text) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function composeLine()
+        local persona = pending.persona or Dialogue.trainerPersona(battle)
+        local pack = strings().BANTER[persona] or strings().BANTER.generic
+        local speaker = pending.speaker or Dialogue.banterSpeaker(battle)
+        local line
+        if pending.side == "enemy" then
+            local mon = hostCall("enemyMonName", battle)
+            line = Dialogue.pickFormatted(pack.enemy, speaker, mon)
+                or (speaker .. ":\nGo, " .. mon .. "!")
+        else
+            local mon = hostCall("playerMonName", battle)
+            line = Dialogue.pickFormatted(pack.player, speaker, mon)
+                or (speaker .. ":\nA " .. mon .. ", huh?!")
+        end
+        return Dialogue.clampBanterText(line)
+    end
+
+    -- choose_lead opens PartyMenu before the real send. Keep waiting so
+    -- we name the mon that actually comes out, not party[1].
+    if pickerOpen() then
+        return
+    end
+    if queueStillHasSendOut() then
+        return
+    end
+    local sending = (pending.side == "player" and battle.sendingOut)
+        or (pending.side == "enemy" and battle.enemySendingOut)
+    if sending then
+        battle._arSendBanterSawOut = true
+        battle._arSendBanterArmFrames = nil
+        return
+    end
+    if hostCall("queueHasPoof", battle) then
+        battle._arSendBanterSawOut = true
+        battle._arSendBanterArmFrames = nil
+        return
+    end
+    if battle._arSendBanterArmFrames and battle._arSendBanterArmFrames > 0 then
+        battle._arSendBanterArmFrames = battle._arSendBanterArmFrames - 1
+        return
+    end
+    -- Ready: send-out finished and POOF is gone. Name the live battler.
+    local line = composeLine()
+    battle._arPendingSendBanter = nil
+    battle._arSendBanterSawOut = nil
+    battle._arSendBanterArmFrames = nil
+    if type(battle.queue) ~= "table" then
+        return
+    end
+    if Dialogue.queueHasBanter(battle) then
+        -- Still consume the pending so a stuck wave can't retry forever.
+        battle._arSendBanterCooldown = 120
+        return
+    end
+    battle._arSendBanterDidIntro = true
+    battle._arSendBanterCooldown = 120
+    if hostCall("pushNpcCallout", battle, line, true, { kind = "banter" }) then
+        Banter.start(battle, line)
+        return
+    end
+    local item = { text = line, arBanter = true }
+    if not hostCall("markBubbleWait", item, "foe", true, battle) then
+        item.auto = true
+        item.autoDelay = strings().CALLOUT_AUTO_DELAY
+    end
+    table.insert(battle.queue, 1, item)
+    Banter.start(battle, line)
+end
+
+function Dialogue.maybeEnqueueIdleBanter(battle)
+    if not opt("trainer_banter") or not hostCall("trainerFoeReactionsOn", battle) then
+        return
+    end
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+        return
+    end
+    local ms = hostCall("momentumState", battle)
+    -- Skip while anything cinematic / cover-related is going on.
+    if ms.awaitingPick or ms.pendingDamage or ms.againInProgress then
+        return
+    end
+    if battle._arPendingSendBanter or (battle._arSendBanterCooldown or 0) > 0 then
+        return
+    end
+    if Dialogue.queueHasBanter(battle) then
+        return
+    end
+    local t = ms.temp or {}
+    if t.picHidden or t.cover or t.entrenched then
+        return
+    end
+    local et = ms.enemyTemp or {}
+    if et.cover then
+        return
+    end
+    local turn = tonumber(battle.turnCount) or 0
+    if turn < 1 then
+        return
+    end
+    local last = ms.lastIdleBanterTurn or 0
+    local persona = Dialogue.trainerPersona(battle)
+    local gap = (persona == "rival") and 1 or 2
+    if turn - last < gap then
+        return
+    end
+    local chance = (persona == "rival") and 0.48 or 0.20
+    local r = (love and love.math and love.math.random) or math.random
+    if r() >= chance then
+        return
+    end
+    local speaker = Dialogue.banterSpeaker(battle)
+    local line = Dialogue.pickContextualIdleLine(battle, persona, speaker)
+        or (speaker .. ":\nCome on!")
+    line = Dialogue.clampBanterText(line)
+    ms.lastIdleBanterTurn = turn
+    ms.lastIdleBanterLine = line
+    if hostCall("pushNpcCallout", battle, line, true, { kind = "banter" }) then
+        Banter.start(battle, line)
+        return
+    end
+    local item = { text = line, arBanter = true }
+    if not hostCall("markBubbleWait", item, "foe", true, battle) then
+        item.auto = true
+        item.autoDelay = strings().CALLOUT_AUTO_DELAY
+    end
+    table.insert(battle.queue, item)
+    Banter.start(battle, line)
+end
+
 
 Dialogue.Banter = Banter
 Dialogue.Bubbles = Bubbles

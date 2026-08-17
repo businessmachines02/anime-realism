@@ -98,7 +98,7 @@ anime_realism/
 ```
 
 Ownership is layered so each fight system has one home. `main.lua` still owns
-send/idle banter enqueue and classic picFx queue helpers (LuaJIT 200-local
+queue insert helpers, ambient stance pulses, and bind bags (LuaJIT 200-local
 budget). Target facades, who may call whom, and remaining extracts live in
 [Composable APIs](#composable-apis).
 
@@ -106,7 +106,7 @@ budget). Target facades, who may call whom, and remaining extracts live in
 | Package | Owns at runtime | Still in `main.lua` |
 |---------|-----------------|---------------------|
 | `hud/` | `Hide.install` (levels/HP/XP) + `Rewards.install` | Overlay hook that *calls* bubble paint |
-| `battle/` | `ReactiveDefense` + `React` + `Fx` + `Dialogue` + `Strings` | Send/idle banter enqueue; `React.bind` / `Fx.bind` / `Dialogue.bind` host callbacks |
+| `battle/` | `ReactiveDefense` + `React` + `Fx` (incl. classic picFx) + `Dialogue` (incl. banter enqueue) + `Strings` | Queue insert / ambient pulses; `React.bind` / `Fx.bind` / `Dialogue.bind` host callbacks |
 | `field/` | Intercept, session, pad cues (`Cues.register`), sprites, FX catalog, compact UI, style painters, hand arenas | Forwards `battle.*` into `FBV.*` |
 
 ## Engine seams `main.lua` wraps
@@ -477,8 +477,10 @@ Do not “fix” these by rewriting:
    Raw `FBV.Cues` / `FBV.Lifecycle` remain on the table for tests / internals;
    `main.lua` must not grow reads of them.
 7. **Dialogue extract** — done: `battle/strings.lua` owns `S`; `Dialogue`
-   owns rewrite helpers and `wrapBattleSay`. Still in `main.lua`: send/idle
-   banter enqueue, classic picFx queue helpers, `fitsBattleLine`.
+   owns rewrite, `wrapBattleSay`, and send/idle banter enqueue.
+8. **Classic picFx → `battle/fx.lua`** — done: `Fx.enqueueDodgeHideAnim` /
+   `enqueueBraceAnim` / `dodgeAnimSpec`. `main.lua` keeps `insertBeforeAnim`
+   and ambient stance pulses.
 
 ## Where to change things
 
@@ -488,7 +490,7 @@ Do not “fix” these by rewriting:
 | REACT menu / queue timing | `battle/react.lua` (`React.install`; host callbacks still in `main.lua`) |
 | Hide numbers / EXP feel | `hud/hide.lua` + `hud/rewards.lua` |
 | Speech bubbles / trainer cameo | `battle/dialogue.lua` + `battle/strings.lua` (`Dialogue.bind`) |
-| Focus react animation | `battle/fx.lua` (policy) then classic helpers in `main.lua` or `Cues.register` |
+| Focus react animation | `battle/fx.lua` (`Fx.play` + classic picFx enqueue) |
 | FIELD intercept / no wipe | `field/session/intercept.lua` |
 | Pad steps / Dig-Fly | `field/fx/cues.lua` (`Cues.register`) + `field/pad/grid.lua` |
 | Move VFX | `field/fx/fx_catalog.lua` then `Projectiles.registerStyle` |

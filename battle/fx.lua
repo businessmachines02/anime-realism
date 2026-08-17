@@ -2,8 +2,8 @@
 --
 -- FIELD presentation lives in field/ (Cues.apply / Projectiles).
 -- This module decides which layer to fire and tags engine queue rows so
--- FIELD can play them. Classic dodge/brace queue helpers stay in main.lua
--- and are injected via Fx.bind(host).
+-- FIELD can play them. Classic dodge/brace queue builders live here; Fx.play calls them.
+-- insertBeforeAnim is still injected via Fx.bind(host).
 
 local Fx = {}
 local host = {}
@@ -96,7 +96,7 @@ function Fx.play(battle, action, result)
 
     if action == "dodge" then
         if result.forceMiss then
-            hostCall("enqueueDodgeHideAnim", battle, {
+            Fx.enqueueDodgeHideAnim(battle, {
                 label = "DODGE",
                 beforeAnim = true,
                 stayHidden = false,
@@ -133,7 +133,7 @@ function Fx.play(battle, action, result)
         state.focusCoverSpot = spot
         hostCall("rememberCoverSpot", battle, spot)
         local tucked = hostCall("pickCoverHideSpot", battle) and true or false
-        hostCall("enqueueDodgeHideAnim", battle, {
+        Fx.enqueueDodgeHideAnim(battle, {
             label = spot,
             beforeAnim = true,
             stayHidden = not tucked,
@@ -151,15 +151,453 @@ function Fx.play(battle, action, result)
     end
 
     if action == "brace" then
-        hostCall("enqueueBraceAnim", battle, { beforeAnim = true })
+        Fx.enqueueBraceAnim(battle, { beforeAnim = true })
         return
     end
 
     if action == "entrench" or action == "entrench_hold" then
         if action == "entrench" then
-            hostCall("enqueueBraceAnim", battle, { beforeAnim = true, entrenched = true })
+            Fx.enqueueBraceAnim(battle, { beforeAnim = true, entrenched = true })
         end
     end
 end
+
+
+local function pickLine(lines)
+    if type(lines) ~= "table" then
+        return nil
+    end
+    local n = #lines
+    if n == 0 then
+        return nil
+    end
+    local r = (love and love.math and love.math.random) or math.random
+    return lines[r(n)]
+end
+
+-- Pick a Gen1 move id that exists in this battle's data.
+function Fx.pickHideMoveAnim(battle, candidates)
+    local moves = battle and battle.data and battle.data.moves
+    if type(moves) ~= "table" or type(candidates) ~= "table" then
+        return nil
+    end
+    local ok = {}
+    for i = 1, #candidates do
+        local id = candidates[i]
+        if type(id) == "string" and moves[id] then
+            ok[#ok + 1] = id
+        end
+    end
+    if #ok == 0 then
+        return nil
+    end
+    return pickLine(ok) or ok[1]
+end
+
+-- Dig/Fly/leaf/surf-style hides: picFx motion + thematic move anim.
+function Fx.dodgeAnimSpec(choice, battle)
+    local label = ""
+    if type(choice) == "table" then
+        label = tostring(choice.label or ""):upper()
+    elseif type(choice) == "string" then
+        label = choice:upper()
+    end
+    -- STAY re-hide / auto path: reuse the remembered cover spot.
+    if label == "" and battle then
+        local st = hostCall("momentumState", battle)
+        if st and st.temp and st.temp.coverSpot then
+            label = tostring(st.temp.coverSpot):upper()
+        end
+    end
+    local spec = {
+        pic = "slideDownHide",
+        wait = 20,
+        moves = { "DIG", "SLIDE_DOWN_ANIM", "DOUBLE_TEAM" },
+        emerge = { "DIG", "QUICK_ATTACK" },
+    }
+    local byLabel = {
+        ["FLY UP"] = {
+            pic = "slideUp",
+            wait = 18,
+            moves = { "FLY", "GUST", "WING_ATTACK", "SKY_ATTACK", "DRILL_PECK" },
+            emerge = { "FLY", "GUST", "WING_ATTACK" },
+        },
+        ["ZIP"] = {
+            pic = "slideOff",
+            wait = 20,
+            moves = { "THUNDERBOLT", "THUNDER_WAVE", "QUICK_ATTACK", "FLASH" },
+            emerge = { "THUNDERBOLT", "QUICK_ATTACK" },
+        },
+        ["BURST"] = {
+            pic = "bounce",
+            wait = 28,
+            moves = { "FLAMETHROWER", "FIRE_BLAST", "FIRE_SPIN", "EMBER", "SMOKESCREEN" },
+            emerge = { "EMBER", "FLAMETHROWER" },
+        },
+        ["FADE"] = {
+            pic = "blink",
+            wait = 26,
+            moves = { "TELEPORT", "NIGHT_SHADE", "CONFUSE_RAY", "LICK" },
+            emerge = { "TELEPORT", "NIGHT_SHADE" },
+        },
+        ["SENSE"] = {
+            pic = "blink",
+            wait = 22,
+            moves = { "PSYCHIC", "CONFUSION", "TELEPORT", "DISABLE" },
+            emerge = { "PSYCHIC", "TELEPORT" },
+        },
+        ["DIVE"] = {
+            pic = "slideDown",
+            wait = 22,
+            moves = { "SURF", "WATERFALL", "BUBBLEBEAM", "CLAMP", "WITHDRAW" },
+            emerge = { "SURF", "WATERFALL", "BUBBLEBEAM" },
+        },
+        ["SPLASH"] = {
+            pic = "slideDown",
+            wait = 20,
+            moves = { "SURF", "WATER_GUN", "BUBBLE", "BUBBLEBEAM" },
+            emerge = { "SURF", "WATER_GUN" },
+        },
+        ["SHORE"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "SURF", "WATER_GUN", "SAND_ATTACK" },
+            emerge = { "WATER_GUN", "QUICK_ATTACK" },
+        },
+        ["GRASS"] = {
+            pic = "slideDownHide",
+            wait = 20,
+            moves = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE", "LEECH_SEED", "SLEEP_POWDER" },
+            emerge = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE" },
+        },
+        ["BRUSH"] = {
+            pic = "slideDownHide",
+            wait = 20,
+            moves = { "RAZOR_LEAF", "VINE_WHIP", "PETAL_DANCE", "STUN_SPORE" },
+            emerge = { "RAZOR_LEAF", "VINE_WHIP" },
+        },
+        ["TREE"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "RAZOR_LEAF", "VINE_WHIP", "LEECH_SEED", "FLY" },
+            emerge = { "RAZOR_LEAF", "FLY" },
+        },
+        ["ROCK"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "DIG", "ROCK_SLIDE", "ROCK_THROW", "STRENGTH" },
+            emerge = { "DIG", "ROCK_THROW" },
+        },
+        ["STONE"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "DIG", "ROCK_THROW", "HARDEN" },
+            emerge = { "DIG", "ROCK_THROW" },
+        },
+        ["LEDGE"] = {
+            pic = "slideUp",
+            wait = 16,
+            moves = { "DIG", "QUICK_ATTACK", "STRENGTH" },
+            emerge = { "DIG", "QUICK_ATTACK" },
+        },
+        ["CLIFF"] = {
+            pic = "slideUp",
+            wait = 18,
+            moves = { "FLY", "DIG", "STRENGTH", "ROCK_SLIDE" },
+            emerge = { "FLY", "DIG" },
+        },
+        ["CART"] = {
+            pic = "slideOff",
+            wait = 20,
+            moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "SMOKESCREEN" },
+            emerge = { "QUICK_ATTACK", "DOUBLE_TEAM" },
+        },
+        ["ALLEY"] = {
+            pic = "slideOff",
+            wait = 20,
+            moves = { "SMOKESCREEN", "DOUBLE_TEAM", "QUICK_ATTACK", "TOXIC" },
+            emerge = { "SMOKESCREEN", "QUICK_ATTACK" },
+        },
+        ["PATH"] = {
+            pic = "slideOff",
+            wait = 18,
+            moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "AGILITY", "SAND_ATTACK" },
+            emerge = { "QUICK_ATTACK", "AGILITY" },
+        },
+        ["SHADOW"] = {
+            pic = "blink",
+            wait = 24,
+            moves = { "NIGHT_SHADE", "CONFUSE_RAY", "LICK", "TELEPORT" },
+            emerge = { "NIGHT_SHADE", "TELEPORT" },
+        },
+        ["PILLAR"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "BARRIER", "LIGHT_SCREEN", "REFLECT", "HARDEN" },
+            emerge = { "BARRIER", "QUICK_ATTACK" },
+        },
+        ["COURT"] = {
+            pic = "slideOff",
+            wait = 16,
+            moves = { "QUICK_ATTACK", "DOUBLE_TEAM", "AGILITY" },
+            emerge = { "QUICK_ATTACK" },
+        },
+        ["WALL"] = {
+            pic = "slideHalf",
+            wait = 18,
+            moves = { "BARRIER", "REFLECT", "HARDEN" },
+            emerge = { "BARRIER", "QUICK_ATTACK" },
+        },
+        ["COVER"] = {
+            pic = "slideDownHide",
+            wait = 20,
+            moves = { "DOUBLE_TEAM", "MINIMIZE", "DIG", "HARDEN" },
+            emerge = { "DOUBLE_TEAM", "DIG" },
+        },
+        ["DODGE"] = {
+            pic = "slideOff",
+            wait = 14,
+            moves = { "QUICK_ATTACK", "DOUBLE_TEAM" },
+            emerge = { "QUICK_ATTACK" },
+        },
+    }
+    if byLabel[label] then
+        spec = byLabel[label]
+    elseif label == "" and battle then
+        local types = (hostCall("playerTypeSet", battle) or {})
+        if types.FLYING then
+            spec = byLabel["FLY UP"]
+        elseif types.WATER then
+            spec = byLabel["DIVE"]
+        elseif types.GRASS then
+            spec = byLabel["GRASS"]
+        elseif types.GHOST or types.PSYCHIC then
+            spec = byLabel["FADE"]
+        elseif types.FIRE then
+            spec = byLabel["BURST"]
+        elseif types.ELECTRIC then
+            spec = byLabel["ZIP"]
+        end
+    end
+    return spec, label
+end
+
+local function insertQueueAfter(battle, item)
+    battle.nextInsert = (battle.nextInsert or 0) + 1
+    table.insert(battle.queue, battle.nextInsert, item)
+end
+
+function Fx.enqueueDodgeHideAnim(battle, choice)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+        return
+    end
+    local beforeAnim = type(choice) == "table" and choice.beforeAnim == true
+    local stayHidden = not (type(choice) == "table" and choice.stayHidden == false)
+    local state = hostCall("momentumState", battle)
+    if stayHidden then
+        state.temp.picHidden = true
+    end
+    -- FIELD combat: OW sprite tuck behind real props. Skip Dig/Fly/etc.
+    -- thematic anims that stamp cover shapes onto the map stage.
+    if isField(battle) then
+        return
+    end
+    if battle.animationsOn and not battle:animationsOn() then
+        local player = battle.player
+        if stayHidden and player and battle.picFxFor then
+            local pf = battle:picFxFor(player)
+            if pf then
+                pf.kind, pf.hidden = nil, true
+            end
+        end
+        return
+    end
+    local spec, label = Fx.dodgeAnimSpec(choice, battle)
+    local moveId = spec.move or Fx.pickHideMoveAnim(battle, spec.moves)
+    local items = {}
+    -- 1) Kick a picFx so the mon visibly ducks / flies / fades.
+    items[#items + 1] = {
+        arFx = true,
+        fn = function()
+            if not battle.picFxFor or not battle.player then
+                return
+            end
+            local pf = battle:picFxFor(battle.player)
+            if not pf then
+                return
+            end
+            pf.kind, pf.t = spec.pic, 0
+            pf.hidden, pf.ox, pf.oy = nil, 0, 0
+            if battle.fx then
+                battle.fx.shake = math.max(battle.fx.shake or 0, 8)
+            end
+        end,
+    }
+    -- 2) Let the picFx play out.
+    items[#items + 1] = { wait = spec.wait or 18, arFx = true }
+    -- 3) Thematic move anim (FLY / RAZOR_LEAF / DIG / SURF / …).
+    if moveId and battle.data and battle.data.moves and battle.data.moves[moveId] then
+        items[#items + 1] = {
+            anim = moveId,
+            attackerIsPlayer = true,
+            arFx = true,
+        }
+        hostCall("log", battle, "HIDE anim",
+            tostring(label or "?") .. "→" .. tostring(moveId))
+    end
+    -- 4) Stay hidden in cover afterward (or clear for a brief sidestep).
+    items[#items + 1] = {
+        arFx = true,
+        fn = function()
+            if not battle.picFxFor or not battle.player then
+                return
+            end
+            local pf = battle:picFxFor(battle.player)
+            if not pf then
+                return
+            end
+            pf.kind, pf.t = nil, nil
+            pf.ox, pf.oy = 0, 0
+            if stayHidden then
+                pf.hidden = true
+            else
+                pf.hidden = nil
+                if state.temp then
+                    state.temp.picHidden = false
+                end
+            end
+        end,
+    }
+
+    if beforeAnim then
+        for i = #items, 1, -1 do
+            hostCall("insertBeforeAnim", battle, items[i])
+        end
+    else
+        for i = 1, #items do
+            insertQueueAfter(battle, items[i])
+        end
+    end
+end
+
+function Fx.enqueueBraceAnim(battle, opts)
+    if type(battle) ~= "table" or type(battle.queue) ~= "table" then
+        return
+    end
+    opts = opts or {}
+    -- FIELD: brace is the OW sprite crouch — skip classic BARRIER/etc. FX.
+    if isField(battle) then
+        return
+    end
+    local foeSide = opts.foe == true
+    local side = foeSide and battle.enemy or battle.player
+    if not side then
+        return
+    end
+    if battle.animationsOn and not battle:animationsOn() then
+        return
+    end
+
+    local entrenched = opts.entrenched == true
+    -- Classic status anims that read as "toughen up" / shell / barrier.
+    -- Picked at random so brace/entrench don't always look identical.
+    local movePool = entrenched and {
+        "BARRIER", "ACID_ARMOR", "HARDEN", "WITHDRAW", "DEFENSE_CURL", "REFLECT",
+    } or {
+        "HARDEN", "WITHDRAW", "DEFENSE_CURL", "MEDITATE", "BIDE",
+        "BARRIER", "ACID_ARMOR",
+    }
+    local picPool = {
+        { pic = "blink",     wait = 10 },
+        { pic = "bounce",    wait = 14 },
+        { pic = "slideHalf", wait = 12 },
+        { pic = "blink",     wait = 8, follow = "bounce", followWait = 12 },
+    }
+    local moveId = pickLine(movePool)
+    local pic = pickLine(picPool) or picPool[1]
+    local wait = pic.wait or 12
+    if entrenched then
+        wait = wait + 6
+    end
+    local shake = entrenched and 14 or 10
+
+    local items = {}
+    items[#items + 1] = {
+        arFx = true,
+        fn = function()
+            if not battle.picFxFor then
+                return
+            end
+            local battler = foeSide and battle.enemy or battle.player
+            if not battler then
+                return
+            end
+            local pf = battle:picFxFor(battler)
+            if pf then
+                pf.kind, pf.t = pic.pic, 0
+                pf.hidden = nil
+            end
+            if battle.fx then
+                battle.fx.shake = math.max(battle.fx.shake or 0, shake)
+            end
+        end,
+    }
+    items[#items + 1] = { wait = wait, arFx = true }
+    if pic.follow then
+        items[#items + 1] = {
+            arFx = true,
+            fn = function()
+                if not battle.picFxFor then
+                    return
+                end
+                local battler = foeSide and battle.enemy or battle.player
+                if not battler then
+                    return
+                end
+                local pf = battle:picFxFor(battler)
+                if pf then
+                    pf.kind, pf.t = pic.follow, 0
+                end
+            end,
+        }
+        items[#items + 1] = { wait = pic.followWait or 12, arFx = true }
+    end
+    if moveId and battle.data and battle.data.moves and battle.data.moves[moveId] then
+        items[#items + 1] = {
+            anim = moveId,
+            attackerIsPlayer = not foeSide,
+            arFx = true,
+        }
+    end
+    -- Clear leftover picFx so the real attack reads cleanly.
+    items[#items + 1] = {
+        arFx = true,
+        fn = function()
+            if not battle.picFxFor then
+                return
+            end
+            local battler = foeSide and battle.enemy or battle.player
+            if not battler then
+                return
+            end
+            local pf = battle:picFxFor(battler)
+            if pf and (pf.kind == pic.pic or pf.kind == pic.follow) then
+                pf.kind, pf.t = nil, nil
+            end
+        end,
+    }
+
+    if opts.beforeAnim then
+        -- insertBeforeAnim prepends at the anim index; reverse so order stays.
+        for i = #items, 1, -1 do
+            hostCall("insertBeforeAnim", battle, items[i])
+        end
+    else
+        for i = 1, #items do
+            insertQueueAfter(battle, items[i])
+        end
+    end
+end
+
 
 return Fx
