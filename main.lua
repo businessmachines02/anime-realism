@@ -9,10 +9,9 @@
 -- main.lua is the orchestrator + remaining shared hooks (moving into packages
 -- over time). lib/modload.lua loads folder packages for zip + loose installs.
 --
---
-
-
-
+-- Flip to false for release builds. When true, lib/log.lua prints battle
+-- traces to the Love / stdout console (independent of DEV OVERLAY).
+local DEV = true
 
 return function(mod)
     local Hud
@@ -77,12 +76,37 @@ return function(mod)
         else
             print("[anime_realism] field: " .. tostring(err))
         end
+    end
 
+    do
+        local factory = ModLoad and type(ModLoad.loadFile) == "function"
+            and select(1, ModLoad.loadFile("lib/log.lua"))
+        if type(factory) == "function" then
+            local okL, log = pcall(factory, {
+                enabled = function()
+                    return DEV
+                end,
+            })
+            if okL and type(log) == "table" then
+                mod._arLog = log
+                if DEV and type(log.note) == "function" then
+                    pcall(log.note, nil, "boot", "DEV console log ON")
+                end
+            elseif DEV then
+                print("[ar] log init: " .. tostring(log))
+            end
+        elseif DEV then
+            print("[ar] lib/log.lua missing")
+        end
+    end
+
+    if ModLoad and type(ModLoad.loadPackage) == "function" then
         -- Expose packages before install so FBV.bind can inject ReactiveDefense.
         mod._arPackages = {
             hud = Hud,
             battle = Battle,
             field = FieldBattleViewer,
+            log = mod._arLog,
         }
 
         if Hud then
@@ -278,6 +302,10 @@ return function(mod)
         end
 
         function dev.log(battle, tag, detail)
+            local Log = mod._arLog
+            if Log and type(Log.note) == "function" then
+                pcall(Log.note, battle, tag, detail)
+            end
             if not dev.on() or not battle then
                 return
             end
@@ -785,11 +813,13 @@ return function(mod)
                     ReactiveDefense.clear(ev.battle)
                     ReactiveDefense.state(ev.battle)
                 end
+                dev.log(ev.battle, "BATTLE start", battleStage())
             end
         end)
 
         mod.events:on("battle.ended", function(ev)
             if ev and ev.battle then
+                dev.log(ev.battle, "BATTLE end")
                 resolvePendingDamage(ev.battle)
                 clearCalloutPickState(ev.battle)
                 clearAmbientStance(ev.battle)

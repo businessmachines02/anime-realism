@@ -20,6 +20,9 @@ end
 
 function Audio.enterField()
   Audio._suppressEngine = (Audio._suppressEngine or 0) + 1
+  if Audio._Log and type(Audio._Log.note) == "function" then
+    pcall(Audio._Log.note, nil, "audio.enterField", Audio._suppressEngine)
+  end
   local Sound = tryRequire("src.core.Sound")
   if Sound then
     Sound._arFieldSuppress = (Sound._arFieldSuppress or 0) + 1
@@ -28,6 +31,9 @@ end
 
 function Audio.leaveField()
   Audio._suppressEngine = math.max(0, (Audio._suppressEngine or 0) - 1)
+  if Audio._Log and type(Audio._Log.note) == "function" then
+    pcall(Audio._Log.note, nil, "audio.leaveField", Audio._suppressEngine)
+  end
   local Sound = tryRequire("src.core.Sound")
   if Sound then
     Sound._arFieldSuppress = math.max(0, (Sound._arFieldSuppress or 0) - 1)
@@ -136,6 +142,10 @@ end
 --- Play the move's MoveSoundTable entry (pitch/tempo aware).
 function Audio.playMove(battle, moveId, attackerIsPlayer)
   Audio._lastMovePlayed = false
+  if Audio._Log and type(Audio._Log.note) == "function" then
+    pcall(Audio._Log.note, battle, "audio.playMove", moveId,
+      attackerIsPlayer and "you" or "foe")
+  end
   if not battle then
     return false
   end
@@ -175,6 +185,10 @@ function Audio.playHit(battle, typeMult, opts)
     return false
   end
   typeMult = tonumber(typeMult) or 10
+  if Audio._Log and type(Audio._Log.note) == "function" then
+    pcall(Audio._Log.note, battle, "audio.playHit", typeMult,
+      opts and opts.category)
+  end
   local category = opts and opts.category
   if category == "physical" and typeMult == 10 and Audio._lastMovePlayed then
     Audio._lastMovePlayed = false

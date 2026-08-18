@@ -124,6 +124,21 @@ return function(env)
     Callouts = Callouts,
   }
 
+  local function loggedCall(battle, tag, noisy, fn, ...)
+    local Log = deps.Log
+    if noisy and Log and type(Log.note) == "function" then
+      pcall(Log.note, battle, tag)
+    end
+    local ok, a, b, c, d, e = pcall(fn, ...)
+    if not ok then
+      if Log and type(Log.err) == "function" then
+        pcall(Log.err, battle, tag, a)
+      end
+      error(a)
+    end
+    return a, b, c, d, e
+  end
+
   local FBV = {
     id = "field",
     title = "Field battle (standalone OW combat)",
@@ -265,15 +280,15 @@ return function(env)
   end
 
   function FBV.begin(battle, mod)
-    return Lifecycle.begin(battle, mod, deps)
+    return loggedCall(battle, "field.begin", true, Lifecycle.begin, battle, mod, deps)
   end
 
   function FBV.finish(battle)
-    return Lifecycle.finish(battle, deps)
+    return loggedCall(battle, "field.finish", true, Lifecycle.finish, battle, deps)
   end
 
   function FBV.syncMons(battle, mod, side)
-    return Lifecycle.syncMons(battle, mod, deps, side)
+    return loggedCall(battle, "field.syncMons", true, Lifecycle.syncMons, battle, mod, deps, side)
   end
 
   function FBV.stagePlayerMon(battle, mod)
@@ -281,15 +296,15 @@ return function(env)
   end
 
   function FBV.tick(battle, dt)
-    return Lifecycle.tick(battle, dt, deps)
+    return loggedCall(battle, "tick", false, Lifecycle.tick, battle, dt, deps)
   end
 
   function FBV.tickPresent(game, dt)
-    return Lifecycle.tickPresent(game, dt, deps)
+    return loggedCall(nil, "tickPresent", false, Lifecycle.tickPresent, game, dt, deps)
   end
 
   function FBV.tickActive(game, dt)
-    return Lifecycle.tickPresent(game, dt, deps)
+    return FBV.tickPresent(game, dt)
   end
 
   function FBV.drawDebug(battle)
@@ -309,7 +324,13 @@ return function(env)
     -- Attack FX on the same overlay as HP (world→UI mapped).
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
     if session and Projectiles and type(Projectiles.drawUi) == "function" then
-      pcall(Projectiles.drawUi, session, battle)
+      local okUi, errUi = pcall(Projectiles.drawUi, session, battle)
+      if not okUi then
+        local Log = deps.Log
+        if Log and type(Log.err) == "function" then
+          pcall(Log.err, battle, "drawUi", errUi)
+        end
+      end
     end
   end
 
@@ -327,7 +348,7 @@ return function(env)
   end
 
   function FBV.react(battle, side, kind, opts)
-    return Lifecycle.react(battle, side, kind, opts)
+    return loggedCall(battle, "react", false, Lifecycle.react, battle, side, kind, opts)
   end
 
   function FBV.shouldSkipEventReact(battle, side, kind, opts)
@@ -411,11 +432,23 @@ return function(env)
     return FBV.shouldUse(mod, battle)
   end
 
-  -- Inject cross-package services (ReactiveDefense) into the FIELD deps bag.
+  -- Inject cross-package services (ReactiveDefense, DEV logger) into deps.
+  function FBV.setLog(log)
+    deps.Log = log
+    FBV.Log = log
+    if Audio then
+      Audio._Log = log
+    end
+    return true
+  end
+
   function FBV.bind(packages)
     local RD = packages and packages.battle and packages.battle.ReactiveDefense
     deps.ReactiveDefense = RD
     FBV.ReactiveDefense = RD
+    if packages and packages.log then
+      FBV.setLog(packages.log)
+    end
     return true
   end
 

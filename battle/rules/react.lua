@@ -1065,6 +1065,12 @@ function React.install(mod)
     vanillaRunDamaging = vanilla
 
 function EffectRegistry.runDamaging(battle, ctx, record)
+    do
+        local move = ctx and ctx.move
+        local who = (ctx and ctx.user and ctx.user.isPlayer) and "you" or "foe"
+        log(battle, "runDamaging",
+            tostring(move and (move.id or move.name) or "-") .. " by=" .. who)
+    end
     -- Focus trench: soak the hit with entrench mitigation (no REACT menu).
     if RD() and opt("momentum_counter") and battle and ctx
         and ctx.user and not ctx.user.isPlayer

@@ -66,6 +66,9 @@ function Hooks.installEvents(FBV, mod, ctx)
             battle._arFieldBeginDone = true
             battle._arFieldPreferMoves = nil
             battle._arFieldCommandHold = nil
+            if FBV.Log and type(FBV.Log.note) == "function" then
+                pcall(FBV.Log.note, battle, "event.started", "field.begin")
+            end
             pcall(FBV.begin, battle, mod)
         end)
 
@@ -227,7 +230,14 @@ function Hooks.installEvents(FBV, mod, ctx)
                 local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, kind, opts)
                 skip = okS and s
             end
-            if not skip then
+            if skip then
+                if FBV.Log and type(FBV.Log.note) == "function" then
+                    pcall(FBV.Log.note, battle, "move_used skip", side, move.id, kind)
+                end
+            else
+                if FBV.Log and type(FBV.Log.note) == "function" then
+                    pcall(FBV.Log.note, battle, "move_used", side, move.id, kind)
+                end
                 pcall(FBV.react, battle, side, kind, opts)
             end
         end)
@@ -251,6 +261,10 @@ function Hooks.installEvents(FBV, mod, ctx)
             }
             if session and type(FBV.shouldHoldEngineHit) == "function"
                 and FBV.shouldHoldEngineHit(session, { user = ev.user }) then
+                if FBV.Log and type(FBV.Log.note) == "function" then
+                    pcall(FBV.Log.note, battle, "dmg hold", side, ev.damage,
+                        hitOpts.moveId)
+                end
                 if type(FBV.holdCloseHit) == "function" then
                     FBV.holdCloseHit(session, side, hitOpts)
                 end
@@ -262,6 +276,10 @@ function Hooks.installEvents(FBV, mod, ctx)
                 skip = okS and s
             end
             if not skip then
+                if FBV.Log and type(FBV.Log.note) == "function" then
+                    pcall(FBV.Log.note, battle, "dmg", side, ev.damage,
+                        hitOpts.moveId)
+                end
                 pcall(FBV.react, battle, side, "hit", hitOpts)
             end
         end)
@@ -275,6 +293,9 @@ function Hooks.installEvents(FBV, mod, ctx)
             -- Dialogue-timed event: only a fallback if the bar is already empty
             -- and watchHpFaint has not played the exit yet.
             if type(FBV.onFainted) == "function" then
+                if FBV.Log and type(FBV.Log.note) == "function" then
+                    pcall(FBV.Log.note, battle, "faint", side)
+                end
                 pcall(FBV.onFainted, battle, side)
             else
                 local skip = false

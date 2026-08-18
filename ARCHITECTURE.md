@@ -92,6 +92,7 @@ package trees (tests excluded) so folder paths survive import.
 anime_realism/
   main.lua              orchestrator + host callbacks + classic picFx helpers
   lib/modload.lua       zip-safe package loader
+  lib/log.lua           DEV console traces (`local DEV = true` in main.lua)
   hud/                 hide numbers + EXP/effort rewards
   battle/              rules (RD) + REACT menus + FX policy + dialogue
   field/               overworld presentation (cues, projectiles, compact HUD)
@@ -283,7 +284,14 @@ Loaded from `field/init.lua`. Sibling `require("coords")` / `require("themes")` 
 | `stage/` | `arena`, `themes`, `arenas/*.lua` | Overlay props; hand kits when pad size matches |
 | `chrome/` | `ui`, `callouts`, `debug`, `hooks*` | Compact menus, bubbles, BattleState wraps |
 
-Also in the tree: `logger.lua` (unused; do not wire or delete yet), `tests/`.
+Also in the tree: `logger.lua` (unused leftover; do not wire or delete yet), `tests/`.
+DEV battle traces live in `lib/log.lua` (gated by `local DEV` in `main.lua`), not this file.
+
+### DEV console logger
+
+`local DEV = true` at the top of `main.lua` prints `[ar]` lines to the Love / stdout console. Independent of the **DEV OVERLAY** option. Set `DEV = false` before a release zip.
+
+Lines look like `[ar] #12 T3 cue player attack TACKLE physical`. `ERR` lines dump the last ~24 events. Present-clock ticks are not logged (too noisy); a `tickPresent` throw still prints `ERR tickPresent` then the ring.
 
 ### Sprite resolution
 

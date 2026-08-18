@@ -19,6 +19,22 @@
 
 local Cues = {}
 
+local function note(session, battle, tag, ...)
+  local Log = session and session._deps and session._deps.Log
+  if not (Log and type(Log.note) == "function") then
+    return
+  end
+  pcall(Log.note, battle or (session and session._battle), tag, ...)
+end
+
+local function noteErr(session, battle, tag, err)
+  local Log = session and session._deps and session._deps.Log
+  if not (Log and type(Log.err) == "function") then
+    return
+  end
+  pcall(Log.err, battle or (session and session._battle), tag, err)
+end
+
 -- Gen1 semi-invulnerable charge moves → field vanish flavor.
 Cues.VANISH_MOVES = {
   DIG = "dig",
@@ -312,6 +328,8 @@ local function fireCloseStrike(session, side, ent, Grid)
     return
   end
   local pending = ent._pendingCloseStrike
+  note(session, session and session._battle, "closeStrike", side,
+    pending and pending.moveId)
   ent._pendingCloseStrike = nil
   ent._closeStrikeDeadline = nil
   ent._closeStrikeWait = nil
@@ -384,18 +402,25 @@ function Cues.flushHeldHit(session, battle)
   Cues.flushCloseHit(session, session._deps and session._deps.Grid)
   battle._arCloseGapResuming = true
   local replayedRun = held and held.ctx and true or false
+  note(session, battle, "flushHeldHit", replayedRun and "runDamaging" or "applyDamage")
   if replayedRun then
     -- Full effect applies HP + faint. Do not also replay applyDamage.
     local okE, registry = pcall(require, "src.battle.EffectRegistry")
     local run = okE and registry and registry.runDamaging
     if type(run) == "function" then
-      pcall(run, battle, held.ctx, held.record)
+      local okR, errR = pcall(run, battle, held.ctx, held.record)
+      if not okR then
+        noteErr(session, battle, "flushHeldHit.runDamaging", errR)
+      end
     end
   elseif type(stashed) == "table" and type(battle.applyDamage) == "function" then
     for i = 1, #stashed do
       local args = stashed[i]
       if type(args) == "table" then
-        pcall(battle.applyDamage, battle, unpack(args))
+        local okA, errA = pcall(battle.applyDamage, battle, unpack(args))
+        if not okA then
+          noteErr(session, battle, "flushHeldHit.applyDamage", errA)
+        end
       end
     end
     -- applyDamage alone does not run the engine faint script.
@@ -902,6 +927,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
   kind = tostring(kind or "attack")
   opts = opts or {}
+  note(session, battle, "cue", side, kind, opts.moveId, opts.category)
   local category = normCategory(opts.category)
   session._lastCueSide = side
   session._lastCueKind = kind

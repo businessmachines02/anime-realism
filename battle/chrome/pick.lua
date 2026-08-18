@@ -545,6 +545,14 @@ function Pick.newModal(game, opts)
             return
         end
         self._resolved = true
+        do
+            local fn = host.log
+            if type(fn) == "function" then
+                pcall(fn, nil, "pick",
+                    tostring(self.title or "") .. " → "
+                    .. tostring(choice.id or choice.label or "?"))
+            end
+        end
         Sound.play(self.game.data, "Press_AB")
         self.game.stack:pop()
         if self.onPick then

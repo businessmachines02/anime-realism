@@ -1974,12 +1974,21 @@ Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
               py + (lx * sa + ly * ca) * scale
           end
           local fadeIce = (1 - t * 0.2)
+          -- Unpack both returns from each pt() — Lua only expands the last
+          -- call in an arg list, so inlining pt() into polygon() yields an
+          -- odd vertex count and Love errors every overlay frame.
+          local ax, ay = pt(0, -2.4)
+          local bx, by = pt(0.9, 0)
+          local cx, cy = pt(0, 2.4)
+          local dx, dy = pt(-0.9, 0)
           g.setColor(c[1], c[2], c[3], 0.85 * fadeIce)
-          g.polygon("fill",
-            pt(0, -2.4), pt(0.9, 0), pt(0, 2.4), pt(-0.9, 0))
+          g.polygon("fill", ax, ay, bx, by, cx, cy, dx, dy)
+          local hx, hy = pt(0, -1.1)
+          local ix, iy = pt(0.35, 0)
+          local jx, jy = pt(0, 0.5)
+          local kx, ky = pt(-0.2, -0.15)
           g.setColor(1, 1, 1, 0.7 * fadeIce)
-          g.polygon("fill",
-            pt(0, -1.1), pt(0.35, 0), pt(0, 0.5), pt(-0.2, -0.15))
+          g.polygon("fill", hx, hy, ix, iy, jx, jy, kx, ky)
         end
       end
     else

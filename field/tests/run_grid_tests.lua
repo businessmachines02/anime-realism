@@ -2700,6 +2700,57 @@ function tests.fire_tongues_and_gust_paint()
   love = prevLove
 end
 
+function tests.ice_beam_shard_polygons_are_xy_pairs()
+  local odd = 0
+  local polygons = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      arc = function() end,
+      ellipse = function() end,
+      circle = function() end,
+      rectangle = function() end,
+      polygon = function(_, ...)
+        polygons = polygons + 1
+        if (select("#", ...) % 2) ~= 0 then
+          odd = odd + 1
+        end
+      end,
+    },
+  }
+  local grid = sampleGrid()
+  local player = {
+    id = "player",
+    padU = grid.home.player.u,
+    padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy",
+    padU = grid.home.enemy.u,
+    padV = grid.home.enemy.v,
+    px = 80, py = 32,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  local ice = Projectiles.move(session, "player", {
+    moveType = "ICE", moveId = "ICE_BEAM",
+  })
+  ice.age = 0.12
+  ice:draw(0, 0)
+  truthy(polygons > 0, "ice beam paints ice-shard polygons")
+  eq(odd, 0, "ice beam polygon verts are x,y pairs")
+  love = prevLove
+end
+
 function tests.camera_avoids_battle_menu()
   local grid = sampleGrid()
   local followed
