@@ -368,6 +368,17 @@ return function(env)
     end
   end
 
+  -- One FIELD overlay pass: game box + REACT chips + banter strip. Callers
+  -- must not also run battle.overlay next() (classic / gen3 / bubbles).
+  function FBV.drawFrame(battle)
+    FBV.drawUI(battle)
+    local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"
+      and FBV.fieldAllowsStackedBottomUI(battle)
+    if not stacked then
+      FBV.drawCallouts(battle)
+    end
+  end
+
   -- After the white narrator toast so the foe strip can sit above it.
   function FBV.drawCallouts(battle)
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)

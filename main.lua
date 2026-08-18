@@ -3573,29 +3573,13 @@ return function(mod)
         end
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
-            next(battle)
-            local stackedPrompt = hud.stackedPromptActive(battle)
             if hud.fieldCompactActive(battle) then
-                local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
-                battle._arFieldBubbleDialogue = side and true or nil
-                battle._arNarratorTop = nil
-                if FieldBattleViewer and type(FieldBattleViewer.drawUI) == "function" then
-                    FieldBattleViewer.drawUI(battle)
-                end
-                battle._arFieldBubbleDialogue = nil
-                if side and not battle._arFieldChipDialogue then
-                    hud.drawSpeechBubble(battle, side)
-                end
-                if not stackedPrompt
-                    and FieldBattleViewer
-                    and type(FieldBattleViewer.drawCallouts) == "function" then
-                    FieldBattleViewer.drawCallouts(battle)
-                end
-                if Battle and Battle.Notices and type(Battle.Notices.draw) == "function" then
-                    Battle.Notices.draw(battle)
-                end
+                -- FIELD chrome is FBV.drawFrame (hooks_draw). Do not paint
+                -- classic / gen3 / bubbles on top of it.
                 return
             end
+            next(battle)
+            local stackedPrompt = hud.stackedPromptActive(battle)
             BanterCameo.draw(battle)
             local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
             if side then

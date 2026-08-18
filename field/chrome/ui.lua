@@ -1,10 +1,13 @@
 -- Field battle — compact reference-style chrome (draw-only).
 --
+-- Three voices; each paints at most once per frame:
+--   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
+--      Compact bottom box only. Never the classic white slab, never a bubble.
+--   2. Banter        — trainer / NPC interludes (Callouts strip)
+--   3. REACT         — status chips on the battler (BRACE / DODGE / COVER)
+--
 -- BattleState still owns phases, cursors, input, and turn resolution.
--- This module only paints:
---   menu         → FIGHT / PKMN / ITEM / RUN (or Safari set)
---   moveSelect   → CLASSIC vertical fight list, or DIAMOND U/R/L/D compass
---   messages     → fallback dialogue box when speech toasts are not active
+-- This module also paints command / move HUDs and world-anchored HP bars.
 --
 -- World-anchored HP bars paint on the battle UI overlay with world→UI mapping
 -- (survey zoom makes worldViewSize ≠ 160×144). Floor / cover / projectiles
@@ -166,6 +169,27 @@ function UI.active(battle)
         and (battle._arAnimeField or battle._arFieldCombat or battle._arFieldStandalone)
 end
 
+local function stackedPrompt(battle)
+    local stack = battle and battle.game and battle.game.stack
+    local top = stack and type(stack.top) == "function" and stack:top() or nil
+    return top ~= nil and top ~= battle and top.isOpaque ~= true
+end
+
+-- Lane 1: engine narrator. Banter (Name:) and chip-owned REACT toasts stay out.
+function UI.gameDialogue(battle)
+    if not battle or battle.phase ~= "messages" then
+        return false
+    end
+    if battle._arFieldChipDialogue or stackedPrompt(battle) then
+        return false
+    end
+    local text = (battle.current and battle.current.text) or ""
+    if tostring(text):match("^[%w%.%s']+:") then
+        return false
+    end
+    return true
+end
+
 function UI.layoutState(battle)
     local phase = battle and battle.phase or ""
     return {
@@ -173,9 +197,7 @@ function UI.layoutState(battle)
         showHUD = false,
         showCommand = phase == "menu",
         showMoves = phase == "moveSelect" or phase == "mimicSelect",
-        showDialogue = phase == "messages"
-            and not battle._arFieldBubbleDialogue
-            and not battle._arFieldChipDialogue,
+        showDialogue = UI.gameDialogue(battle),
         menuIndex = battle and battle.menuIndex or 1,
         moveIndex = phase == "mimicSelect"
             and (battle and battle.mimicIndex or 1)

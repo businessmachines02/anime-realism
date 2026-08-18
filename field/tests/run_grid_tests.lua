@@ -452,10 +452,27 @@ function tests.compact_field_ui_tracks_engine_cursors()
   eq(state.moveIndex, 4, "move cursor remains BattleState-owned")
   battle.phase = "messages"
   state = UI.layoutState(battle)
-  truthy(state.showDialogue, "message phase keeps a no-bubble fallback")
-  battle._arFieldBubbleDialogue = true
+  truthy(state.showDialogue, "message phase keeps the game dialogue box")
+  battle._arFieldChipDialogue = true
   state = UI.layoutState(battle)
-  truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
+  truthy(not state.showDialogue, "chip-owned REACT toast does not also fill the game box")
+  battle._arFieldChipDialogue = nil
+  battle.game = {
+    stack = {
+      top = function()
+        return { isOpaque = false }
+      end,
+    },
+  }
+  state = UI.layoutState(battle)
+  truthy(not state.showDialogue, "stacked YES-NO / about-to-use owns the box")
+  battle.game = nil
+  battle.current = { text = "BROCK: Onix, now!" }
+  state = UI.layoutState(battle)
+  truthy(not state.showDialogue, "trainer banter is not the game box")
+  battle.current = { text = "BROCK is\nabout to use" }
+  state = UI.layoutState(battle)
+  truthy(state.showDialogue, "about-to-use is game dialogue")
 end
 
 function tests.status_chip_abbreviations()

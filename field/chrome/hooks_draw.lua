@@ -102,6 +102,17 @@ function Hooks.installDraw(FBV, mod, ctx)
             BattleState._arFbvAnim = true
         end
 
+        if type(BattleState.drawTextArea) == "function" and not BattleState._arFbvText then
+            local origText = BattleState.drawTextArea
+            function BattleState:drawTextArea(...)
+                if isFieldBattle(self) then
+                    return
+                end
+                return origText(self, ...)
+            end
+            BattleState._arFbvText = true
+        end
+
         -- Do not run the classic SGB pipeline (bgCanvas, applyWavy, zone
         -- shader, white 160×144 fill) over the live voxel world. Hits arm
         -- shake/wavy; that GL mix aborts Love with no error screen and looks
@@ -118,15 +129,8 @@ function Hooks.installDraw(FBV, mod, ctx)
                 self.introSlide = 0
                 self.letterboxWhite = false
                 self.isOpaque = false
-                if type(self.drawTextArea) == "function" then
-                    local okT, errT = pcall(self.drawTextArea, self)
-                    if not okT then
-                        dumpAndThrow(self, "drawTextArea", errT)
-                    end
-                end
-                -- Same bus the engine uses (src.mods.Runtime). A missing
-                -- require here skips overlay entirely: menus/HP still paint,
-                -- speech bubbles and trainer callouts do not.
+                -- Classic / gen3 / bubbles never paint here — FBV.drawFrame
+                -- is the only FIELD overlay.
                 local overlayCall
                 if mod.hooks and type(mod.hooks.call) == "function" then
                     overlayCall = function(vanilla, battle)
@@ -191,18 +195,19 @@ function Hooks.installDraw(FBV, mod, ctx)
         end
     end
 
-    -- ---- Overlay / visibility hooks ----
-    -- Draw FIELD chrome last so Move Inspector / typed-move panels cannot cover it.
+    -- FIELD owns its overlay. Do not call next() — that is classic / gen3 /
+    -- speech-bubble paint, which stacked a second box under ours.
     if mod.hooks and type(mod.hooks.wrap) == "function"
-        and not mod._arFbvOverlayTop then
-        mod._arFbvOverlayTop = true
+        and not mod._arFbvOverlayFrame then
+        mod._arFbvOverlayFrame = true
         mod.hooks:wrap("battle.overlay", function(next, battle)
-            next(battle)
             if battle and isFieldBattle(battle)
-                and FBV and type(FBV.drawUI) == "function" then
-                FBV.drawUI(battle)
+                and FBV and type(FBV.drawFrame) == "function" then
+                FBV.drawFrame(battle)
+                return
             end
-        end, 12000)
+            next(battle)
+        end, 13000)
     end
 
     if mod.hooks and type(mod.hooks.wrap) == "function"
