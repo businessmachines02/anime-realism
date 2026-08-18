@@ -1,7 +1,7 @@
 -- Field battle — BattleState update wrap (menu latch, pause, directional cast).
 --
--- Loaded by field/init.lua and attached onto Hooks. Guard `_arFbvUpdate26`
--- rebinds even if an older FIELD update wrap was installed.
+-- Loaded by field/init.lua and attached onto Hooks. `_arFbvUpdate` means
+-- this wrap is already on BattleState.update for this process.
 
 return function(Hooks)
 function Hooks.installInput(FBV, mod, ctx)
@@ -12,15 +12,19 @@ function Hooks.installInput(FBV, mod, ctx)
     local function dumpAndThrow(battle, tag, err)
         if FBV.Log and type(FBV.Log.err) == "function" then
             pcall(FBV.Log.err, battle, tag, err)
+        else
+            pcall(print, "[ar] ERR " .. tostring(tag), tostring(err))
         end
-        error(tostring(err), 0)
+        -- FIELD: rethrowing mid-voxel makes Love return 1 with no error screen.
+        if not FBV.enabled(mod) then
+            error(tostring(err), 0)
+        end
     end
 
     local ok, BattleState = pcall(require, "src.battle.BattleState")
     if ok and type(BattleState) == "table" then
-        -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate30 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate30 then
+        -- Stick FIELD menu/pause/cast onto BattleState.update, once.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -198,7 +202,12 @@ function Hooks.installInput(FBV, mod, ctx)
                         end
                         result = { a, b, c }
                     else
-                        result = { origUpdate(self, dt, ...) }
+                        local okU, a, b, c = pcall(origUpdate, self, dt, ...)
+                        if not okU then
+                            dumpAndThrow(self, "BattleState.update", a)
+                            return
+                        end
+                        result = { a, b, c }
                     end
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
@@ -221,17 +230,6 @@ function Hooks.installInput(FBV, mod, ctx)
                 return origUpdate(self, dt, ...)
             end
 
-            BattleState._arFbvUpdate30 = true
-            BattleState._arFbvUpdate29 = true
-            BattleState._arFbvUpdate28 = true
-            BattleState._arFbvUpdate27 = true
-            BattleState._arFbvUpdate26 = true
-            BattleState._arFbvUpdate25 = true
-            BattleState._arFbvUpdate24 = true
-            BattleState._arFbvUpdate23 = true
-            BattleState._arFbvUpdate22 = true
-            BattleState._arFbvUpdate21 = true
-            BattleState._arFbvUpdate20 = true
             BattleState._arFbvUpdate = true
         end
     end

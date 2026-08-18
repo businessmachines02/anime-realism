@@ -51,8 +51,7 @@ function Hooks.installEvents(FBV, mod, ctx)
     end
 
     -- ---- Battle events → Lifecycle / Cues / Projectiles ----
-    if mod.events and type(mod.events.on) == "function" and not mod._arFbvEvents29 then
-        mod._arFbvEvents29 = true
+    if mod.events and type(mod.events.on) == "function" and not mod._arFbvEvents then
         mod._arFbvEvents = true
 
         mod.events:on("battle.started", function(ev)

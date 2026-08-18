@@ -106,7 +106,7 @@ function Audio.installEngineMute()
   -- SGB canvas + PaletteFX shader over the live voxel world and abort Love.
   local okBS, BattleState = pcall(require, "src.battle.BattleState")
   if okBS and BattleState and type(BattleState.applyHitFx) == "function"
-      and not BattleState._arFieldMuteHitFx2 then
+      and not BattleState._arFieldMuteHitFx then
     local origHitFx = BattleState.applyHitFx
     function BattleState.applyHitFx(self, hit)
       if self and (self._arAnimeField or self._arFieldCombat) then
@@ -114,7 +114,6 @@ function Audio.installEngineMute()
       end
       return origHitFx(self, hit)
     end
-    BattleState._arFieldMuteHitFx2 = true
     BattleState._arFieldMuteHitFx = true
   end
 end

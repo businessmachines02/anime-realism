@@ -409,7 +409,7 @@ function Intercept.install(FBV, mod)
       BattleState._arFbvFinish = true
     end
 
-    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ28 then
+    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ then
       local origUQ = BattleState.updateQueue
       local function noteUQ(battle, tag, ...)
         local Log = Intercept._fbv and Intercept._fbv.Log
@@ -469,9 +469,7 @@ function Intercept.install(FBV, mod)
         end
         return origUQ(self, ...)
       end
-      BattleState._arFbvUQ28 = true
-      BattleState._arFbvUQ27 = true
-      BattleState._arFbvUQ24 = true
+      BattleState._arFbvUQ = true
     end
   end
 
