@@ -9,16 +9,10 @@ function Hooks.installDraw(FBV, mod, ctx)
     local isFieldBattle = ctx.isFieldBattle or function() return false end
 
     local function dumpAndThrow(battle, tag, err)
-        pcall(print, "[ar] TRACE " .. tostring(tag))
-        pcall(print, tostring(err))
         if FBV.Log and type(FBV.Log.err) == "function" then
             pcall(FBV.Log.err, battle, tag, err)
         end
-        -- Rethrow off FIELD only. Mid-voxel error() skips the Love screen
-        -- and Love's main returns 1 with no traceback (lldb sees exit(1)).
-        if not FBV.enabled(mod) then
-            error(tostring(err), 0)
-        end
+        error(tostring(err), 0)
     end
 
     -- Peek around the fight while the mouse is moving. Idle → auto camera.
@@ -300,14 +294,16 @@ function Hooks.installDraw(FBV, mod, ctx)
             -- frame Dramatic Shape poses them (NaN/nil → native GL abort).
             local ok, a, b, c, d = pcall(origDrawWorld, self, ...)
             if not ok then
-                pcall(print, "[ar] TRACE drawWorld")
-                pcall(print, tostring(a))
                 if type(FBV.unwedgeVoxelPass) == "function" then
                     pcall(FBV.unwedgeVoxelPass, mod)
                 end
                 -- Swallow on FIELD: a Lua throw mid-beginScene cannot run
                 -- love.errorhandler and aborts the process instead.
-                if not FBV.enabled(mod) then
+                if FBV.enabled(mod) then
+                    if FBV.Log and type(FBV.Log.err) == "function" then
+                        pcall(FBV.Log.err, nil, "drawWorld", a)
+                    end
+                else
                     dumpAndThrow(nil, "drawWorld", a)
                 end
                 a = nil
@@ -317,9 +313,8 @@ function Hooks.installDraw(FBV, mod, ctx)
                 local battle = select(1, FBV.liveBattle(self.game or gameSingleton()))
                 if battle and isFieldBattle(battle) then
                     local okO, errO = pcall(FBV.drawWorldOverlay, battle)
-                    if not okO then
-                        pcall(print, "[ar] TRACE drawWorldOverlay")
-                        pcall(print, tostring(errO))
+                    if not okO and FBV.Log and type(FBV.Log.err) == "function" then
+                        pcall(FBV.Log.err, battle, "drawWorldOverlay", errO)
                     end
                 end
             end
@@ -343,34 +338,28 @@ function Hooks.installDraw(FBV, mod, ctx)
         end
     end
 
-    if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvInputStep4 then
+    if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvInputStep5 then
+        mod._arFbvInputStep5 = true
         mod._arFbvInputStep4 = true
         mod._arFbvInputStep3 = true
         mod._arFbvInputStep = true
         mod.hooks:wrap("input.step", function(next, game, dt)
             presentTick(game, dt)
-            local ok, a, b, c, d = pcall(next, game, dt)
-            if not ok then
-                dumpAndThrow(nil, "input.step", a)
-                return
-            end
-            return a, b, c, d
+            return next(game, dt)
         end)
     end
 
     -- Draw-path fallback: letterbox runs every frame even when PartyMenu /
     -- callout modals sit on top of BattleState (stack only updates the top).
-    if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvLetterbox4 then
+    if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvLetterbox5 then
+        mod._arFbvLetterbox5 = true
         mod._arFbvLetterbox4 = true
         mod._arFbvLetterbox3 = true
         mod._arFbvLetterbox = true
         mod.hooks:wrap("render.letterbox", function(next, ctx)
             local game = gameSingleton()
             presentTick(game, frameDt())
-            local ok, err = pcall(next, ctx)
-            if not ok then
-                dumpAndThrow(nil, "render.letterbox", err)
-            end
+            next(ctx)
             presentOpened = false
             if not FBV.enabled(mod) then
                 return

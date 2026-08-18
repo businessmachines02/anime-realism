@@ -326,7 +326,7 @@ end
 
 local function drawCommand(g, Font, battle)
     -- Draws FIGHT/PKMN/ITEM/RUN at the panel corners: TL, TR, BL, BR.
-    local x, y, w, h = 54, 100, 128, 36
+    local x, y, w, h = 48, 100, 140, 36  -- x a little more left, w wider
     box(g, x, y, w, h)
     local labels = commandLabels(battle)
     local index = math.max(1, math.min(4, battle.menuIndex or 1))
@@ -334,11 +334,11 @@ local function drawCommand(g, Font, battle)
 
     -- Panel corners for each label
     -- Move top right and bottom right even more inward (increase sidePad so text is less far right)
-    local sidePad = 32
+    local sidePad = 40  -- pad the right side more, so text isn't hugging the panel edge
     local panel = {
-        { tx = x + 12,          ty = y + 9 },      -- Top left     (label 1)
+        { tx = x + 16,          ty = y + 9 },      -- Top left     (label 1) (moved right since panel is wider)
         { tx = x + w - sidePad, ty = y + 9 },      -- Top right    (label 2)
-        { tx = x + 12,          ty = y + h - 11 }, -- Bottom left  (label 3)
+        { tx = x + 16,          ty = y + h - 11 }, -- Bottom left  (label 3)
         { tx = x + w - sidePad, ty = y + h - 11 }, -- Bottom right (label 4)
     }
 

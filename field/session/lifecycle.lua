@@ -1113,7 +1113,9 @@ function Lifecycle.begin(battle, mod, deps)
     byBattle[battle] = session
     fieldJit(false)
     session._arJitOff = true
-    pcall(print, "[ar] jit off")
+    if deps and deps.Log and type(deps.Log.note) == "function" then
+        pcall(deps.Log.note, battle, "jit off")
+    end
     Lifecycle.focusCamera(battle)
 
     battle._arAnimeField = true
@@ -1123,7 +1125,6 @@ function Lifecycle.begin(battle, mod, deps)
     battle.showPlayerBack = false
     -- TODO: Remove this once we have a proper enemy trainer
     battle.showEnemyTrainer = true
-    print(battle.introSlide)
     if battle.introSlide and battle.introSlide > 0 then
         battle.introSlide = 0
     end
@@ -1757,9 +1758,6 @@ function Lifecycle.onTurnStarted(battle)
         -- Apply any punch-stashed HP before this turn wipes the hold.
         pcall(Cues.flushHeldHit, session, battle)
     end
-    if Cues and type(Cues.notePos) == "function" then
-        Cues.notePos(session, battle, "pos turn")
-    end
     local function keepSide(side)
         local ent = (side == "player") and session.playerMon or session.enemyMon
         if ent and ent._pendingCloseStrike then
@@ -2201,7 +2199,9 @@ function Lifecycle.finish(battle, deps)
     if session._arJitOff then
         fieldJit(true)
         session._arJitOff = nil
-        pcall(print, "[ar] jit on")
+        if deps and deps.Log and type(deps.Log.note) == "function" then
+            pcall(deps.Log.note, battle, "jit on")
+        end
     end
     byBattle[battle] = nil
 end

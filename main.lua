@@ -11,7 +11,7 @@
 --
 -- Flip to false for release builds. When true, lib/log.lua prints battle
 -- traces to the Love / stdout console (independent of DEV OVERLAY).
-local DEV = true
+local DEV = false
 
 return function(mod)
     local Hud

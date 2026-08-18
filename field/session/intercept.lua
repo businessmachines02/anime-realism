@@ -451,9 +451,6 @@ function Intercept.install(FBV, mod)
                 or (e and e._pendingCloseStrike and e._pendingCloseStrike.moveId)
                 or "-"
             noteUQ(self, "uq park", who, mid)
-            if Cues and type(Cues.notePos) == "function" then
-              pcall(Cues.notePos, session, self, "pos park")
-            end
           end
           return true
         end

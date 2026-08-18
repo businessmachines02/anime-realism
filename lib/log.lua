@@ -2,17 +2,12 @@
 --
 -- Loaded from main via ModLoad.loadFile("lib/log.lua"). Silent when DEV is
 -- off. Never throws — logging must not become the crash.
---
--- Native SIGSEGV never reaches love.errorhandler. Flush stdout and rewrite
--- ar-trail.log on every note so the last Lua events survive a process kill.
 
 return function(env)
   local Log = {}
   local trail = {}
   local trailMax = 80
   local seq = 0
-  local errN = 0
-  local persistReady = false
 
   pcall(function()
     if io and io.stdout and io.stdout.setvbuf then
@@ -41,28 +36,6 @@ return function(env)
       return s
     end
     return t
-  end
-
-  local function persistTrail()
-    local fs = love and love.filesystem
-    if not (fs and type(fs.write) == "function") then
-      return
-    end
-    local body = table.concat(trail, "\n") .. "\n"
-    pcall(fs.write, "ar-trail.log", body)
-    if not persistReady and type(fs.getSaveDirectory) == "function" then
-      persistReady = true
-      local dir = fs.getSaveDirectory()
-      pcall(print, "[ar] trail file " .. tostring(dir) .. "/ar-trail.log")
-    end
-  end
-
-  local function pushTrail(line)
-    trail[#trail + 1] = line
-    while #trail > trailMax do
-      table.remove(trail, 1)
-    end
-    persistTrail()
   end
 
   function Log.dump()
@@ -104,7 +77,10 @@ return function(env)
       local line = string.format("[ar] #%d T%d %s%s",
         seq, turn, tostring(tag or "?"), extra)
       print(line)
-      pushTrail(line)
+      trail[#trail + 1] = line
+      while #trail > trailMax do
+        table.remove(trail, 1)
+      end
     end)
     if not ok then
       pcall(print, "[ar] logger: " .. tostring(err))
@@ -112,12 +88,7 @@ return function(env)
   end
 
   function Log.err(battle, tag, err)
-    errN = errN + 1
     Log.note(battle, "ERR " .. tostring(tag or "?"), err)
-    pcall(print, "[ar] TRACE " .. tostring(tag or "?"))
-    pcall(print, tostring(err))
-    -- Always dump the ring on a Lua error so a swallowed pcall still
-    -- leaves a trail in stdout.
     Log.dump()
   end
 

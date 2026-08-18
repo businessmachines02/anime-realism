@@ -10,22 +10,17 @@ function Hooks.installInput(FBV, mod, ctx)
     local focusEntrenched = ctx.focusEntrenched or function() return false end
 
     local function dumpAndThrow(battle, tag, err)
-        pcall(print, "[ar] TRACE " .. tostring(tag))
-        pcall(print, tostring(err))
         if FBV.Log and type(FBV.Log.err) == "function" then
             pcall(FBV.Log.err, battle, tag, err)
         end
-        -- Off FIELD only: mid-voxel error() makes Love return 1 with no screen.
-        if not FBV.enabled(mod) then
-            error(tostring(err), 0)
-        end
+        error(tostring(err), 0)
     end
 
     local ok, BattleState = pcall(require, "src.battle.BattleState")
     if ok and type(BattleState) == "table" then
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate28 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate29 then
+        -- _arFbvUpdate30 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate30 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -203,12 +198,7 @@ function Hooks.installInput(FBV, mod, ctx)
                         end
                         result = { a, b, c }
                     else
-                        local okU, a, b, c = pcall(origUpdate, self, dt, ...)
-                        if not okU then
-                            dumpAndThrow(self, "BattleState.update", a)
-                            return
-                        end
-                        result = { a, b, c }
+                        result = { origUpdate(self, dt, ...) }
                     end
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
@@ -231,6 +221,7 @@ function Hooks.installInput(FBV, mod, ctx)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate30 = true
             BattleState._arFbvUpdate29 = true
             BattleState._arFbvUpdate28 = true
             BattleState._arFbvUpdate27 = true

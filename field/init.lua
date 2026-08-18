@@ -138,11 +138,6 @@ return function(env)
       return fn(unpack(args, 1, n))
     end, tracer)
     if not ok then
-      pcall(print, "[ar] TRACE " .. tostring(tag))
-      pcall(print, tostring(a))
-      if Cues and type(Cues.notePos) == "function" then
-        pcall(Cues.notePos, Lifecycle.get(battle), battle, "pos crash")
-      end
       if Log and type(Log.err) == "function" then
         pcall(Log.err, battle, tag, a)
       end

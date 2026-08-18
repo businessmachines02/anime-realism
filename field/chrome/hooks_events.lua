@@ -264,9 +264,6 @@ function Hooks.installEvents(FBV, mod, ctx)
                 end
                 pcall(FBV.react, battle, side, kind, opts)
             end
-            if type(FBV.notePos) == "function" then
-                pcall(FBV.notePos, battle, "pos")
-            end
         end)
 
         mod.events:on("battle.damage_dealt", function(ev)
@@ -292,9 +289,6 @@ function Hooks.installEvents(FBV, mod, ctx)
                 if FBV.Log and type(FBV.Log.note) == "function" then
                     pcall(FBV.Log.note, battle, "dmg hold", side, ev.damage,
                         hitOpts.moveId)
-                end
-                if type(FBV.notePos) == "function" then
-                    pcall(FBV.notePos, battle, "pos")
                 end
                 if type(FBV.holdCloseHit) == "function" then
                     FBV.holdCloseHit(session, side, hitOpts)

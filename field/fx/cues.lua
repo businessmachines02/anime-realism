@@ -497,15 +497,8 @@ function Cues.notePos(session, battle, tag)
   tag = tag or "pos"
   local ok, you, foe, dist = pcall(Cues.describeField, session)
   if not ok then
-    pcall(print, "[ar] POS ERR " .. tostring(you))
-    if type(debug) == "table" and type(debug.traceback) == "function" then
-      pcall(print, debug.traceback("", 2))
-    end
     return
   end
-  -- print() so a missing session._deps.Log cannot hide coordinates.
-  pcall(print, "[ar] " .. tag .. " " .. tostring(you))
-  pcall(print, "[ar] " .. tag .. " " .. tostring(foe) .. " " .. tostring(dist))
   note(session, battle, tag, you)
   note(session, battle, tag, foe, dist)
 end
@@ -552,7 +545,6 @@ local function fireCloseStrike(session, side, ent, Grid)
   end
   note(session, session and session._battle, "closeStrike", side, mid,
     "dist=" .. dist, describeEnt(session, ent, side))
-  Cues.notePos(session, session and session._battle, "pos")
   if mid then
     markStruck(ent, mid)
   end
@@ -1307,9 +1299,6 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
   note(session, battle, "cue", side, kind, opts.moveId, opts.category,
     table.concat(flags, " "), describeEnt(session, ent, side))
-  if kind == "attack" or kind == "status" or kind == "hit" then
-    Cues.notePos(session, battle, "pos")
-  end
   local category = normCategory(opts.category)
   session._lastCueSide = side
   session._lastCueKind = kind
@@ -1347,9 +1336,6 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
       return fn(session, side, kind, Grid, nudgeCamera, battle, opts)
     end, tracer)
     if not ok then
-      pcall(print, "[ar] TRACE cue." .. kind)
-      pcall(print, tostring(result))
-      Cues.notePos(session, battle, "pos crash")
       noteErr(session, battle, "cue." .. kind, result)
       return false
     end
