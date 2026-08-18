@@ -11,7 +11,7 @@
 --
 -- Flip to false for release builds. When true, lib/log.lua prints battle
 -- traces to the Love / stdout console (independent of DEV OVERLAY).
-local DEV = true
+local DEV = false
 
 return function(mod)
     local Hud
@@ -245,6 +245,12 @@ return function(mod)
                 key = "close_the_gap",
                 type = "toggle",
                 label = "CLOSE THE GAP",
+                default = true,
+            },
+            {
+                key = "status_chips",
+                type = "toggle",
+                label = "STATUS CHIPS",
                 default = true,
             },
             {
@@ -3577,7 +3583,7 @@ return function(mod)
                     FieldBattleViewer.drawUI(battle)
                 end
                 battle._arFieldBubbleDialogue = nil
-                if side then
+                if side and not battle._arFieldChipDialogue then
                     hud.drawSpeechBubble(battle, side)
                 end
                 if not stackedPrompt

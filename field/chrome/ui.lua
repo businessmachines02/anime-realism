@@ -173,7 +173,9 @@ function UI.layoutState(battle)
         showHUD = false,
         showCommand = phase == "menu",
         showMoves = phase == "moveSelect" or phase == "mimicSelect",
-        showDialogue = phase == "messages" and not battle._arFieldBubbleDialogue,
+        showDialogue = phase == "messages"
+            and not battle._arFieldBubbleDialogue
+            and not battle._arFieldChipDialogue,
         menuIndex = battle and battle.menuIndex or 1,
         moveIndex = phase == "mimicSelect"
             and (battle and battle.mimicIndex or 1)
@@ -202,6 +204,200 @@ local function barInitial(battler)
         ch = "?"
     end
     return ch:upper()
+end
+
+UI.CHIP_HOLD = 90
+UI.CHIP_H = 12
+
+local REACT_KIND = {
+    dodge = true, cover = true, hide = true,
+    brace = true, entrench = true, entrench_hold = true,
+}
+
+local CHIP_PHRASE = {
+    { "WRONG WAY", "WRONG" },
+    { "BRACE YOURSELF", "BRACE" },
+    { "BRACE ON", "BRACE" },
+    { "BRACE UP", "BRACE" },
+    { "TOOK IT WELL", "BRACE" },
+    { "BRACED", "BRACE" },
+    { "ENTRENCH", "HOLD" },
+    { "TOO SLOW", "SLOW" },
+    { "COULDN'T MOVE", "SLOW" },
+    { "HIT THROUGH COVER", "HIT" },
+    { "IT FOUND", "HIT" },
+    { "COVER WASN'T", "HIT" },
+    { "STILL GOT HIT", "HIT" },
+    { "DODGED", "DODGE" },
+    { "WHIFFED PAST", "DODGE" },
+    { "SHARP INSTINCTS", "DODGE" },
+    { "PERFECT TIMING", "DODGE" },
+    { "MOVED LIKE", "DODGE" },
+    { "WHAT A READ", "DODGE" },
+    { "SAFE IN COVER", "COVER" },
+    { "BEHIND COVER", "COVER" },
+    { "TAKE COVER", "COVER" },
+    { "MELTED INTO", "HIDE" },
+    { "VANISHED", "HIDE" },
+}
+
+local function chipFlat(text)
+    local s = tostring(text or ""):gsub("\v", " "):gsub("\n", " "):gsub("%s+", " ")
+    return (s:match("^%s*(.-)%s*$") or ""):upper()
+end
+
+-- Live dodge / brace / cover / hide / entrench, including overlap on an attack toast.
+function UI.reactEvent(battle)
+    local cur = battle and battle.current
+    local cue = cur and cur.arFieldCue
+    if cue and REACT_KIND[cue.kind] then
+        return {
+            side = cue.side == "enemy" and "enemy" or "player",
+            kind = cue.kind,
+            text = cur.text,
+            ownsToast = true,
+        }
+    end
+    local attached = cur and cur.arOverlapReact
+    if type(attached) == "table" then
+        for i = #attached, 1, -1 do
+            local r = attached[i]
+            if r and REACT_KIND[r.kind] then
+                return {
+                    side = r.side == "enemy" and "enemy" or "player",
+                    kind = r.kind,
+                    text = r.text,
+                    ownsToast = false,
+                }
+            end
+        end
+    end
+    local q = battle and battle.queue
+    if type(q) == "table" then
+        for i = 1, math.min(6, #q) do
+            local row = q[i]
+            local rowCue = row and row.arFieldCue
+            if rowCue and REACT_KIND[rowCue.kind] and row._arOverlapShown then
+                return {
+                    side = rowCue.side == "enemy" and "enemy" or "player",
+                    kind = rowCue.kind,
+                    text = row.text,
+                    ownsToast = false,
+                }
+            end
+        end
+    end
+    return nil
+end
+
+-- REACT outcomes only (dodge / brace / cover / hide / entrench).
+function UI.chipAbbrev(text, battle)
+    local ev = battle and UI.reactEvent(battle)
+    local kind = ev and ev.kind
+    local upper = chipFlat((ev and ev.text) or text)
+    for i = 1, #CHIP_PHRASE do
+        if upper:find(CHIP_PHRASE[i][1], 1, true) then
+            return CHIP_PHRASE[i][2]
+        end
+    end
+    if kind == "brace" then
+        return upper:find("WRONG", 1, true) and "WRONG" or "BRACE"
+    elseif kind == "dodge" then
+        return (upper:find("TOO SLOW", 1, true) or upper:find("COULDN'T", 1, true))
+            and "SLOW" or "DODGE"
+    elseif kind == "cover" then
+        return (upper:find("HIT", 1, true) or upper:find("FOUND", 1, true))
+            and "HIT" or "COVER"
+    elseif kind == "hide" then
+        return "HIDE"
+    elseif kind == "entrench" or kind == "entrench_hold" then
+        return "HOLD"
+    end
+    return nil
+end
+
+function UI.chipSide(battle, text)
+    local ev = battle and UI.reactEvent(battle)
+    if ev then
+        return ev.side
+    end
+    local cue = battle and battle.current and battle.current.arFieldCue
+    if cue and (cue.side == "player" or cue.side == "enemy") then
+        return cue.side
+    end
+    local s = chipFlat(text)
+    if s:find("ENEMY ", 1, true) == 1 then
+        return "enemy"
+    end
+    return "player"
+end
+
+function UI.syncStatusChips(battle)
+    if not battle then
+        return
+    end
+    battle._arFieldChipDialogue = nil
+    local ev = UI.reactEvent(battle)
+    local raw = (ev and ev.text)
+        or (battle.current and battle.current.text ~= "" and battle.current.text)
+        or battle._arLastBubbleText
+    local abbrev = UI.chipAbbrev(raw, battle)
+    if not abbrev then
+        return
+    end
+    local side = UI.chipSide(battle, raw)
+    -- Overlap REACT rides the attack toast; keep that toast. Steal it only
+    -- when the current line itself is the REACT status.
+    if not ev or ev.ownsToast then
+        battle._arFieldChipDialogue = true
+    end
+    local chips = battle._arStatusChips
+    if type(chips) ~= "table" then
+        chips = {}
+        battle._arStatusChips = chips
+    end
+    local frame = tonumber(battle.frame) or 0
+    chips[side] = { text = abbrev, untilFrame = frame + UI.CHIP_HOLD }
+end
+
+local function statusChip(battle, side)
+    local chips = battle and battle._arStatusChips
+    local chip = chips and chips[side]
+    if not (chip and chip.text) then
+        return nil
+    end
+    local frame = tonumber(battle.frame) or 0
+    if frame > (tonumber(chip.untilFrame) or 0) then
+        chips[side] = nil
+        return nil
+    end
+    return chip
+end
+
+local function drawStatusChip(g, Font, chip, x, y, canvasW)
+    local text = chip.text
+    local tw = (#text) * 8
+    if Font and type(Font.width) == "function" then
+        tw = tonumber(Font.width(text)) or tw
+    end
+    local w, h = math.floor(tw + 6), UI.CHIP_H
+    local cx = math.floor(x - w / 2)
+    if cx + w > canvasW - 1 then
+        cx = canvasW - 1 - w
+    end
+    if cx < 1 then
+        cx = 1
+    end
+    if y < 1 then
+        y = 1
+    end
+    g.setColor(1, 1, 0.94, 1)
+    g.rectangle("fill", cx, y, w, h)
+    g.setColor(0, 0, 0, 1)
+    g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
+    if Font and type(Font.draw) == "function" then
+        Font.draw(text, cx + 3, y + 2)
+    end
 end
 
 -- Draw HP chips above each field battler.
@@ -254,7 +450,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 end
                 extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
             end
-            x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop)
+            local chip = statusChip(battle, item.side)
+            local chipTop = chip and (UI.CHIP_H + 1) or 0
+            x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop + chipTop)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
             -- Stash UI anchors for speech bubbles / other overlay chrome.
@@ -294,6 +492,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
             g.setColor(0.12, 0.09, 0.08, 1)
             g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+            if chip then
+                drawStatusChip(g, Font, chip, x, y - extraTop - chipTop, canvasW)
+            end
         end
     end
     g.setColor(1, 1, 1, 1)
@@ -493,7 +694,30 @@ end
 
 
 local function drawDialogue(g, Font, battle)
-    return
+    local shown = battle.shown or {}
+    if #shown == 0 and not (battle.current or battle.msgHold
+        or battle.msgWaiting or battle.msgPrompt) then
+        return
+    end
+    local x, y, w, h = 4, 119, 152, 23
+    box(g, x, y, w, h)
+    g.setColor(0.08, 0.06, 0.05, 1)
+    local first = math.max(1, #shown - 1)
+    for lineIndex = first, #shown do
+        local line = shown[lineIndex]
+        local ty = y + 3 + (lineIndex - first) * 9
+        if Font and type(Font.drawCode) == "function" then
+            for i = 1, math.min(#line, 18) do
+                Font.drawCode(line[i], x + 5 + (i - 1) * 8, ty)
+            end
+        end
+    end
+    if (battle.msgWaiting or battle.msgPrompt)
+        and (battle.frame or 0) % 60 < 30 then
+        if Font and type(Font.drawCode) == "function" then
+            Font.drawCode(0xEE, x + w - 11, y + h - 9)
+        end
+    end
 end
 
 
@@ -519,50 +743,5 @@ function UI.draw(battle, style)
     g.setColor(1, 1, 1, 1)
     g.pop()
 end
-
--- this is not needed right now, the defualt dialogue box displays what we need.
-local function _drawDialogue(g, Font, battle)
-    -- Only draw dialogue if this is the *only* active dialogue, not the default/dialogue box managed elsewhere.
-    -- This function should only handle drawing its own content, not duplicate global overlays.
-
-    -- Check if the default dialogue box is visible (avoid drawing over it)
-    if battle.defaultDialogueBoxVisible then
-        return
-    end
-
-    local shown = battle.shown or {}
-
-    -- Bail out if nothing to show and there's no pending/prompts; avoids drawing default/ghost dialogue.
-    if #shown == 0 and not (battle.current or battle.msgHold or battle.msgWaiting or battle.msgPrompt) then
-        return
-    end
-
-    -- Prevent double-drawing: only show this dialogue if not already handled by an active global toast or overlay.
-    if battle.hasActiveDialoguePanel then
-        -- Convention: the main battle object signals when the global panel toast is painting.
-        return
-    end
-
-    local x, y, w, h = 4, 119, 152, 23
-    box(g, x, y, w, h)
-    g.setColor(0.08, 0.06, 0.05, 1)
-    local first = math.max(1, #shown - 1)
-    for lineIndex = first, #shown do
-        local line = shown[lineIndex]
-        local ty = y + 3 + (lineIndex - first) * 9
-        if Font and type(Font.drawCode) == "function" then
-            for i = 1, math.min(#line, 18) do
-                Font.drawCode(line[i], x + 5 + (i - 1) * 8, ty)
-            end
-        end
-    end
-    if (battle.msgWaiting or battle.msgPrompt)
-        and (battle.frame or 0) % 60 < 30 then
-        if Font and type(Font.drawCode) == "function" then
-            Font.drawCode(0xEE, x + w - 11, y + h - 9)
-        end
-    end
-end
-
 
 return UI

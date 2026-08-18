@@ -458,6 +458,32 @@ function tests.compact_field_ui_tracks_engine_cursors()
   truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
 end
 
+function tests.status_chip_abbreviations()
+  eq(UI.chipAbbrev("Braced right!\nTook it well!"), "BRACE", "brace success")
+  eq(UI.chipAbbrev("Braced the\nwrong way!"), "WRONG", "brace miss")
+  eq(UI.chipAbbrev("But SQUIRTLE\ndodged aside!"), "DODGE", "dodge")
+  eq(UI.chipAbbrev("Entrenched!\n(3 turns)"), "HOLD", "entrench")
+  eq(UI.chipAbbrev("It's super effective!"), nil, "effectiveness stays a toast")
+  eq(UI.chipAbbrev("SQUIRTLE used TACKLE!"), nil, "move used stays a toast")
+  eq(UI.chipAbbrev("SQUIRTLE's ATTACK fell!"), nil, "stat drop stays a toast")
+  eq(UI.chipAbbrev("A wild PIDGEY appeared!"), nil, "intro stays a toast")
+  eq(UI.chipSide({ current = { arFieldCue = { side = "enemy" } } }, "x"),
+    "enemy", "cue side wins")
+  eq(UI.chipAbbrev("TACKLE!", { current = { arFieldCue = { kind = "attack" } } }),
+    nil, "attack cue is not a REACT chip")
+  local overlap = {
+    current = {
+      text = "SURF!",
+      arFieldCue = { kind = "attack", side = "player" },
+      arOverlapReact = {
+        { kind = "brace", side = "enemy", text = "Onix!\nBrace yourself!" },
+      },
+    },
+  }
+  eq(UI.chipAbbrev("SURF!", overlap), "BRACE", "overlap brace chips during the attack")
+  eq(UI.chipSide(overlap, "SURF!"), "enemy", "overlap chip sits on the defender")
+end
+
 function tests.move_hud_shows_b_pause_hint()
   local drawn = {}
   package.loaded["src.render.Font"] = {

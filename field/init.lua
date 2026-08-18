@@ -169,7 +169,7 @@ return function(env)
     UI = UI,
     Callouts = Callouts,
     Intercept = Intercept,
-    OPTION_KEYS = { "battle_stage", "field_sprites", "move_hud", "close_the_gap" },
+    OPTION_KEYS = { "battle_stage", "field_sprites", "move_hud", "close_the_gap", "status_chips" },
   }
 
   function FBV.session(battle)
@@ -333,9 +333,24 @@ return function(env)
     return Debug.draw(Lifecycle.get(battle), battle)
   end
 
+  function FBV.statusChipsEnabled(modRef)
+    modRef = modRef or mod
+    if not (modRef and modRef.options and type(modRef.options.get) == "function") then
+      return true
+    end
+    return modRef.options:get("status_chips") ~= false
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
+    end
+    if UI and type(UI.syncStatusChips) == "function" then
+      if FBV.statusChipsEnabled(mod) then
+        UI.syncStatusChips(battle)
+      elseif battle then
+        battle._arFieldChipDialogue = nil
+      end
     end
     if UI and type(UI.draw) == "function" then
       UI.draw(battle, FBV.moveHudStyle(mod))

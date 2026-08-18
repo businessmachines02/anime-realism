@@ -124,10 +124,24 @@ function Hooks.installDraw(FBV, mod, ctx)
                         dumpAndThrow(self, "drawTextArea", errT)
                     end
                 end
-                local okRT, Runtime = pcall(require, "src.core.Runtime")
-                if okRT and Runtime and type(Runtime.call) == "function" then
-                    local okO, errO = pcall(Runtime.call, "battle.overlay",
-                        function() end, self)
+                -- Same bus the engine uses (src.mods.Runtime). A missing
+                -- require here skips overlay entirely: menus/HP still paint,
+                -- speech bubbles and trainer callouts do not.
+                local overlayCall
+                if mod.hooks and type(mod.hooks.call) == "function" then
+                    overlayCall = function(vanilla, battle)
+                        return mod.hooks:call("battle.overlay", vanilla, battle)
+                    end
+                else
+                    local okRT, Runtime = pcall(require, "src.mods.Runtime")
+                    if okRT and Runtime and type(Runtime.call) == "function" then
+                        overlayCall = function(vanilla, battle)
+                            return Runtime.call("battle.overlay", vanilla, battle)
+                        end
+                    end
+                end
+                if overlayCall then
+                    local okO, errO = pcall(overlayCall, function() end, self)
                     if not okO then
                         dumpAndThrow(self, "battle.overlay", errO)
                     end
