@@ -130,7 +130,20 @@ package. The wrap:
 4. Otherwise run vanilla, then trainer-foe counter / Again! mirrors.
 
 Vanilla is stored on `EffectRegistry._arVanillaRunDamaging` so hot reload does
-not chain wraps.
+not chain wraps. FIELD close-gap also stashes `_arEngineRunDamaging`; punch
+resume (`Cues.flushHeldHit`) must call that (or vanilla), never the live
+React wrap — otherwise AUTO counter / Again! re-enter after FURY_ATTACK.
+Held `runDamaging` returns `0` so a multi-hit loop does not add `nil`.
+
+Close-gap punch → `damage_dealt` used to flip `_lastCueSide` to the defender,
+so the attacker's announce toast replayed and armed a second walk. FIELD
+latches `_presentedMove[side][moveId]` for the turn (Again! / follow-up still
+pass). Close-the-gap is **one walk per side per turn**; extra melee cues
+(Again!, queued Fury Attack after a Mega Punch counter, nameless toasts)
+play contact in place. REACT menus park the incoming punch.
+
+`dev.tickAttackCamera` only emits `battle.move_used` for real move ids
+(`Cues.isEngineMoveAnim`). Send-out `POOF_ANIM` is not a move.
 
 ### Dialogue and menus
 

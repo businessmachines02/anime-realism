@@ -362,6 +362,20 @@ end
 local STAND = { down = 0, up = 1, left = 2, right = 2 }
 local WALK = { down = 3, up = 4, left = 5, right = 5 }
 
+local function finiteCoord(n, fallback)
+  if type(n) ~= "number" or n ~= n or n == math.huge or n == -math.huge then
+    return fallback
+  end
+  return n
+end
+
+local function voxelFacing(facing)
+  if facing == "up" or facing == "down" or facing == "left" or facing == "right" then
+    return facing
+  end
+  return "down"
+end
+
 local function faceFromDelta(dx, dy)
   if math.abs(dx or 0) >= math.abs(dy or 0) then
     return (dx or 0) >= 0 and "right" or "left"
@@ -469,14 +483,23 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
   }
 
   function ent:pose()
-    -- Dramatic Shape ignores `hidden` and crashes on a nil sprite. Always
-    -- return a real sprite.def while this entity might still be on ow.entities.
-    -- A nil return aborts Voxel3D.beginScene and hides the other battler.
+    -- Dramatic Shape VoxelScene.posesOf:
+    --   sprite, vx, vy, facing, phase, flip = e:pose()
+    --   billboard at (vx, e.py) with lift = e.py - vy
+    --   then drawEntity → sprite.def / sprite:resolveImage() / Voxel3D.draw
+    -- Nil sprite, nil def, missing resolveImage, non-cardinal facing, or
+    -- non-finite px/py abort Love with no error screen. Every attack/dodge
+    -- just changes this pose, so crashes look move-specific.
     local sprite = self.sprite
     if not (sprite and sprite.def) then
       self._poseSafe = self._poseSafe or {
-        def = { id = "ar_fbv_pose_" .. tostring(self.id or "mon"), frames = 1 },
+        def = {
+          id = "ar_fbv_pose_" .. tostring(self.id or "mon"),
+          frames = 1,
+          image = "ar_fbv_missing",
+        },
         draw = function() end,
+        resolveImage = function() return nil end,
       }
       sprite = self._poseSafe
       if not self.sprite then
@@ -484,8 +507,22 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       elseif not self.sprite.def then
         self.sprite.def = sprite.def
       end
+    elseif type(sprite.resolveImage) ~= "function" then
+      sprite.resolveImage = function()
+        return sprite.image
+      end
     end
-    return sprite, self.px, self.py, self.facing, self._walkFrame or 0, false
+    self.px = finiteCoord(self.px, finiteCoord(self.basePx, 0))
+    self.py = finiteCoord(self.py, finiteCoord(self.basePy, 0))
+    self.basePx = finiteCoord(self.basePx, self.px)
+    self.basePy = finiteCoord(self.basePy, self.py)
+    self.cellX = finiteCoord(self.cellX, math.floor(self.px / 16))
+    self.cellY = finiteCoord(self.cellY, math.floor(self.py / 16))
+    self.cellX = math.floor(self.cellX + 0.5)
+    self.cellY = math.floor(self.cellY + 0.5)
+    self.facing = voxelFacing(self.facing)
+    local phase = (self._walkFrame == 1) and 1 or 0
+    return sprite, self.px, self.py, self.facing, phase, false
   end
 
   function ent:walkPhase()
@@ -707,6 +744,14 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     -- Lerp base toward pad pixel target (occupancy stays on padU/padV).
     local tpx = self.targetPx
     local tpy = self.targetPy
+    if type(self.basePx) ~= "number" then
+      self.basePx = (type(tpx) == "number" and tpx)
+          or (type(self.px) == "number" and self.px)
+          or 0
+      self.basePy = (type(tpy) == "number" and tpy)
+          or (type(self.py) == "number" and self.py)
+          or 0
+    end
     if tpx ~= nil and tpy ~= nil then
       local dx = tpx - self.basePx
       local dy = tpy - self.basePy
@@ -1135,8 +1180,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       end
     end
 
-    self.px = self.basePx + ox
-    self.py = self.basePy + oy
+    self.px = finiteCoord(self.basePx + ox, finiteCoord(self.basePx, 0))
+    self.py = finiteCoord(self.basePy + oy, finiteCoord(self.basePy, 0))
+    self.facing = voxelFacing(self.facing)
+    if self._walkFrame ~= 1 then
+      self._walkFrame = 0
+    end
   end
 
   return ent
@@ -1231,6 +1280,9 @@ local function sheetToVisual(sheet, side)
         px = px, py = py, facing = facing, _walkFrame = walkFrame,
         hidden = false,
       }, camX, camY)
+    end,
+    resolveImage = function()
+      return img
     end,
   }
   return { sprite = sprite, drawer = drawer, lift = (fh >= 32) and 24 or 8 }

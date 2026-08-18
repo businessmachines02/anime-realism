@@ -26,6 +26,8 @@ function Coords.axes(sx, sy)
 end
 
 function Coords.key(u, v)
+  u = math.floor((tonumber(u) or 0) + 0.5)
+  v = math.floor((tonumber(v) or 0) + 0.5)
   return tostring(u) .. "," .. tostring(v)
 end
 

@@ -2,13 +2,23 @@
 --
 -- Loaded from main via ModLoad.loadFile("lib/log.lua"). Silent when DEV is
 -- off. Never throws — logging must not become the crash.
+--
+-- Native SIGSEGV never reaches love.errorhandler. Flush stdout and rewrite
+-- ar-trail.log on every note so the last Lua events survive a process kill.
 
 return function(env)
   local Log = {}
   local trail = {}
-  local trailMax = 24
+  local trailMax = 80
   local seq = 0
   local errN = 0
+  local persistReady = false
+
+  pcall(function()
+    if io and io.stdout and io.stdout.setvbuf then
+      io.stdout:setvbuf("no")
+    end
+  end)
 
   function Log.enabled()
     if env and type(env.enabled) == "function" then
@@ -25,12 +35,26 @@ return function(env)
     end
     if t == "string" or t == "number" or t == "boolean" then
       local s = tostring(v)
-      if #s > 120 then
-        return s:sub(1, 117) .. "..."
+      if #s > 220 then
+        return s:sub(1, 217) .. "..."
       end
       return s
     end
     return t
+  end
+
+  local function persistTrail()
+    local fs = love and love.filesystem
+    if not (fs and type(fs.write) == "function") then
+      return
+    end
+    local body = table.concat(trail, "\n") .. "\n"
+    pcall(fs.write, "ar-trail.log", body)
+    if not persistReady and type(fs.getSaveDirectory) == "function" then
+      persistReady = true
+      local dir = fs.getSaveDirectory()
+      pcall(print, "[ar] trail file " .. tostring(dir) .. "/ar-trail.log")
+    end
   end
 
   local function pushTrail(line)
@@ -38,6 +62,7 @@ return function(env)
     while #trail > trailMax do
       table.remove(trail, 1)
     end
+    persistTrail()
   end
 
   function Log.dump()
@@ -89,11 +114,20 @@ return function(env)
   function Log.err(battle, tag, err)
     errN = errN + 1
     Log.note(battle, "ERR " .. tostring(tag or "?"), err)
-    -- First few errors dump the ring; then every 30th so a per-frame
-    -- tickPresent failure does not flood the console.
-    if errN <= 8 or (errN % 30) == 0 then
-      Log.dump()
+    pcall(print, "[ar] TRACE " .. tostring(tag or "?"))
+    pcall(print, tostring(err))
+    -- Always dump the ring on a Lua error so a swallowed pcall still
+    -- leaves a trail in stdout.
+    Log.dump()
+  end
+
+  function Log.trace(battle, tag, err)
+    local tb = err
+    if type(debug) == "table" and type(debug.traceback) == "function" then
+      tb = debug.traceback(tostring(err or tag), 2)
     end
+    Log.err(battle, tag, tb)
+    return tb
   end
 
   function Log.caught(battle, tag, ok, err)

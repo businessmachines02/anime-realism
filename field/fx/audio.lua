@@ -102,22 +102,19 @@ function Audio.installEngineMute()
     Sound._arFieldMute = true
   end
 
-  -- The generic thud on every connecting hit is applyHitFx, not AnimPlayer.
+  -- Hits also arm shakeProg / waitFrames / blink. Those drive drawClassic's
+  -- SGB canvas + PaletteFX shader over the live voxel world and abort Love.
   local okBS, BattleState = pcall(require, "src.battle.BattleState")
   if okBS and BattleState and type(BattleState.applyHitFx) == "function"
-      and not BattleState._arFieldMuteHitFx then
+      and not BattleState._arFieldMuteHitFx2 then
     local origHitFx = BattleState.applyHitFx
     function BattleState.applyHitFx(self, hit)
-      -- FIELD battles stamp _arAnimeField. Drop the applying-attack sample
-      -- (Damage / SE / NVE) so it cannot fire after the hidden engine anim.
-      if self and self._arAnimeField and type(hit) == "table" and hit.sfx then
-        hit = {
-          animType = hit.animType,
-          blink = hit.blink,
-        }
+      if self and (self._arAnimeField or self._arFieldCombat) then
+        return
       end
       return origHitFx(self, hit)
     end
+    BattleState._arFieldMuteHitFx2 = true
     BattleState._arFieldMuteHitFx = true
   end
 end

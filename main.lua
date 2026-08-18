@@ -100,6 +100,55 @@ return function(mod)
         end
     end
 
+    -- Crash dump: do not assign love.errorhandler (sandbox refuses it so
+    -- the player still gets the engine crash screen). Event listeners are
+    -- pcall'd by the host, so wrap mod.events so a throw still prints the
+    -- [ar] trail instead of vanishing as a one-line Logger.error.
+    do
+        local function dumpCrash(where, err)
+            pcall(print, "[ar] CRASH " .. tostring(where) .. " " .. tostring(err))
+            local Log = mod._arLog
+            if Log and type(Log.err) == "function" then
+                pcall(Log.err, nil, where, err)
+            elseif Log and type(Log.dump) == "function" then
+                pcall(Log.dump)
+            end
+        end
+
+        local function wrapListener(name, callback)
+            if type(callback) ~= "function" then
+                return callback
+            end
+            return function(payload)
+                local ok, err = xpcall(function()
+                    return callback(payload)
+                end, tostring)
+                if not ok then
+                    dumpCrash("event." .. tostring(name), err)
+                    error(err)
+                end
+            end
+        end
+
+        if type(mod.events) == "table" and type(mod.events.on) == "function"
+            and not mod.events._arDump then
+            local origOn = mod.events.on
+            mod.events.on = function(self, name, callback, priority)
+                return origOn(self, name, wrapListener(name, callback), priority)
+            end
+            if type(mod.events.once) == "function" then
+                local origOnce = mod.events.once
+                mod.events.once = function(self, name, callback, priority)
+                    return origOnce(self, name, wrapListener(name, callback), priority)
+                end
+            end
+            mod.events._arDump = true
+            if DEV then
+                pcall(print, "[ar] crash dump on mod.events")
+            end
+        end
+    end
+
     if ModLoad and type(ModLoad.loadPackage) == "function" then
         -- Expose packages before install so FBV.bind can inject ReactiveDefense.
         mod._arPackages = {
@@ -2180,6 +2229,19 @@ return function(mod)
             if not moveId or moveId == "" then
                 return
             end
+            -- Send-out / hide-pic use *_ANIM ids. Emitting those as
+            -- battle.move_used (stub { id = "POOF_ANIM" }) crashes other
+            -- mods that index move.effect (stronger_trainers smart_ai).
+            do
+                local id = tostring(moveId):upper()
+                if id:find("_ANIM$", 1) then
+                    return
+                end
+                local moves = battle.data and battle.data.moves
+                if type(moves) == "table" and not moves[id] and not moves[moveId] then
+                    return
+                end
+            end
             local key = tostring(moveId) .. ":" .. (isPlayer and "P" or "E")
             if battle._arCamKey == key then
                 return
@@ -2266,8 +2328,7 @@ return function(mod)
                 line = pickFormatted(S.AGAIN_CALLS, monName or playerMonName(battle))
                     or ((monName or "POKéMON") .. "!\nAgain!")
             end
-            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, foeSide and "foe" or "player",
-                { side = foeSide and "enemy" or "player", kind = "attack" })
+            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, foeSide and "foe" or "player")
             -- Arm the camera RIGHT BEFORE the second anim — doing it during the first
             -- hit's damage resolve races BC (it latches the still-playing first anim,
             -- then clears pending before Again! swings).
@@ -3479,15 +3540,20 @@ return function(mod)
                     end
                 end,
                 tagFieldCue = tagFieldCue,
-                pickCounterStrikeMove = function(battle, kind)
+                pickCounterStrikeMove = function(battle, kind, battler)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
-                        return Fx.pickCounterStrikeMove(battle, kind)
+                        return Fx.pickCounterStrikeMove(battle, kind, battler)
                     end
                 end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 signalAttackPresentation = signalAttackPresentation,
+                cancelCloseStrike = function(battle, side)
+                    if FieldBattleViewer and type(FieldBattleViewer.cancelCloseStrike) == "function" then
+                        return FieldBattleViewer.cancelCloseStrike(battle, side)
+                    end
+                end,
                 tryAgainStrike = tryAgainStrike,
                 resolvePlayerCounterAttempt = resolvePlayerCounterAttempt,
                 tryFoeCoverReaction = tryFoeCoverReaction,

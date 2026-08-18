@@ -342,8 +342,26 @@ function Intercept.install(FBV, mod)
     OverworldState._arFbvInput = true
   end
 
-  local okBS, BattleState = pcall(require, "src.battle.BattleState")
+    local okBS, BattleState = pcall(require, "src.battle.BattleState")
   if okBS and type(BattleState) == "table" then
+    -- FIELD already paints its own cues. Classic AnimPlayer still starts
+    -- those rows (wavy screen, palettes, pic FX) after ANY damaging move
+    -- and can kill Love with no error screen. Shared path, not per-move.
+    -- Ball/send-out anims still run via BALL_ANIMS.
+    if type(BattleState.animationsOn) == "function"
+        and not BattleState._arFbvAnimOff then
+      local origAnimsOn = BattleState.animationsOn
+      function BattleState:animationsOn(...)
+        local fbv = Intercept._fbv
+        local m = Intercept._mod
+        if self and fbv and m and type(fbv.shouldUse) == "function"
+            and fbv.shouldUse(m, self) then
+          return false
+        end
+        return origAnimsOn(self, ...)
+      end
+      BattleState._arFbvAnimOff = true
+    end
     if type(BattleState.enter) == "function" and not BattleState._arFbvEnterArm then
       local origEnter = BattleState.enter
       function BattleState:enter(...)
@@ -391,8 +409,14 @@ function Intercept.install(FBV, mod)
       BattleState._arFbvFinish = true
     end
 
-    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ24 then
+    if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ28 then
       local origUQ = BattleState.updateQueue
+      local function noteUQ(battle, tag, ...)
+        local Log = Intercept._fbv and Intercept._fbv.Log
+        if Log and type(Log.note) == "function" then
+          pcall(Log.note, battle, tag, ...)
+        end
+      end
       function BattleState:updateQueue(...)
         if self and self._arFieldStandalone and self.waitingUI then
           local top = self.game.stack and self.game.stack:top()
@@ -404,19 +428,52 @@ function Intercept.install(FBV, mod)
           self.waitingUI = nil
         end
         -- CLOSE THE GAP: park the engine queue until the sprite is in range.
-        -- Skip the HUD-confirm frame (`_arFieldInstantMove`) so the move is
-        -- still accepted; later ticks wait for the walk.
+        -- Instant-move confirm must still run executeAction once so damage
+        -- can be held. After that (or any other tick), Harden / the next
+        -- turn cannot start while the punch is still walking in.
         local fbv = Intercept._fbv
         local session = fbv and type(fbv.session) == "function" and fbv.session(self)
         local Cues = fbv and fbv.Cues
-        if session and not self._arCloseGapResuming
-            and not self._arFieldInstantMove
-            and Cues and type(Cues.closeGapHoldActive) == "function"
-            and Cues.closeGapHoldActive(session) then
+        local holding = session
+            and Cues and type(Cues.shouldParkEngineQueue) == "function"
+            and Cues.shouldParkEngineQueue(session)
+        local heldDmg = self and (self._arCloseGapDamage or self._arCloseGapApply)
+        local confirmStart = self and self._arFieldInstantMove and not heldDmg
+        if holding and not confirmStart then
+          if not self._arCloseGapParked then
+            self._arCloseGapParked = true
+            local p = session.playerMon
+            local e = session.enemyMon
+            local who = (p and p._pendingCloseStrike and "you")
+                or (e and e._pendingCloseStrike and "foe")
+                or "react"
+            local mid = (p and p._pendingCloseStrike and p._pendingCloseStrike.moveId)
+                or (e and e._pendingCloseStrike and e._pendingCloseStrike.moveId)
+                or "-"
+            noteUQ(self, "uq park", who, mid)
+            if Cues and type(Cues.notePos) == "function" then
+              pcall(Cues.notePos, session, self, "pos park")
+            end
+          end
           return true
+        end
+        if self and self._arCloseGapParked then
+          self._arCloseGapParked = nil
+          noteUQ(self, "uq resume", self._arAwaitingReact and "react" or nil)
+        end
+        if confirmStart and holding then
+          noteUQ(self, "uq pass confirm")
+        elseif self and self._arAwaitingReact and not self._arReactPassNoted then
+          self._arReactPassNoted = true
+          noteUQ(self, "uq pass react")
+        end
+        if self and not self._arAwaitingReact then
+          self._arReactPassNoted = nil
         end
         return origUQ(self, ...)
       end
+      BattleState._arFbvUQ28 = true
+      BattleState._arFbvUQ27 = true
       BattleState._arFbvUQ24 = true
     end
   end

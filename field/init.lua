@@ -47,8 +47,10 @@ return function(env)
       loaded["fx_catalog"] = FxCatalog
     end
   end
-  local origRequire = require
-  require = function(name)
+  -- Sibling shims only while this package loads. Always restore _G.require;
+  -- a leaked wrapper can hand Dramatic Shape our pad coords module.
+  local origRequire = _G.require
+  _G.require = function(name)
     if name == "coords" then
       return Coords
     end
@@ -97,7 +99,7 @@ return function(env)
     UI = loadFile("chrome/ui.lua")
     Callouts = loadFile("chrome/callouts.lua")
   end)
-  require = origRequire
+  _G.require = origRequire
   if not loadOk then
     error(loadErr)
   end
@@ -129,8 +131,18 @@ return function(env)
     if noisy and Log and type(Log.note) == "function" then
       pcall(Log.note, battle, tag)
     end
-    local ok, a, b, c, d, e = pcall(fn, ...)
+    local n = select("#", ...)
+    local args = { ... }
+    local tracer = (type(debug) == "table" and debug.traceback) or tostring
+    local ok, a, b, c, d, e = xpcall(function()
+      return fn(unpack(args, 1, n))
+    end, tracer)
     if not ok then
+      pcall(print, "[ar] TRACE " .. tostring(tag))
+      pcall(print, tostring(a))
+      if Cues and type(Cues.notePos) == "function" then
+        pcall(Cues.notePos, Lifecycle.get(battle), battle, "pos crash")
+      end
       if Log and type(Log.err) == "function" then
         pcall(Log.err, battle, tag, a)
       end
@@ -208,6 +220,11 @@ return function(env)
       and Cues.closeGapHoldActive(session)
   end
 
+  function FBV.shouldParkEngineQueue(session)
+    return Cues and type(Cues.shouldParkEngineQueue) == "function"
+      and Cues.shouldParkEngineQueue(session)
+  end
+
   function FBV.tagSelfDamage(battle, text, side)
     if Cues and type(Cues.tagSelfDamage) == "function" then
       return Cues.tagSelfDamage(battle, text, side)
@@ -269,6 +286,13 @@ return function(env)
 
   function FBV.cacheAnimTransform(battle)
     return Lifecycle.cacheAnimTransform(battle, Anims)
+  end
+
+  function FBV.cancelCloseStrike(battle, side)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.cancelCloseStrike) == "function" then
+      return Cues.cancelCloseStrike(session, side, Grid)
+    end
   end
 
   function FBV.nudgeCamera(battle, side, seconds)
@@ -439,7 +463,17 @@ return function(env)
     if Audio then
       Audio._Log = log
     end
+    if Cues then
+      Cues._Log = log
+    end
     return true
+  end
+
+  function FBV.notePos(battle, tag)
+    local session = Lifecycle.get(battle)
+    if Cues and type(Cues.notePos) == "function" then
+      return Cues.notePos(session, battle, tag)
+    end
   end
 
   function FBV.bind(packages)

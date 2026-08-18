@@ -9,11 +9,23 @@ function Hooks.installInput(FBV, mod, ctx)
     local isFieldBattle = ctx.isFieldBattle or function() return false end
     local focusEntrenched = ctx.focusEntrenched or function() return false end
 
+    local function dumpAndThrow(battle, tag, err)
+        pcall(print, "[ar] TRACE " .. tostring(tag))
+        pcall(print, tostring(err))
+        if FBV.Log and type(FBV.Log.err) == "function" then
+            pcall(FBV.Log.err, battle, tag, err)
+        end
+        -- Off FIELD only: mid-voxel error() makes Love return 1 with no screen.
+        if not FBV.enabled(mod) then
+            error(tostring(err), 0)
+        end
+    end
+
     local ok, BattleState = pcall(require, "src.battle.BattleState")
     if ok and type(BattleState) == "table" then
         -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate26 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate26 then
+        -- _arFbvUpdate28 rebinds even if an older FIELD update wrap was installed.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate29 then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -115,11 +127,20 @@ function Hooks.installInput(FBV, mod, ctx)
                     end
 
                     if type(FBV.tickPresent) == "function" then
-                        pcall(FBV.tickPresent, self.game, dt)
+                        local okT, errT = pcall(FBV.tickPresent, self.game, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tickPresent", errT)
+                        end
                     elseif type(FBV.tickActive) == "function" then
-                        pcall(FBV.tickActive, self.game, dt)
+                        local okT, errT = pcall(FBV.tickActive, self.game, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tickActive", errT)
+                        end
                     else
-                        pcall(FBV.tick, self, dt)
+                        local okT, errT = pcall(FBV.tick, self, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tick", errT)
+                        end
                     end
 
                     -- Arm the close-the-gap walk before origUpdate so engine
@@ -178,11 +199,16 @@ function Hooks.installInput(FBV, mod, ctx)
                         input.wasPressed = origWasPressed
                         self._arFieldInstantMove = nil
                         if not okU then
-                            error(a, 0)
+                            dumpAndThrow(self, "BattleState.update", a)
                         end
                         result = { a, b, c }
                     else
-                        result = { origUpdate(self, dt, ...) }
+                        local okU, a, b, c = pcall(origUpdate, self, dt, ...)
+                        if not okU then
+                            dumpAndThrow(self, "BattleState.update", a)
+                            return
+                        end
+                        result = { a, b, c }
                     end
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
@@ -205,6 +231,9 @@ function Hooks.installInput(FBV, mod, ctx)
                 return origUpdate(self, dt, ...)
             end
 
+            BattleState._arFbvUpdate29 = true
+            BattleState._arFbvUpdate28 = true
+            BattleState._arFbvUpdate27 = true
             BattleState._arFbvUpdate26 = true
             BattleState._arFbvUpdate25 = true
             BattleState._arFbvUpdate24 = true

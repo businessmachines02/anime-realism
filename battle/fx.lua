@@ -175,15 +175,112 @@ local function pickLine(lines)
     return lines[r(n)]
 end
 
--- Physical jab used when a Focus Dodge/Brace/Entrench counter lands.
-function Fx.pickCounterStrikeMove(battle, kind)
+local function canonMoveId(raw)
+    local id = tostring(raw or ""):upper():gsub("%s+", "_")
+    if id == "" or id == "NIL" or id == "NILL" then
+        return nil
+    end
+    return id
+end
+
+local function battlerMoveList(battler)
+    if type(battler) ~= "table" then
+        return nil
+    end
+    if type(battler.curMoves) == "table" then
+        return battler.curMoves
+    end
+    if battler.mon and type(battler.mon.moves) == "table" then
+        return battler.mon.moves
+    end
+    return nil
+end
+
+local function lookupMoveDef(battle, mv)
+    if type(mv) ~= "table" then
+        return nil, nil
+    end
+    local raw = canonMoveId(mv.id or mv.name)
+    if type(battle) == "table" and type(battle.moveDef) == "function" then
+        local ok, def = pcall(battle.moveDef, battle, mv)
+        if (not ok or type(def) ~= "table") and raw then
+            ok, def = pcall(battle.moveDef, battle, { id = raw })
+        end
+        if ok and type(def) == "table" then
+            return def, canonMoveId(def.id or raw)
+        end
+    end
+    local dex = battle and battle.data and battle.data.moves
+    if type(dex) == "table" then
+        if raw and type(dex[raw]) == "table" then
+            return dex[raw], canonMoveId(dex[raw].id or raw)
+        end
+        local want = tostring(mv.name or mv.id or ""):upper()
+        if want ~= "" then
+            for mid, def in pairs(dex) do
+                if type(def) == "table" and tostring(def.name or ""):upper() == want then
+                    return def, canonMoveId(def.id or mid)
+                end
+            end
+        end
+    end
+    local found = hostCall("findMoveByName", battle, mv.id or mv.name)
+    if type(found) == "table" then
+        return found, canonMoveId(found.id or found.name or raw)
+    end
+    return nil, raw
+end
+
+-- Counter clip for the battler that is actually striking (you or the foe).
+-- Flavor lists only rank moves they already know — never a dex punch
+-- like MEGA_PUNCH / HEADBUTT that nobody on the field has.
+function Fx.pickCounterStrikeMove(battle, kind, battler)
     kind = tostring(kind or "")
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
     local byKind = {
         dodge = { "QUICK_ATTACK", "TACKLE", "POUND", "SCRATCH", "DOUBLE_KICK" },
-        brace = { "MEGA_PUNCH", "TACKLE", "STRENGTH", "HEADBUTT", "BODY_SLAM", "POUND" },
-        entrench = { "TACKLE", "HEADBUTT", "POUND", "MEGA_PUNCH" },
+        brace = { "MEGA_PUNCH", "TACKLE", "STRENGTH", "HEADBUTT", "BODY_SLAM", "POUND", "SCRATCH" },
+        entrench = { "TACKLE", "HEADBUTT", "POUND", "MEGA_PUNCH", "SCRATCH" },
     }
-    return Fx.pickHideMoveAnim(battle, byKind[kind] or byKind.brace) or "TACKLE"
+    local flavor = byKind[kind] or byKind.brace
+    local physical, any = {}, {}
+    local known = {}
+    local moves = battlerMoveList(battler)
+    if type(moves) == "table" then
+        for i = 1, #moves do
+            local mv = moves[i]
+            if mv and not mv.struggle then
+                local def, id = lookupMoveDef(battle, mv)
+                if not id then
+                    id = canonMoveId(mv.id or mv.name)
+                end
+                local power = tonumber(def and def.power) or tonumber(mv.power) or 0
+                local category = tostring((def and def.category) or mv.category or ""):lower()
+                if id and power > 0 and category ~= "status" then
+                    known[id] = true
+                    any[#any + 1] = id
+                    if category ~= "special" then
+                        physical[#physical + 1] = id
+                    end
+                end
+            end
+        end
+    end
+    local function firstKnown(list)
+        if type(list) ~= "table" then
+            return nil
+        end
+        for i = 1, #list do
+            local id = list[i]
+            if known[id] then
+                return id
+            end
+        end
+        return nil
+    end
+    return firstKnown(flavor) or physical[1] or any[1]
 end
 
 -- Pick a Gen1 move id that exists in this battle's data.

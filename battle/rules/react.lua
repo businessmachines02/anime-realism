@@ -176,6 +176,8 @@ local function resetMomentum(battle)
     -- Battle-owned latches survive hot-reload weak-table resets.
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
+    battle._arAwaitingReact = nil
+    battle._arWhiffCloseStrike = nil
 end
 clearCalloutPickState = function(battle)
     if not battle then
@@ -485,11 +487,13 @@ local function queueReactCounterStrike(battle, result, ctx)
         ((ctx.move and ctx.move.power) or 40) * frac * 0.4))
 
     local kind = result.counter.kind
-    local moveId = hostCall("pickCounterStrikeMove", battle, kind) or "TACKLE"
+    local user = battle.player
+    local moveId = hostCall("pickCounterStrikeMove", battle, kind, user)
     local moves = battle.data and battle.data.moves
-    local move = (type(moves) == "table" and type(moves[moveId]) == "table")
+    local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
         and moves[moveId]
-        or { id = moveId, category = "physical", power = 40, type = "NORMAL" }
+        or (moveId and { id = moveId, category = "physical", power = 40, type = "NORMAL" })
+        or nil
 
     local me = hostCall("playerMonName", battle) or "POKéMON"
     local line = result.counter.line or (me .. " countered!")
@@ -502,14 +506,18 @@ local function queueReactCounterStrike(battle, result, ctx)
                 return
             end
             hostCall("pushNotice", battle, line, { kind = "counter" })
-            hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
-                isCalled = true,
-            })
+            if move then
+                hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
+                    isCalled = true,
+                })
+            end
         end,
     })
-    local savedAnimRow = battle.moveAnimRow
-    hostCall("queueMoveAttackAnim", battle, move, true)
-    battle.moveAnimRow = savedAnimRow
+    if move then
+        hostCall("queueMoveAttackAnim", battle, move, true)
+    end
+    -- Never restore the incoming foe clip. That made leftover FURY_ATTACK
+    -- rows run as the player after a named counter they don't know.
 
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
@@ -529,7 +537,7 @@ local function queueReactCounterStrike(battle, result, ctx)
             end
         end,
     })
-    log(battle, "REACT counter", tostring(kind or "?") .. "→" .. tostring(moveId))
+    log(battle, "REACT counter", tostring(kind or "?") .. "→" .. tostring(moveId or "-"))
 end
 
 local function finishCalloutPick(battle, me, moveName, action, braceCall)
@@ -542,6 +550,7 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     battle._arPickOfferedThisTurn = true
     battle._arSuppressReactDefer = true
     state.awaitingPick = nil
+    battle._arAwaitingReact = nil
     -- Invalidate any leftover REACT ui rows still sitting in the queue.
     state.reactEpoch = (state.reactEpoch or 0) + 1
     local pending = state.pendingDamage
@@ -599,6 +608,10 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                 if type(battle.waitNext) == "function" then
                     pcall(battle.waitNext, battle, 20)
                 end
+                -- Incoming close-the-gap walk must not punch after a dodge.
+                local user = pending.ctx.user
+                battle._arWhiffCloseStrike = (user and user.isPlayer) and "player" or "enemy"
+                hostCall("cancelCloseStrike", battle, battle._arWhiffCloseStrike)
                 -- Clear hitMod so a later hit isn't zeroed.
                 if RD() then
                     RD().state(battle).hitMod = nil
@@ -1105,6 +1118,7 @@ function EffectRegistry.runDamaging(battle, ctx, record)
         state.pendingDamage = { ctx = ctx, record = record }
         state.pickOfferedThisTurn = true
         battle._arPickOfferedThisTurn = true
+        battle._arAwaitingReact = true
         -- Pin the engine's attack anim so finishCalloutPick resumes after it
         -- (not before endOfTurn). Without this, REACT! landed after the swing.
         do

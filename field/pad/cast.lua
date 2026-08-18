@@ -37,9 +37,16 @@ local function worldBlockKeys(session, ignoreEnt)
     return keys
 end
 
+-- Dramatic Shape's drawEntity does sprite:resolveImage() then Voxel3D.draw.
+-- A dummy {def=...} with no resolveImage Lua-throws inside beginScene, and
+-- a nil texture native-aborts Love with no error screen. Need def.image
+-- (string) plus resolveImage — SpriteRenderer, or the missing-sheet stub.
 local function voxelSafeSprite(ent)
     local sprite = ent and ent.sprite
-    return sprite and type(sprite) == "table" and sprite.def ~= nil
+    local def = sprite and sprite.def
+    return sprite and type(sprite) == "table" and type(def) == "table"
+        and type(def.image) == "string"
+        and type(sprite.resolveImage) == "function"
 end
 
 local function ensureSpriteDef(ent)
@@ -50,8 +57,13 @@ local function ensureSpriteDef(ent)
         return
     end
     ent._poseSafe = ent._poseSafe or {
-        def = { id = "ar_fbv_pose_" .. tostring(ent.id or "mon"), frames = 1 },
+        def = {
+            id = "ar_fbv_pose_" .. tostring(ent.id or "mon"),
+            frames = 1,
+            image = "ar_fbv_missing",
+        },
         draw = function() end,
+        resolveImage = function() return nil end,
     }
     if not ent.sprite then
         ent.sprite = ent._poseSafe
@@ -67,6 +79,10 @@ local function appendOw(ow, ent)
         return
     end
     ensureSpriteDef(ent)
+    if not voxelSafeSprite(ent) then
+        -- 2D overlay still stamps these; voxel never should.
+        return
+    end
     local ents = ow.entities
     for i = 1, #ents do
         if ents[i] == ent then
@@ -342,18 +358,17 @@ function Cast.tick(session, dt)
         e:tick(dt, p and p.basePx, p and p.basePy)
         flushDetach(e)
     end
-    -- Also tick any FIELD battler still in the OW list (ref safety).
+    -- Stale FIELD battlers (failed replace / leftover send-out) stay on
+    -- ow.entities and voxel-pose every frame. Strip anyone who is not the
+    -- live pair — later turns otherwise accumulate extra sprites.
     local battle = session and session._battle
     local ow = battle and battle.game and battle.game.overworld
     local ents = ow and ow.entities
     if type(ents) == "table" then
-        for i = 1, #ents do
+        for i = #ents, 1, -1 do
             local ent = ents[i]
-            if ent and ent._arFieldBattler and ent ~= p and ent ~= e
-                and type(ent.tick) == "function" then
-                local other = (ent._arFieldSide == "player") and e or p
-                ent:tick(dt, other and other.basePx, other and other.basePy)
-                flushDetach(ent)
+            if ent and ent._arFieldBattler and ent ~= p and ent ~= e then
+                table.remove(ents, i)
             end
         end
     end
