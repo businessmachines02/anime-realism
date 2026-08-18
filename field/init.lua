@@ -434,8 +434,8 @@ return function(env)
     return FBV.stage(mod) == "FIELD"
   end
 
-  -- MOVE HUD: CLASSIC is a vertical fight list (D-pad + A). DIAMOND is the
-  -- U/R/L/D compass with instant-cast. Unknown / unset → CLASSIC.
+  -- MOVE HUD: CLASSIC is the compact 2×2 (D-pad moves, A confirms).
+  -- DIAMOND is the U/R/L/D compass with instant-cast. Unset → CLASSIC.
   function FBV.moveHudStyle(modRef)
     modRef = modRef or mod
     if not (modRef and modRef.options and type(modRef.options.get) == "function") then

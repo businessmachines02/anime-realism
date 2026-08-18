@@ -235,8 +235,9 @@ function Hooks.installDraw(FBV, mod, ctx)
                 if phase ~= "moveSelect" and phase ~= "mimicSelect" then
                     return false
                 end
-                return type(FBV.moveHudStyle) == "function"
-                    and FBV.moveHudStyle(mod) == "DIAMOND"
+                -- CLASSIC and DIAMOND are both 2×2. CLASSIC uses this for
+                -- cursor travel; DIAMOND still instant-casts in hooks_input.
+                return true
             end
             return next(battle)
         end)

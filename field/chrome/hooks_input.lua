@@ -95,8 +95,8 @@ function Hooks.installInput(FBV, mod, ctx)
                         swallowB = true
                     end
 
-                    -- DIAMOND only: U/R/L/D → that move slot, then inject A.
-                    -- CLASSIC leaves D-pad to BattleState list navigation + A.
+                    -- DIAMOND only: U/R/L/D picks that slot and confirms.
+                    -- CLASSIC is a 2×2 cursor (move_grid_navigation) + A.
                     if type(FBV.moveHudStyle) == "function"
                         and FBV.moveHudStyle(mod) == "DIAMOND"
                         and (self.phase == "moveSelect" or self.phase == "mimicSelect") then
