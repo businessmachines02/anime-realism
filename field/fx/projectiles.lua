@@ -1297,6 +1297,9 @@ end
 
 --- Teardrop flame sprite. rot=0 points up (screen -Y).
 local function drawFlameTongue(g, px, py, rot, scale, alpha)
+  if type(px) ~= "number" or type(py) ~= "number" then
+    return
+  end
   scale = math.max(0.18, scale or 1)
   alpha = alpha or 1
   rot = rot or 0
@@ -1368,6 +1371,10 @@ end
 
 --- Ember: staggered bouncing flame tongues caster → foe.
 local function drawEmberVolley(g, x, y, ox, oy, t, age, c)
+  if type(x) ~= "number" or type(y) ~= "number"
+      or type(ox) ~= "number" or type(oy) ~= "number" then
+    return
+  end
   local dx, dy = x - ox, y - oy
   local len = math.sqrt(dx * dx + dy * dy)
   local nx, ny = 0, 1
@@ -1974,12 +1981,21 @@ Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
               py + (lx * sa + ly * ca) * scale
           end
           local fadeIce = (1 - t * 0.2)
+          -- Unpack both returns from each pt() — Lua only expands the last
+          -- call in an arg list, so inlining pt() into polygon() yields an
+          -- odd vertex count and Love errors every overlay frame.
+          local ax, ay = pt(0, -2.4)
+          local bx, by = pt(0.9, 0)
+          local cx, cy = pt(0, 2.4)
+          local dx, dy = pt(-0.9, 0)
           g.setColor(c[1], c[2], c[3], 0.85 * fadeIce)
-          g.polygon("fill",
-            pt(0, -2.4), pt(0.9, 0), pt(0, 2.4), pt(-0.9, 0))
+          g.polygon("fill", ax, ay, bx, by, cx, cy, dx, dy)
+          local hx, hy = pt(0, -1.1)
+          local ix, iy = pt(0.35, 0)
+          local jx, jy = pt(0, 0.5)
+          local kx, ky = pt(-0.2, -0.15)
           g.setColor(1, 1, 1, 0.7 * fadeIce)
-          g.polygon("fill",
-            pt(0, -1.1), pt(0.35, 0), pt(0, 0.5), pt(-0.2, -0.15))
+          g.polygon("fill", hx, hy, ix, iy, jx, jy, kx, ky)
         end
       end
     else
@@ -2686,7 +2702,7 @@ local function spawn(session, spec)
     return nil, self.px, self.py, "down", 0, false
   end
   -- camX/camY: world camera. mapFn(wx, wy) → UI pixels when painting overlay.
-  function p:draw(camX, camY, mapFn)
+    function p:draw(camX, camY, mapFn)
     if self._removed or not (love and love.graphics) then
       return
     end
@@ -2703,6 +2719,12 @@ local function spawn(session, spec)
     if type(mapFn) == "function" then
       x, y = mapFn(x, y)
       ox, oy = mapFn(ox, oy)
+    end
+    local function finite(n)
+      return type(n) == "number" and n == n and n > -1e8 and n < 1e8
+    end
+    if not (finite(x) and finite(y) and finite(ox) and finite(oy)) then
+      return
     end
     if self.kind == "ball" then
       drawBall(g, x, y)

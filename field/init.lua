@@ -47,8 +47,10 @@ return function(env)
       loaded["fx_catalog"] = FxCatalog
     end
   end
-  local origRequire = require
-  require = function(name)
+  -- Sibling shims only while this package loads. Always restore _G.require;
+  -- a leaked wrapper can hand Dramatic Shape our pad coords module.
+  local origRequire = _G.require
+  _G.require = function(name)
     if name == "coords" then
       return Coords
     end
@@ -97,7 +99,7 @@ return function(env)
     UI = loadFile("chrome/ui.lua")
     Callouts = loadFile("chrome/callouts.lua")
   end)
-  require = origRequire
+  _G.require = origRequire
   if not loadOk then
     error(loadErr)
   end
@@ -124,6 +126,26 @@ return function(env)
     Callouts = Callouts,
   }
 
+  local function loggedCall(battle, tag, noisy, fn, ...)
+    local Log = deps.Log
+    if noisy and Log and type(Log.note) == "function" then
+      pcall(Log.note, battle, tag)
+    end
+    local n = select("#", ...)
+    local args = { ... }
+    local tracer = (type(debug) == "table" and debug.traceback) or tostring
+    local ok, a, b, c, d, e = xpcall(function()
+      return fn(unpack(args, 1, n))
+    end, tracer)
+    if not ok then
+      if Log and type(Log.err) == "function" then
+        pcall(Log.err, battle, tag, a)
+      end
+      error(a)
+    end
+    return a, b, c, d, e
+  end
+
   local FBV = {
     id = "field",
     title = "Field battle (standalone OW combat)",
@@ -147,7 +169,7 @@ return function(env)
     UI = UI,
     Callouts = Callouts,
     Intercept = Intercept,
-    OPTION_KEYS = { "battle_stage", "field_sprites", "move_hud", "close_the_gap" },
+    OPTION_KEYS = { "battle_stage", "field_sprites", "move_hud", "close_the_gap", "status_chips" },
   }
 
   function FBV.session(battle)
@@ -191,6 +213,11 @@ return function(env)
   function FBV.closeGapHoldActive(session)
     return Cues and type(Cues.closeGapHoldActive) == "function"
       and Cues.closeGapHoldActive(session)
+  end
+
+  function FBV.shouldParkEngineQueue(session)
+    return Cues and type(Cues.shouldParkEngineQueue) == "function"
+      and Cues.shouldParkEngineQueue(session)
   end
 
   function FBV.tagSelfDamage(battle, text, side)
@@ -256,6 +283,13 @@ return function(env)
     return Lifecycle.cacheAnimTransform(battle, Anims)
   end
 
+  function FBV.cancelCloseStrike(battle, side)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.cancelCloseStrike) == "function" then
+      return Cues.cancelCloseStrike(session, side, Grid)
+    end
+  end
+
   function FBV.nudgeCamera(battle, side, seconds)
     return Lifecycle.nudgeCamera(battle, side, seconds)
   end
@@ -265,15 +299,15 @@ return function(env)
   end
 
   function FBV.begin(battle, mod)
-    return Lifecycle.begin(battle, mod, deps)
+    return loggedCall(battle, "field.begin", true, Lifecycle.begin, battle, mod, deps)
   end
 
   function FBV.finish(battle)
-    return Lifecycle.finish(battle, deps)
+    return loggedCall(battle, "field.finish", true, Lifecycle.finish, battle, deps)
   end
 
   function FBV.syncMons(battle, mod, side)
-    return Lifecycle.syncMons(battle, mod, deps, side)
+    return loggedCall(battle, "field.syncMons", true, Lifecycle.syncMons, battle, mod, deps, side)
   end
 
   function FBV.stagePlayerMon(battle, mod)
@@ -281,15 +315,15 @@ return function(env)
   end
 
   function FBV.tick(battle, dt)
-    return Lifecycle.tick(battle, dt, deps)
+    return loggedCall(battle, "tick", false, Lifecycle.tick, battle, dt, deps)
   end
 
   function FBV.tickPresent(game, dt)
-    return Lifecycle.tickPresent(game, dt, deps)
+    return loggedCall(nil, "tickPresent", false, Lifecycle.tickPresent, game, dt, deps)
   end
 
   function FBV.tickActive(game, dt)
-    return Lifecycle.tickPresent(game, dt, deps)
+    return FBV.tickPresent(game, dt)
   end
 
   function FBV.drawDebug(battle)
@@ -299,9 +333,24 @@ return function(env)
     return Debug.draw(Lifecycle.get(battle), battle)
   end
 
+  function FBV.statusChipsEnabled(modRef)
+    modRef = modRef or mod
+    if not (modRef and modRef.options and type(modRef.options.get) == "function") then
+      return true
+    end
+    return modRef.options:get("status_chips") ~= false
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
+    end
+    if UI and type(UI.syncStatusChips) == "function" then
+      if FBV.statusChipsEnabled(mod) then
+        UI.syncStatusChips(battle)
+      elseif battle then
+        battle._arFieldChipDialogue = nil
+      end
     end
     if UI and type(UI.draw) == "function" then
       UI.draw(battle, FBV.moveHudStyle(mod))
@@ -309,7 +358,24 @@ return function(env)
     -- Attack FX on the same overlay as HP (world→UI mapped).
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
     if session and Projectiles and type(Projectiles.drawUi) == "function" then
-      pcall(Projectiles.drawUi, session, battle)
+      local okUi, errUi = pcall(Projectiles.drawUi, session, battle)
+      if not okUi then
+        local Log = deps.Log
+        if Log and type(Log.err) == "function" then
+          pcall(Log.err, battle, "drawUi", errUi)
+        end
+      end
+    end
+  end
+
+  -- One FIELD overlay pass: game box + REACT chips + banter strip. Callers
+  -- must not also run battle.overlay next() (classic / gen3 / bubbles).
+  function FBV.drawFrame(battle)
+    FBV.drawUI(battle)
+    local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"
+      and FBV.fieldAllowsStackedBottomUI(battle)
+    if not stacked then
+      FBV.drawCallouts(battle)
     end
   end
 
@@ -327,7 +393,7 @@ return function(env)
   end
 
   function FBV.react(battle, side, kind, opts)
-    return Lifecycle.react(battle, side, kind, opts)
+    return loggedCall(battle, "react", false, Lifecycle.react, battle, side, kind, opts)
   end
 
   function FBV.shouldSkipEventReact(battle, side, kind, opts)
@@ -368,8 +434,8 @@ return function(env)
     return FBV.stage(mod) == "FIELD"
   end
 
-  -- MOVE HUD: CLASSIC is a vertical fight list (D-pad + A). DIAMOND is the
-  -- U/R/L/D compass with instant-cast. Unknown / unset → CLASSIC.
+  -- MOVE HUD: CLASSIC is the compact 2×2 (D-pad moves, A confirms).
+  -- DIAMOND is the U/R/L/D compass with instant-cast. Unset → CLASSIC.
   function FBV.moveHudStyle(modRef)
     modRef = modRef or mod
     if not (modRef and modRef.options and type(modRef.options.get) == "function") then
@@ -411,11 +477,33 @@ return function(env)
     return FBV.shouldUse(mod, battle)
   end
 
-  -- Inject cross-package services (ReactiveDefense) into the FIELD deps bag.
+  -- Inject cross-package services (ReactiveDefense, DEV logger) into deps.
+  function FBV.setLog(log)
+    deps.Log = log
+    FBV.Log = log
+    if Audio then
+      Audio._Log = log
+    end
+    if Cues then
+      Cues._Log = log
+    end
+    return true
+  end
+
+  function FBV.notePos(battle, tag)
+    local session = Lifecycle.get(battle)
+    if Cues and type(Cues.notePos) == "function" then
+      return Cues.notePos(session, battle, tag)
+    end
+  end
+
   function FBV.bind(packages)
     local RD = packages and packages.battle and packages.battle.ReactiveDefense
     deps.ReactiveDefense = RD
     FBV.ReactiveDefense = RD
+    if packages and packages.log then
+      FBV.setLog(packages.log)
+    end
     return true
   end
 

@@ -13,6 +13,7 @@ need=(
   "$MAIN"
   "$ROOT/LICENSE"
   "$ROOT/lib/modload.lua"
+  "$ROOT/lib/log.lua"
   "$ROOT/hud/init.lua"
   "$ROOT/hud/rewards.lua"
   "$ROOT/hud/hide.lua"

@@ -1,7 +1,7 @@
 -- Field battle — BattleState update wrap (menu latch, pause, directional cast).
 --
--- Loaded by field/init.lua and attached onto Hooks. Guard `_arFbvUpdate26`
--- rebinds even if an older FIELD update wrap was installed.
+-- Loaded by field/init.lua and attached onto Hooks. `_arFbvUpdate` means
+-- this wrap is already on BattleState.update for this process.
 
 return function(Hooks)
 function Hooks.installInput(FBV, mod, ctx)
@@ -9,11 +9,22 @@ function Hooks.installInput(FBV, mod, ctx)
     local isFieldBattle = ctx.isFieldBattle or function() return false end
     local focusEntrenched = ctx.focusEntrenched or function() return false end
 
+    local function dumpAndThrow(battle, tag, err)
+        if FBV.Log and type(FBV.Log.err) == "function" then
+            pcall(FBV.Log.err, battle, tag, err)
+        else
+            pcall(print, "[ar] ERR " .. tostring(tag), tostring(err))
+        end
+        -- FIELD: rethrowing mid-voxel makes Love return 1 with no error screen.
+        if not FBV.enabled(mod) then
+            error(tostring(err), 0)
+        end
+    end
+
     local ok, BattleState = pcall(require, "src.battle.BattleState")
     if ok and type(BattleState) == "table" then
-        -- ---- FIELD turn UX (menu latch + directional cast) ----
-        -- _arFbvUpdate26 rebinds even if an older FIELD update wrap was installed.
-        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate26 then
+        -- Stick FIELD menu/pause/cast onto BattleState.update, once.
+        if type(BattleState.update) == "function" and not BattleState._arFbvUpdate then
             local origUpdate = BattleState.update
             function BattleState:update(dt, ...)
                 if isFieldBattle(self) then
@@ -84,8 +95,8 @@ function Hooks.installInput(FBV, mod, ctx)
                         swallowB = true
                     end
 
-                    -- DIAMOND only: U/R/L/D → that move slot, then inject A.
-                    -- CLASSIC leaves D-pad to BattleState list navigation + A.
+                    -- DIAMOND only: U/R/L/D picks that slot and confirms.
+                    -- CLASSIC is a 2×2 cursor (move_grid_navigation) + A.
                     if type(FBV.moveHudStyle) == "function"
                         and FBV.moveHudStyle(mod) == "DIAMOND"
                         and (self.phase == "moveSelect" or self.phase == "mimicSelect") then
@@ -115,11 +126,20 @@ function Hooks.installInput(FBV, mod, ctx)
                     end
 
                     if type(FBV.tickPresent) == "function" then
-                        pcall(FBV.tickPresent, self.game, dt)
+                        local okT, errT = pcall(FBV.tickPresent, self.game, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tickPresent", errT)
+                        end
                     elseif type(FBV.tickActive) == "function" then
-                        pcall(FBV.tickActive, self.game, dt)
+                        local okT, errT = pcall(FBV.tickActive, self.game, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tickActive", errT)
+                        end
                     else
-                        pcall(FBV.tick, self, dt)
+                        local okT, errT = pcall(FBV.tick, self, dt)
+                        if not okT then
+                            dumpAndThrow(self, "tick", errT)
+                        end
                     end
 
                     -- Arm the close-the-gap walk before origUpdate so engine
@@ -178,11 +198,16 @@ function Hooks.installInput(FBV, mod, ctx)
                         input.wasPressed = origWasPressed
                         self._arFieldInstantMove = nil
                         if not okU then
-                            error(a, 0)
+                            dumpAndThrow(self, "BattleState.update", a)
                         end
                         result = { a, b, c }
                     else
-                        result = { origUpdate(self, dt, ...) }
+                        local okU, a, b, c = pcall(origUpdate, self, dt, ...)
+                        if not okU then
+                            dumpAndThrow(self, "BattleState.update", a)
+                            return
+                        end
+                        result = { a, b, c }
                     end
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
@@ -205,13 +230,6 @@ function Hooks.installInput(FBV, mod, ctx)
                 return origUpdate(self, dt, ...)
             end
 
-            BattleState._arFbvUpdate26 = true
-            BattleState._arFbvUpdate25 = true
-            BattleState._arFbvUpdate24 = true
-            BattleState._arFbvUpdate23 = true
-            BattleState._arFbvUpdate22 = true
-            BattleState._arFbvUpdate21 = true
-            BattleState._arFbvUpdate20 = true
             BattleState._arFbvUpdate = true
         end
     end

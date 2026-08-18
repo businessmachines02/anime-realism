@@ -452,10 +452,53 @@ function tests.compact_field_ui_tracks_engine_cursors()
   eq(state.moveIndex, 4, "move cursor remains BattleState-owned")
   battle.phase = "messages"
   state = UI.layoutState(battle)
-  truthy(state.showDialogue, "message phase keeps a no-bubble fallback")
-  battle._arFieldBubbleDialogue = true
+  truthy(state.showDialogue, "message phase keeps the game dialogue box")
+  battle._arFieldChipDialogue = true
   state = UI.layoutState(battle)
-  truthy(not state.showDialogue, "speech popup replaces the bottom dialogue panel")
+  truthy(not state.showDialogue, "chip-owned REACT toast does not also fill the game box")
+  battle._arFieldChipDialogue = nil
+  battle.game = {
+    stack = {
+      top = function()
+        return { isOpaque = false }
+      end,
+    },
+  }
+  state = UI.layoutState(battle)
+  truthy(not state.showDialogue, "stacked YES-NO / about-to-use owns the box")
+  battle.game = nil
+  battle.current = { text = "BROCK: Onix, now!" }
+  state = UI.layoutState(battle)
+  truthy(not state.showDialogue, "trainer banter is not the game box")
+  battle.current = { text = "BROCK is\nabout to use" }
+  state = UI.layoutState(battle)
+  truthy(state.showDialogue, "about-to-use is game dialogue")
+end
+
+function tests.status_chip_abbreviations()
+  eq(UI.chipAbbrev("Braced right!\nTook it well!"), "BRACE", "brace success")
+  eq(UI.chipAbbrev("Braced the\nwrong way!"), "WRONG", "brace miss")
+  eq(UI.chipAbbrev("But SQUIRTLE\ndodged aside!"), "DODGE", "dodge")
+  eq(UI.chipAbbrev("Entrenched!\n(3 turns)"), "HOLD", "entrench")
+  eq(UI.chipAbbrev("It's super effective!"), nil, "effectiveness stays a toast")
+  eq(UI.chipAbbrev("SQUIRTLE used TACKLE!"), nil, "move used stays a toast")
+  eq(UI.chipAbbrev("SQUIRTLE's ATTACK fell!"), nil, "stat drop stays a toast")
+  eq(UI.chipAbbrev("A wild PIDGEY appeared!"), nil, "intro stays a toast")
+  eq(UI.chipSide({ current = { arFieldCue = { side = "enemy" } } }, "x"),
+    "enemy", "cue side wins")
+  eq(UI.chipAbbrev("TACKLE!", { current = { arFieldCue = { kind = "attack" } } }),
+    nil, "attack cue is not a REACT chip")
+  local overlap = {
+    current = {
+      text = "SURF!",
+      arFieldCue = { kind = "attack", side = "player" },
+      arOverlapReact = {
+        { kind = "brace", side = "enemy", text = "Onix!\nBrace yourself!" },
+      },
+    },
+  }
+  eq(UI.chipAbbrev("SURF!", overlap), "BRACE", "overlap brace chips during the attack")
+  eq(UI.chipSide(overlap, "SURF!"), "enemy", "overlap chip sits on the defender")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -1795,6 +1838,417 @@ function tests.multi_hit_replays_each_strike()
   truthy(player._returnAt > session._now, "return is deferred for remaining hits")
 end
 
+function tests.flush_held_hit_skips_react_wrap()
+  local calls = { react = 0, engine = 0 }
+  local engine = function()
+    calls.engine = calls.engine + 1
+  end
+  local react = function()
+    calls.react = calls.react + 1
+  end
+  local prev = package.loaded["src.battle.EffectRegistry"]
+  package.loaded["src.battle.EffectRegistry"] = {
+    runDamaging = react,
+    _arReactRunDamaging = react,
+    _arVanillaRunDamaging = engine,
+    _arEngineRunDamaging = engine,
+  }
+  local battle = {}
+  battle._arCloseGapDamage = { ctx = { move = { id = "SCRATCH" } }, record = {} }
+  local session = { live = true, playerMon = {}, enemyMon = {}, _battle = battle }
+  Cues.flushHeldHit(session, battle)
+  eq(calls.react, 0, "flush does not re-enter the React wrap")
+  eq(calls.engine, 1, "flush resumes engine / vanilla damage")
+  package.loaded["src.battle.EffectRegistry"] = prev
+end
+
+function tests.flush_held_hit_replays_multi_hit_list()
+  local calls = { engine = 0 }
+  local engine = function()
+    calls.engine = calls.engine + 1
+  end
+  local prev = package.loaded["src.battle.EffectRegistry"]
+  package.loaded["src.battle.EffectRegistry"] = {
+    runDamaging = engine,
+    _arReactRunDamaging = function() end,
+    _arVanillaRunDamaging = engine,
+    _arEngineRunDamaging = engine,
+  }
+  local battle = {}
+  battle._arCloseGapDamage = {
+    { ctx = { move = { id = "FURY_ATTACK" } }, record = { n = 1 } },
+    { ctx = { move = { id = "FURY_ATTACK" } }, record = { n = 2 } },
+    { ctx = { move = { id = "FURY_ATTACK" } }, record = { n = 3 } },
+  }
+  local session = { live = true, playerMon = {}, enemyMon = {}, _battle = battle }
+  Cues.flushHeldHit(session, battle)
+  eq(calls.engine, 3, "flush replays each held multi-hit runDamaging")
+  eq(battle._arCloseGapDamage, nil, "held list is consumed")
+  package.loaded["src.battle.EffectRegistry"] = prev
+end
+
+function tests.hit_does_not_replay_close_gap_attack()
+  -- Punch → damage_dealt hit used to flip _lastCueSide, so the Scratch
+  -- announce toast re-armed close-the-gap and crashed into Fury Attack.
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 40,
+    _deps = { Projectiles = Projectiles },
+    _battle = { queue = {} },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "SCRATCH", moveType = "NORMAL",
+  }), "scratch walk starts")
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "attack", "scratch punches")
+  eq(player._closeStruckMoveId, "SCRATCH", "punch latches the move")
+  truthy(not player._pendingCloseStrike, "pending strike is cleared")
+
+  Cues.apply(session, "enemy", "hit", Grid, nil, session._battle, {
+    category = "physical", moveId = "SCRATCH", moveType = "NORMAL", push = false,
+  })
+  eq(session._lastCueSide, "enemy", "hit is the latest cue")
+  truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "SCRATCH" }),
+    "scratch stays presented after the foe hit")
+
+  local padU = player.padU
+  player.lastAnim = nil
+  local battle = {
+    current = {
+      arFieldCue = {
+        side = "player", kind = "attack", category = "physical",
+        moveId = "SCRATCH", moveType = "NORMAL",
+      },
+      arOverlapReact = {
+        { side = "enemy", kind = "brace" },
+      },
+    },
+  }
+  enemy.lastAnim = "hit"
+  Cues.pumpCurrent(session, battle, Grid, nil)
+  truthy(not player._pendingCloseStrike, "second close-gap walk is not armed")
+  eq(player.lastAnim, nil, "no second scratch punch")
+  eq(player.padU, padU, "occupancy stays put")
+  eq(enemy.lastAnim, "hit", "leftover overlap brace does not replay after the punch")
+
+  truthy(not Cues.shouldSkipEvent(session, "enemy", "attack", {
+    moveId = "FURY_ATTACK", category = "physical",
+  }), "foe fury attack is a new presentation")
+end
+
+function tests.close_gap_walk_still_overlaps_react()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 41,
+    _deps = { Projectiles = Projectiles, Callouts = Callouts },
+    _battle = { queue = {} },
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "SCRATCH", moveType = "NORMAL",
+  }), "scratch walk starts")
+  truthy(player._pendingCloseStrike, "walk is still pending")
+  local battle = {
+    current = {
+      arFieldCue = {
+        side = "player", kind = "attack", category = "physical",
+        moveId = "SCRATCH", moveType = "NORMAL",
+      },
+      arOverlapReact = {
+        { side = "enemy", kind = "dodge" },
+      },
+    },
+  }
+  Cues.pumpCurrent(session, battle, Grid, nil)
+  eq(enemy.lastAnim, "dodge", "overlap dodge still fires during the close-gap walk")
+  truthy(player._pendingCloseStrike, "walk stays pending after overlap")
+end
+
+function tests.turn_start_clears_close_gap_drift()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u + 1, padV = pHome.v,
+    homePadU = pHome.u + 1, homePadV = pHome.v,
+    _meleeAnchor = true, _returnAt = 99, _withdrawAfterStrike = true,
+    _struckMoves = { POISON_STING = true },
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    homePadU = eHome.u, homePadV = eHome.v,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {}
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid, Cues = Cues },
+    _battle = battle,
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.onTurnStarted(battle)
+  eq(player._returnAt, nil, "turn start drops withdraw clock")
+  eq(player._withdrawAfterStrike, nil, "turn start drops withdraw flag")
+  eq(player._meleeAnchor, true, "melee roam anchor is kept")
+  eq(player.homePadU, pHome.u + 1, "withdraw home is not snapped back")
+  eq(player._struckMoves, nil, "struck-move latch cleared")
+  Lifecycle._testUnbind(battle)
+end
+
+function tests.coords_key_floors_pad_indices()
+  eq(Coords.key(1.2, 2.8), "1,3", "occupancy keys round to nearest pad cell")
+  eq(Coords.key(1, 2), "1,2", "integer pads keep their key")
+end
+
+function tests.awaiting_react_holds_close_strike()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { _arAwaitingReact = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 50,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "enemy", "attack", Grid, nil, battle, {
+    category = "physical", moveId = "FURY_ATTACK", moveType = "NORMAL",
+  }), "foe fury walk starts")
+  truthy(enemy._pendingCloseStrike, "strike waits for REACT")
+  Cues.tickReturns(session, Grid)
+  enemy.basePx, enemy.basePy = enemy.targetPx, enemy.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(enemy.lastAnim, nil, "no punch while REACT is open")
+  truthy(enemy._pendingCloseStrike, "pending walk stays parked")
+  truthy(Cues.closeGapHoldActive(session), "HP still waits for the punch")
+  eq(Cues.shouldParkEngineQueue(session), false,
+    "REACT menu row is not starved by a parked queue")
+
+  battle._arAwaitingReact = nil
+  truthy(Cues.shouldParkEngineQueue(session),
+    "after pick, park until punch or cancel")
+  battle._arWhiffCloseStrike = "enemy"
+  Cues.tickReturns(session, Grid)
+  truthy(not enemy._pendingCloseStrike, "dodge miss cancels the punch")
+  eq(enemy.lastAnim, nil, "whiff does not play attack")
+end
+
+function tests.counter_does_not_forget_prior_strike()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 60,
+    _deps = { Projectiles = Projectiles },
+    _battle = {},
+  }
+  Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "FURY_ATTACK", moveType = "NORMAL",
+  })
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player._closeStruckMoveId, "FURY_ATTACK", "fury punch latches")
+
+  Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "TACKLE", moveType = "NORMAL",
+    isCalled = true,
+  })
+  eq(player._closeStruckMoveId, "TACKLE", "called tackle stays in melee")
+  truthy(not player._pendingCloseStrike, "second move does not start a new walk")
+  eq(player.lastAnim, "attack", "called tackle plays contact in place")
+  truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "FURY_ATTACK" }),
+    "fury stays presented after a called tackle counter")
+  player.lastAnim = nil
+  local battle = {
+    current = {
+      arFieldCue = {
+        side = "player", kind = "attack", category = "physical",
+        moveId = "FURY_ATTACK", moveType = "NORMAL",
+      },
+    },
+  }
+  Cues.pumpCurrent(session, battle, Grid, nil)
+  truthy(not player._pendingCloseStrike, "leftover fury toast does not re-arm")
+  eq(player.lastAnim, nil, "no second fury punch after tackle")
+end
+
+function tests.orphan_close_gap_settles_before_next_turn()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local flushed = false
+  local battle = {
+    _arCloseGapDamage = { { ctx = { move = { id = "SCRATCH" } }, record = {} } },
+    applyDamage = function() end,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 20,
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, battle, {
+    category = "physical", moveId = "SCRATCH", moveType = "NORMAL",
+  }), "scratch walk starts")
+  truthy(player._pendingCloseStrike, "walk is still pending")
+  local origFlush = Cues.flushHeldHit
+  Cues.flushHeldHit = function(sess, btl)
+    flushed = true
+    btl._arCloseGapDamage = nil
+    return true
+  end
+  truthy(Cues.settleOrphanCloseGap(session, battle, Grid), "orphan walk settles")
+  Cues.flushHeldHit = origFlush
+  truthy(not player._pendingCloseStrike, "pending walk is cleared")
+  truthy(flushed, "held HP is flushed after cancel")
+end
+
+function tests.field_snapshot_reports_pad_and_pixels()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid },
+  }
+  local you, foe, dist = Cues.describeField(session)
+  truthy(you:find("you u=", 1, true), "player pad is named")
+  truthy(you:find("px=", 1, true), "player pixels are included")
+  truthy(foe:find("foe u=", 1, true), "foe pad is named")
+  truthy(dist:find("dist=", 1, true), "pad distance is included")
+end
+
+function tests.nameless_attack_does_not_close_gap()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 70,
+    _deps = { Projectiles = Projectiles },
+    _battle = {},
+  }
+  Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical", moveId = "MEGA_PUNCH", moveType = "NORMAL",
+  })
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  local padU = player.padU
+  player.lastAnim = nil
+  player._pendingCloseStrike = nil
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "physical",
+  }), "nameless again-shout still plays")
+  truthy(not player._pendingCloseStrike, "nameless cue after a punch does not walk")
+  eq(player.padU, padU, "nameless cue stays in melee")
+  eq(player.lastAnim, "attack", "nameless cue is in-place contact")
+end
+
 function tests.faint_follows_hp_bar_not_dialogue()
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -2697,6 +3151,57 @@ function tests.fire_tongues_and_gust_paint()
   wing.age = 0.12
   wing:draw(0, 0)
   truthy(calls.arc > 0, "wing attack paints a flying crescent slash")
+  love = prevLove
+end
+
+function tests.ice_beam_shard_polygons_are_xy_pairs()
+  local odd = 0
+  local polygons = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      arc = function() end,
+      ellipse = function() end,
+      circle = function() end,
+      rectangle = function() end,
+      polygon = function(_, ...)
+        polygons = polygons + 1
+        if (select("#", ...) % 2) ~= 0 then
+          odd = odd + 1
+        end
+      end,
+    },
+  }
+  local grid = sampleGrid()
+  local player = {
+    id = "player",
+    padU = grid.home.player.u,
+    padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy",
+    padU = grid.home.enemy.u,
+    padV = grid.home.enemy.v,
+    px = 80, py = 32,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { game = { overworld = { entities = { player, enemy } } } },
+  }
+  local ice = Projectiles.move(session, "player", {
+    moveType = "ICE", moveId = "ICE_BEAM",
+  })
+  ice.age = 0.12
+  ice:draw(0, 0)
+  truthy(polygons > 0, "ice beam paints ice-shard polygons")
+  eq(odd, 0, "ice beam polygon verts are x,y pairs")
   love = prevLove
 end
 
@@ -4028,6 +4533,55 @@ function tests.hooks_wrap_groups_attach()
   eq(type(Hooks.installDraw), "function", "draw wraps")
   eq(type(Hooks.installInput), "function", "input wraps")
   eq(type(Hooks.installEvents), "function", "event wraps")
+end
+
+do
+  local fxFile = root:gsub("field$", "battle") .. "/fx.lua"
+  local chunk, err = loadfile(fxFile)
+  assert(chunk, err)
+  local BattleFx = chunk()
+
+  function tests.counter_strike_uses_only_known_moves()
+    local battle = {
+      data = {
+        moves = {
+          EMBER = { id = "EMBER", power = 40, category = "special", type = "FIRE" },
+          GROWL = { id = "GROWL", power = 0, category = "status", type = "NORMAL" },
+          HEADBUTT = { id = "HEADBUTT", power = 70, category = "physical", type = "NORMAL" },
+          MEGA_PUNCH = { id = "MEGA_PUNCH", power = 80, category = "physical", type = "NORMAL" },
+          SCRATCH = { id = "SCRATCH", power = 40, category = "physical", type = "NORMAL" },
+          FURY_ATTACK = { id = "FURY_ATTACK", power = 15, category = "physical", type = "NORMAL" },
+        },
+      },
+      moveDef = function(self, inst)
+        return inst and self.data.moves[inst.id]
+      end,
+      player = {
+        curMoves = {
+          { id = "SCRATCH", pp = 35 },
+          { id = "GROWL", pp = 40 },
+          { id = "EMBER", pp = 25 },
+        },
+      },
+      enemy = {
+        curMoves = {
+          { id = "FURY_ATTACK", pp = 20 },
+          { id = "GROWL", pp = 40 },
+        },
+      },
+    }
+    eq(BattleFx.pickCounterStrikeMove(battle, "brace", battle.player), "SCRATCH",
+      "player brace uses a physical move they know")
+    eq(BattleFx.pickCounterStrikeMove(battle, "brace", battle.enemy), "FURY_ATTACK",
+      "foe brace uses a physical move they know")
+    battle.player.curMoves = { { id = "EMBER", pp = 25 }, { id = "GROWL", pp = 40 } }
+    eq(BattleFx.pickCounterStrikeMove(battle, "brace", battle.player), "EMBER",
+      "special is used when that's the only damaging move known")
+    eq(BattleFx.pickCounterStrikeMove(battle, "brace", { curMoves = {} }), nil,
+      "empty set does not invent HEADBUTT from the dex")
+    eq(BattleFx.pickCounterStrikeMove(battle, "brace", battle.player) ~= "HEADBUTT", true,
+      "dex HEADBUTT stays unused")
+  end
 end
 
 local count = 0

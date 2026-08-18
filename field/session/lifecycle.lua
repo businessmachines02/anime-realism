@@ -59,6 +59,27 @@ Lifecycle.STATE = {
     Finishing = "Finishing",
 }
 
+-- Love 11.5 LuaJIT on ARM64 macOS can SIGSEGV inside lj_alloc unlink
+-- (NaN-boxed pointer as a free-list fd). FIELD's per-frame pose/walk
+-- is a hot JIT path; interpreter-only avoids that class of abort.
+local function fieldJit(enable)
+    if type(jit) ~= "table" then
+        return
+    end
+    if enable then
+        if type(jit.on) == "function" then
+            pcall(jit.on)
+        end
+    else
+        if type(jit.off) == "function" then
+            pcall(jit.off)
+        end
+        if type(jit.flush) == "function" then
+            pcall(jit.flush)
+        end
+    end
+end
+
 local function now()
     if love and love.timer and love.timer.getTime then
         return love.timer.getTime()
@@ -1090,6 +1111,11 @@ function Lifecycle.begin(battle, mod, deps)
 
     session.state = Lifecycle.STATE.Live
     byBattle[battle] = session
+    fieldJit(false)
+    session._arJitOff = true
+    if deps and deps.Log and type(deps.Log.note) == "function" then
+        pcall(deps.Log.note, battle, "jit off")
+    end
     Lifecycle.focusCamera(battle)
 
     battle._arAnimeField = true
@@ -1099,7 +1125,6 @@ function Lifecycle.begin(battle, mod, deps)
     battle.showPlayerBack = false
     -- TODO: Remove this once we have a proper enemy trainer
     battle.showEnemyTrainer = true
-    print(battle.introSlide)
     if battle.introSlide and battle.introSlide > 0 then
         battle.introSlide = 0
     end
@@ -1725,11 +1750,67 @@ function Lifecycle.onTurnStarted(battle)
     end
     repairInvalidCell(session.playerMon)
     repairInvalidCell(session.enemyMon)
-    session._lastCueMoveId = nil
-    session._arSkipEngineStrike = nil
-    session._arFollowUpAnimKey = nil
-    session._multiHitMoveId = nil
-    session._multiHitSide = nil
+    local Cues = session._deps and session._deps.Cues
+    if Cues and type(Cues.settleOrphanCloseGap) == "function" then
+        Cues.settleOrphanCloseGap(session, battle, Grid)
+    end
+    if Cues and type(Cues.flushHeldHit) == "function" then
+        -- Apply any punch-stashed HP before this turn wipes the hold.
+        pcall(Cues.flushHeldHit, session, battle)
+    end
+    local function keepSide(side)
+        local ent = (side == "player") and session.playerMon or session.enemyMon
+        if ent and ent._pendingCloseStrike then
+            return true
+        end
+        local Cues = session._deps and session._deps.Cues
+        return Cues and type(Cues.pendingMultiHitFollowUp) == "function"
+            and Cues.pendingMultiHitFollowUp(session, battle, side)
+    end
+    local keepPlayer = keepSide("player")
+    local keepEnemy = keepSide("enemy")
+    if not keepPlayer and not keepEnemy then
+        session._lastCueMoveId = nil
+        session._arSkipEngineStrike = nil
+        session._arFollowUpAnimKey = nil
+        session._multiHitMoveId = nil
+        session._multiHitSide = nil
+    end
+    if session._presentedMove then
+        if not keepPlayer then
+            session._presentedMove.player = nil
+        end
+        if not keepEnemy then
+            session._presentedMove.enemy = nil
+        end
+    end
+    if battle and not keepPlayer and not keepEnemy then
+        battle._arCloseGapDamage = nil
+        battle._arCloseGapApply = nil
+        battle._arCloseGapResuming = nil
+        battle._arAwaitingReact = nil
+        battle._arWhiffCloseStrike = nil
+    end
+    if Cues and type(Cues.resetTurnSide) == "function" then
+        Cues.resetTurnSide(session, "player", keepPlayer, Grid)
+        Cues.resetTurnSide(session, "enemy", keepEnemy, Grid)
+    else
+        local function clearPending(ent, keep)
+            if not ent or keep then
+                return
+            end
+            ent._pendingCloseStrike = nil
+            ent._closeStrikeDeadline = nil
+            ent._closeStrikeWait = nil
+            ent._closeStrikeArmedAt = nil
+            ent._closeStruckMoveId = nil
+            ent._struckMoves = nil
+            ent._returnAt = nil
+            ent._withdrawAfterStrike = nil
+        end
+        clearPending(session.playerMon, keepPlayer)
+        clearPending(session.enemyMon, keepEnemy)
+    end
 end
 
 function Lifecycle.react(battle, side, kind, opts)
@@ -1738,6 +1819,9 @@ function Lifecycle.react(battle, side, kind, opts)
         return
     end
     opts = opts or {}
+    if not opts.via then
+        opts.via = "react"
+    end
     -- Camera re-arms (REACT resume / BC tick) must not spawn another Surf/Psychic.
     if opts.presentationOnly then
         return
@@ -2111,6 +2195,13 @@ function Lifecycle.finish(battle, deps)
     end
     if battle then
         battle._arAnimeField = nil
+    end
+    if session._arJitOff then
+        fieldJit(true)
+        session._arJitOff = nil
+        if deps and deps.Log and type(deps.Log.note) == "function" then
+            pcall(deps.Log.note, battle, "jit on")
+        end
     end
     byBattle[battle] = nil
 end

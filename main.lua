@@ -9,10 +9,9 @@
 -- main.lua is the orchestrator + remaining shared hooks (moving into packages
 -- over time). lib/modload.lua loads folder packages for zip + loose installs.
 --
---
-
-
-
+-- Flip to false for release builds. When true, lib/log.lua prints battle
+-- traces to the Love / stdout console (independent of DEV OVERLAY).
+local DEV = false
 
 return function(mod)
     local Hud
@@ -77,12 +76,86 @@ return function(mod)
         else
             print("[anime_realism] field: " .. tostring(err))
         end
+    end
 
+    do
+        local factory = ModLoad and type(ModLoad.loadFile) == "function"
+            and select(1, ModLoad.loadFile("lib/log.lua"))
+        if type(factory) == "function" then
+            local okL, log = pcall(factory, {
+                enabled = function()
+                    return DEV
+                end,
+            })
+            if okL and type(log) == "table" then
+                mod._arLog = log
+                if DEV and type(log.note) == "function" then
+                    pcall(log.note, nil, "boot", "DEV console log ON")
+                end
+            elseif DEV then
+                print("[ar] log init: " .. tostring(log))
+            end
+        elseif DEV then
+            print("[ar] lib/log.lua missing")
+        end
+    end
+
+    -- Crash dump: do not assign love.errorhandler (sandbox refuses it so
+    -- the player still gets the engine crash screen). Event listeners are
+    -- pcall'd by the host, so wrap mod.events so a throw still prints the
+    -- [ar] trail instead of vanishing as a one-line Logger.error.
+    do
+        local function dumpCrash(where, err)
+            pcall(print, "[ar] CRASH " .. tostring(where) .. " " .. tostring(err))
+            local Log = mod._arLog
+            if Log and type(Log.err) == "function" then
+                pcall(Log.err, nil, where, err)
+            elseif Log and type(Log.dump) == "function" then
+                pcall(Log.dump)
+            end
+        end
+
+        local function wrapListener(name, callback)
+            if type(callback) ~= "function" then
+                return callback
+            end
+            return function(payload)
+                local ok, err = xpcall(function()
+                    return callback(payload)
+                end, tostring)
+                if not ok then
+                    dumpCrash("event." .. tostring(name), err)
+                    error(err)
+                end
+            end
+        end
+
+        if type(mod.events) == "table" and type(mod.events.on) == "function"
+            and not mod.events._arDump then
+            local origOn = mod.events.on
+            mod.events.on = function(self, name, callback, priority)
+                return origOn(self, name, wrapListener(name, callback), priority)
+            end
+            if type(mod.events.once) == "function" then
+                local origOnce = mod.events.once
+                mod.events.once = function(self, name, callback, priority)
+                    return origOnce(self, name, wrapListener(name, callback), priority)
+                end
+            end
+            mod.events._arDump = true
+            if DEV then
+                pcall(print, "[ar] crash dump on mod.events")
+            end
+        end
+    end
+
+    if ModLoad and type(ModLoad.loadPackage) == "function" then
         -- Expose packages before install so FBV.bind can inject ReactiveDefense.
         mod._arPackages = {
             hud = Hud,
             battle = Battle,
             field = FieldBattleViewer,
+            log = mod._arLog,
         }
 
         if Hud then
@@ -172,6 +245,12 @@ return function(mod)
                 key = "close_the_gap",
                 type = "toggle",
                 label = "CLOSE THE GAP",
+                default = true,
+            },
+            {
+                key = "status_chips",
+                type = "toggle",
+                label = "STATUS CHIPS",
                 default = true,
             },
             {
@@ -278,6 +357,10 @@ return function(mod)
         end
 
         function dev.log(battle, tag, detail)
+            local Log = mod._arLog
+            if Log and type(Log.note) == "function" then
+                pcall(Log.note, battle, tag, detail)
+            end
             if not dev.on() or not battle then
                 return
             end
@@ -785,11 +868,13 @@ return function(mod)
                     ReactiveDefense.clear(ev.battle)
                     ReactiveDefense.state(ev.battle)
                 end
+                dev.log(ev.battle, "BATTLE start", battleStage())
             end
         end)
 
         mod.events:on("battle.ended", function(ev)
             if ev and ev.battle then
+                dev.log(ev.battle, "BATTLE end")
                 resolvePendingDamage(ev.battle)
                 clearCalloutPickState(ev.battle)
                 clearAmbientStance(ev.battle)
@@ -2150,6 +2235,19 @@ return function(mod)
             if not moveId or moveId == "" then
                 return
             end
+            -- Send-out / hide-pic use *_ANIM ids. Emitting those as
+            -- battle.move_used (stub { id = "POOF_ANIM" }) crashes other
+            -- mods that index move.effect (stronger_trainers smart_ai).
+            do
+                local id = tostring(moveId):upper()
+                if id:find("_ANIM$", 1) then
+                    return
+                end
+                local moves = battle.data and battle.data.moves
+                if type(moves) == "table" and not moves[id] and not moves[moveId] then
+                    return
+                end
+            end
             local key = tostring(moveId) .. ":" .. (isPlayer and "P" or "E")
             if battle._arCamKey == key then
                 return
@@ -2236,8 +2334,7 @@ return function(mod)
                 line = pickFormatted(S.AGAIN_CALLS, monName or playerMonName(battle))
                     or ((monName or "POKéMON") .. "!\nAgain!")
             end
-            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, foeSide and "foe" or "player",
-                { side = foeSide and "enemy" or "player", kind = "attack" })
+            enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, foeSide and "foe" or "player")
             -- Arm the camera RIGHT BEFORE the second anim — doing it during the first
             -- hit's damage resolve races BC (it latches the still-playing first anim,
             -- then clears pending before Again! swings).
@@ -3449,15 +3546,20 @@ return function(mod)
                     end
                 end,
                 tagFieldCue = tagFieldCue,
-                pickCounterStrikeMove = function(battle, kind)
+                pickCounterStrikeMove = function(battle, kind, battler)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
-                        return Fx.pickCounterStrikeMove(battle, kind)
+                        return Fx.pickCounterStrikeMove(battle, kind, battler)
                     end
                 end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 signalAttackPresentation = signalAttackPresentation,
+                cancelCloseStrike = function(battle, side)
+                    if FieldBattleViewer and type(FieldBattleViewer.cancelCloseStrike) == "function" then
+                        return FieldBattleViewer.cancelCloseStrike(battle, side)
+                    end
+                end,
                 tryAgainStrike = tryAgainStrike,
                 resolvePlayerCounterAttempt = resolvePlayerCounterAttempt,
                 tryFoeCoverReaction = tryFoeCoverReaction,
@@ -3471,29 +3573,13 @@ return function(mod)
         end
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
-            next(battle)
-            local stackedPrompt = hud.stackedPromptActive(battle)
             if hud.fieldCompactActive(battle) then
-                local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
-                battle._arFieldBubbleDialogue = side and true or nil
-                battle._arNarratorTop = nil
-                if FieldBattleViewer and type(FieldBattleViewer.drawUI) == "function" then
-                    FieldBattleViewer.drawUI(battle)
-                end
-                battle._arFieldBubbleDialogue = nil
-                if side then
-                    hud.drawSpeechBubble(battle, side)
-                end
-                if not stackedPrompt
-                    and FieldBattleViewer
-                    and type(FieldBattleViewer.drawCallouts) == "function" then
-                    FieldBattleViewer.drawCallouts(battle)
-                end
-                if Battle and Battle.Notices and type(Battle.Notices.draw) == "function" then
-                    Battle.Notices.draw(battle)
-                end
+                -- FIELD chrome is FBV.drawFrame (hooks_draw). Do not paint
+                -- classic / gen3 / bubbles on top of it.
                 return
             end
+            next(battle)
+            local stackedPrompt = hud.stackedPromptActive(battle)
             BanterCameo.draw(battle)
             local side = (not stackedPrompt) and hud.bubbleSideActive(battle) or nil
             if side then

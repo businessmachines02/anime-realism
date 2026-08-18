@@ -8,6 +8,18 @@ function Hooks.installDraw(FBV, mod, ctx)
     ctx = ctx or {}
     local isFieldBattle = ctx.isFieldBattle or function() return false end
 
+    local function dumpAndThrow(battle, tag, err)
+        if FBV.Log and type(FBV.Log.err) == "function" then
+            pcall(FBV.Log.err, battle, tag, err)
+        else
+            pcall(print, "[ar] ERR " .. tostring(tag), tostring(err))
+        end
+        -- FIELD: rethrowing mid-voxel makes Love return 1 with no error screen.
+        if not FBV.enabled(mod) then
+            error(tostring(err), 0)
+        end
+    end
+
     -- Peek around the fight while the mouse is moving. Idle → auto camera.
     do
         local okG, Game = pcall(require, "src.core.Game")
@@ -76,8 +88,7 @@ function Hooks.installDraw(FBV, mod, ctx)
             BattleState._arFbvHud = true
         end
 
-        -- Bump guard so hot reload replaces the older affine-remap wrap.
-        if type(BattleState.drawAnimLayer) == "function" and not BattleState._arFbvAnim21 then
+        if type(BattleState.drawAnimLayer) == "function" and not BattleState._arFbvAnim then
             local origAnim = BattleState.drawAnimLayer
             function BattleState:drawAnimLayer(colorized, ...)
                 if isFieldBattle(self) then
@@ -88,11 +99,25 @@ function Hooks.installDraw(FBV, mod, ctx)
                 return origAnim(self, colorized, ...)
             end
 
-            BattleState._arFbvAnim21 = true
+            BattleState._arFbvAnim = true
         end
 
-        -- _arFbvDraw23 also drops translucent attack flashes (issue #12).
-        if type(BattleState.drawClassic) == "function" and not BattleState._arFbvDraw23 then
+        if type(BattleState.drawTextArea) == "function" and not BattleState._arFbvText then
+            local origText = BattleState.drawTextArea
+            function BattleState:drawTextArea(...)
+                if isFieldBattle(self) then
+                    return
+                end
+                return origText(self, ...)
+            end
+            BattleState._arFbvText = true
+        end
+
+        -- Do not run the classic SGB pipeline (bgCanvas, applyWavy, zone
+        -- shader, white 160×144 fill) over the live voxel world. Hits arm
+        -- shake/wavy; that GL mix aborts Love with no error screen and looks
+        -- like "a random attack crashed". Overlay still paints compact UI.
+        if type(BattleState.drawClassic) == "function" and not BattleState._arFbvDraw then
             local origDraw = BattleState.drawClassic
             function BattleState:drawClassic(...)
                 if not isFieldBattle(self) then
@@ -104,58 +129,57 @@ function Hooks.installDraw(FBV, mod, ctx)
                 self.introSlide = 0
                 self.letterboxWhite = false
                 self.isOpaque = false
-                local g = love.graphics
-                local rectangle = g.rectangle
-                g.rectangle = function(mode, x, y, w, h, ...)
-                    local r, gr, b, a = g.getColor()
-                    local drop = Hooks.shouldDropFieldFill(mode, x, y, w, h, r, gr, b, a)
-                    if drop then
-                        if drop == "clear" then
-                            local target = g.getCanvas()
-                            if target ~= nil
-                                and (target == self.bgCanvas or target == self.waveCanvas) then
-                                g.clear(0, 0, 0, 0)
-                            end
-                        end
-                        return
+                -- Classic / gen3 / bubbles never paint here — FBV.drawFrame
+                -- is the only FIELD overlay.
+                local overlayCall
+                if mod.hooks and type(mod.hooks.call) == "function" then
+                    overlayCall = function(vanilla, battle)
+                        return mod.hooks:call("battle.overlay", vanilla, battle)
                     end
-                    return rectangle(mode, x, y, w, h, ...)
+                else
+                    local okRT, Runtime = pcall(require, "src.mods.Runtime")
+                    if okRT and Runtime and type(Runtime.call) == "function" then
+                        overlayCall = function(vanilla, battle)
+                            return Runtime.call("battle.overlay", vanilla, battle)
+                        end
+                    end
                 end
-                local okDraw, err = pcall(origDraw, self, ...)
-                g.rectangle = rectangle
-                if not okDraw then
-                    error(err, 0)
+                if overlayCall then
+                    local okO, errO = pcall(overlayCall, function() end, self)
+                    if not okO then
+                        dumpAndThrow(self, "battle.overlay", errO)
+                    end
+                elseif FBV and type(FBV.drawUI) == "function" then
+                    local okU, errU = pcall(FBV.drawUI, self)
+                    if not okU then
+                        dumpAndThrow(self, "drawUI", errU)
+                    end
                 end
             end
 
-            BattleState._arFbvDraw23 = true
             BattleState._arFbvDraw = true
         end
 
-        -- Screen-shake zone fills are color 0 (white). Invisible on the classic
-        -- field; a flickering sheet over the live map.
-        if type(BattleState.drawZonePass) == "function" and not BattleState._arFbvZone23 then
+        if type(BattleState.drawZonePass) == "function" and not BattleState._arFbvZone then
             local origZone = BattleState.drawZonePass
             function BattleState:drawZonePass(...)
-                if not isFieldBattle(self) then
-                    return origZone(self, ...)
+                if isFieldBattle(self) then
+                    return
                 end
-                local g = love.graphics
-                local rectangle = g.rectangle
-                g.rectangle = function(mode, ...)
-                    if mode == "fill" then
-                        return
-                    end
-                    return rectangle(mode, ...)
-                end
-                local okZ, err = pcall(origZone, self, ...)
-                g.rectangle = rectangle
-                if not okZ then
-                    error(err, 0)
-                end
+                return origZone(self, ...)
             end
+            BattleState._arFbvZone = true
+        end
 
-            BattleState._arFbvZone23 = true
+        if type(BattleState.applyWavy) == "function" and not BattleState._arFbvWavy then
+            local origWavy = BattleState.applyWavy
+            function BattleState:applyWavy(src, ...)
+                if isFieldBattle(self) then
+                    return src
+                end
+                return origWavy(self, src, ...)
+            end
+            BattleState._arFbvWavy = true
         end
 
         if type(BattleState.wideLayout) == "function" and not BattleState._arFbvWide then
@@ -171,18 +195,19 @@ function Hooks.installDraw(FBV, mod, ctx)
         end
     end
 
-    -- ---- Overlay / visibility hooks ----
-    -- Draw FIELD chrome last so Move Inspector / typed-move panels cannot cover it.
+    -- FIELD owns its overlay. Do not call next() — that is classic / gen3 /
+    -- speech-bubble paint, which stacked a second box under ours.
     if mod.hooks and type(mod.hooks.wrap) == "function"
-        and not mod._arFbvOverlayTop then
-        mod._arFbvOverlayTop = true
+        and not mod._arFbvOverlayFrame then
+        mod._arFbvOverlayFrame = true
         mod.hooks:wrap("battle.overlay", function(next, battle)
-            next(battle)
             if battle and isFieldBattle(battle)
-                and FBV and type(FBV.drawUI) == "function" then
-                FBV.drawUI(battle)
+                and FBV and type(FBV.drawFrame) == "function" then
+                FBV.drawFrame(battle)
+                return
             end
-        end, 12000)
+            next(battle)
+        end, 13000)
     end
 
     if mod.hooks and type(mod.hooks.wrap) == "function"
@@ -210,22 +235,12 @@ function Hooks.installDraw(FBV, mod, ctx)
                 if phase ~= "moveSelect" and phase ~= "mimicSelect" then
                     return false
                 end
-                return type(FBV.moveHudStyle) == "function"
-                    and FBV.moveHudStyle(mod) == "DIAMOND"
+                -- CLASSIC and DIAMOND are both 2×2. CLASSIC uses this for
+                -- cursor travel; DIAMOND still instant-casts in hooks_input.
+                return true
             end
             return next(battle)
         end)
-    end
-
-    -- ---- Present clock (keep bob alive under menus) ----
-    local function presentTick(game, dt)
-        if not FBV.enabled(mod) then
-            return
-        end
-        local tick = FBV.tickPresent or FBV.tickActive
-        if type(tick) == "function" then
-            pcall(tick, game, dt)
-        end
     end
 
     local function frameDt()
@@ -244,27 +259,72 @@ function Hooks.installDraw(FBV, mod, ctx)
         return nil
     end
 
+    -- ---- Present clock (keep bob alive under menus) ----
+    -- PR #58 split this across input.step (×2), letterbox (×2), overlay (×2),
+    -- and drawWorld. A slow later-battle frame passes the 8ms debounce and
+    -- applies dt twice — attacks look bouncy, and punch+withdraw+next cue
+    -- collapse onto one voxel pose. One tick per display frame.
+    local presentGen = 0
+    local presentOpened = false
+    local function openPresentFrame()
+        if not presentOpened then
+            presentGen = presentGen + 1
+            presentOpened = true
+        end
+    end
+    local function presentTick(game, dt)
+        if not FBV.enabled(mod) then
+            return
+        end
+        openPresentFrame()
+        local tick = FBV.tickPresent or FBV.tickActive
+        if type(tick) ~= "function" then
+            return
+        end
+        local session = nil
+        if type(FBV.liveBattle) == "function" then
+            local battle = select(1, FBV.liveBattle(game or gameSingleton()))
+            session = battle and FBV.session and FBV.session(battle)
+        end
+        if session and session._arPresentGen == presentGen then
+            return
+        end
+        if session then
+            session._arPresentGen = presentGen
+        end
+        local ok, err = pcall(tick, game, dt)
+        if not ok then
+            dumpAndThrow(nil, "presentTick", err)
+        end
+    end
+
     -- Advance bob BEFORE the world is drawn this frame (letterbox is too late).
     -- Unwedge a voxel pass that threw mid-beginScene. Paint field FX/HP after
     -- the world body so they share the world canvas camera (not the 160×144 UI).
     local function wrapDrawWorld(OverworldState)
         if not (type(OverworldState) == "table"
                 and type(OverworldState.drawWorld) == "function"
-                and not OverworldState._arFbvPresentDraw21) then
+                and not OverworldState._arFbvPresentDraw) then
             return
         end
         local origDrawWorld = OverworldState.drawWorld
         function OverworldState:drawWorld(...)
-            if FBV.enabled(mod) then
-                presentTick(self.game or gameSingleton(), frameDt())
-            end
+            -- Do not tick here. Update/input already advance the present
+            -- clock. Ticking inside draw mutates ow.entities on the same
+            -- frame Dramatic Shape poses them (NaN/nil → native GL abort).
             local ok, a, b, c, d = pcall(origDrawWorld, self, ...)
             if not ok then
                 if type(FBV.unwedgeVoxelPass) == "function" then
                     pcall(FBV.unwedgeVoxelPass, mod)
                 end
-                if not FBV.enabled(mod) then
-                    error(a, 0)
+                -- Swallow on FIELD: a Lua throw mid-beginScene cannot run
+                -- love.errorhandler and aborts the process instead.
+                if FBV.enabled(mod) then
+                    if FBV.Log and type(FBV.Log.err) == "function" then
+                        pcall(FBV.Log.err, nil, "drawWorld", a)
+                    end
+                else
+                    dumpAndThrow(nil, "drawWorld", a)
                 end
                 a = nil
             elseif FBV.enabled(mod)
@@ -272,13 +332,16 @@ function Hooks.installDraw(FBV, mod, ctx)
                 and type(FBV.drawWorldOverlay) == "function" then
                 local battle = select(1, FBV.liveBattle(self.game or gameSingleton()))
                 if battle and isFieldBattle(battle) then
-                    pcall(FBV.drawWorldOverlay, battle)
+                    local okO, errO = pcall(FBV.drawWorldOverlay, battle)
+                    if not okO and FBV.Log and type(FBV.Log.err) == "function" then
+                        pcall(FBV.Log.err, battle, "drawWorldOverlay", errO)
+                    end
                 end
             end
             return a, b, c, d
         end
 
-        OverworldState._arFbvPresentDraw21 = true
+        OverworldState._arFbvPresentDraw = true
     end
     do
         local okOW, OverworldController = pcall(require, "src.world.OverworldController")
@@ -291,30 +354,36 @@ function Hooks.installDraw(FBV, mod, ctx)
         end
     end
 
+    -- Stick FIELD's animation tick onto Love's input step, once. Saving this
+    -- file must not stick it on a second time.
     if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvInputStep then
         mod._arFbvInputStep = true
         mod.hooks:wrap("input.step", function(next, game, dt)
-            -- Tick before and after: before covers draw-order races; after covers
-            -- BattleState:update work that may have happened inside next().
             presentTick(game, dt)
-            local out = next(game, dt)
-            presentTick(game, dt)
-            return out
+            local ok, a, b, c, d = pcall(next, game, dt)
+            if not ok then
+                dumpAndThrow(nil, "input.step", a)
+                return
+            end
+            return a, b, c, d
         end)
     end
 
-    -- Draw-path fallback: letterbox runs every frame even when PartyMenu /
-    -- callout modals sit on top of BattleState (stack only updates the top).
+    -- Letterbox runs every frame even when a menu sits on top of the fight.
+    -- Same "once only" flag idea as input.step.
     if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvLetterbox then
         mod._arFbvLetterbox = true
         mod.hooks:wrap("render.letterbox", function(next, ctx)
             local game = gameSingleton()
             presentTick(game, frameDt())
-            next(ctx)
+            local ok, err = pcall(next, ctx)
+            if not ok then
+                dumpAndThrow(nil, "render.letterbox", err)
+            end
+            presentOpened = false
             if not FBV.enabled(mod) then
                 return
             end
-            presentTick(game, frameDt())
             if type(FBV.drawDebug) == "function"
                 and mod.options and type(mod.options.get) == "function"
                 and mod.options:get("dev_overlay") == true
@@ -323,19 +392,6 @@ function Hooks.installDraw(FBV, mod, ctx)
                 if battle then
                     pcall(FBV.drawDebug, battle)
                 end
-            end
-        end)
-    end
-
-    if mod.hooks and type(mod.hooks.wrap) == "function" and not mod._arFbvOverlay then
-        mod._arFbvOverlay = true
-        mod.hooks:wrap("battle.overlay", function(next, battle)
-            if battle and isFieldBattle(battle) then
-                presentTick(battle.game, frameDt())
-            end
-            next(battle)
-            if battle and isFieldBattle(battle) then
-                presentTick(battle.game, frameDt())
             end
         end)
     end

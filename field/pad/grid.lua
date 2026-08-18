@@ -332,6 +332,8 @@ function Grid.step(g, ent, du, dv)
   Grid.occupy(g, ent.id, u, v)
   ent.padU, ent.padV = u, v
   Grid.syncPx(g, ent)
+  ent.basePx = ent.basePx or ent.targetPx
+  ent.basePy = ent.basePy or ent.targetPy
   return true
 end
 

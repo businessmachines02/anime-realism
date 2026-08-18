@@ -430,8 +430,9 @@ function Pick.newModal(game, opts)
     if #choices > 0 and start > #choices then
         start = #choices
     end
-    -- D-pad picks instantly when there are few options (REACT / BRACE / STAY).
-    -- Long lists (COUNTER move pick) keep cursor + A.
+    -- Short menus (REACT / COVER / ENTRENCH) use the REACT HUD layout.
+    -- DIAMOND confirms on the D-pad; GRID / TABS move a cursor, then A.
+    -- Long lists (COUNTER move pick) stay a vertical cursor + A.
     local usePad = opts.pad
     if usePad == nil then
         usePad = #choices > 0 and #choices <= 5
@@ -545,12 +546,27 @@ function Pick.newModal(game, opts)
             return
         end
         self._resolved = true
+        do
+            local fn = host.log
+            if type(fn) == "function" then
+                pcall(fn, nil, "pick",
+                    tostring(self.title or "") .. " → "
+                    .. tostring(choice.id or choice.label or "?"))
+            end
+        end
         Sound.play(self.game.data, "Press_AB")
         self.game.stack:pop()
         if self.onPick then
             self.onPick(choice)
         end
     end
+
+    local GRID_STEP = {
+        up = { left = "up", right = "right", up = "up", down = "left" },
+        right = { left = "up", right = "right", up = "right", down = "down" },
+        left = { left = "left", right = "down", up = "up", down = "left" },
+        down = { left = "left", right = "down", up = "right", down = "down" },
+    }
 
     function self:update(dt)
         if self.usePad and self.style == "TABS" then
@@ -580,6 +596,49 @@ function Pick.newModal(game, opts)
                 end
                 return
             end
+            -- DIAMOND: D-pad is the layout — U/R/L/D (and A) confirm immediately.
+            if self.style == "DIAMOND" then
+                local dir = nil
+                if input:wasPressed("up") then
+                    dir = "up"
+                elseif input:wasPressed("down") then
+                    dir = "down"
+                elseif input:wasPressed("left") then
+                    dir = "left"
+                elseif input:wasPressed("right") then
+                    dir = "right"
+                elseif input:wasPressed("a") then
+                    dir = "a"
+                end
+                if dir then
+                    confirm(choiceForDir(dir))
+                end
+                return
+            end
+            local function selectChoice(choice)
+                if not choice then
+                    return
+                end
+                for i = 1, n do
+                    if self.choices[i] == choice then
+                        self.index = i
+                        return
+                    end
+                end
+            end
+            -- GRID / TABS: move the cursor, A confirms.
+            if input:wasPressed("a") then
+                confirm(self.choices[self.index])
+                return
+            end
+            if self.style == "TABS" then
+                if input:wasPressed("left") or input:wasPressed("up") then
+                    self.index = self.index > 1 and self.index - 1 or n
+                elseif input:wasPressed("right") or input:wasPressed("down") then
+                    self.index = self.index < n and self.index + 1 or 1
+                end
+                return
+            end
             local dir = nil
             if input:wasPressed("up") then
                 dir = "up"
@@ -589,17 +648,23 @@ function Pick.newModal(game, opts)
                 dir = "left"
             elseif input:wasPressed("right") then
                 dir = "right"
-            elseif input:wasPressed("a") then
-                dir = "a"
             end
-            if dir then
-                confirm(choiceForDir(dir))
+            if not dir then
+                return
             end
+            local cur = self.choices[self.index]
+            local curDir = cur and cur.dir
+            local nextDir = GRID_STEP[curDir] and GRID_STEP[curDir][dir]
+            selectChoice(choiceForDir(nextDir) or choiceForDir(dir))
             return
         end
         if input:wasPressed("up") then
             self.index = self.index > 1 and self.index - 1 or n
         elseif input:wasPressed("down") then
+            self.index = self.index < n and self.index + 1 or 1
+        elseif input:wasPressed("left") then
+            self.index = self.index > 1 and self.index - 1 or n
+        elseif input:wasPressed("right") then
             self.index = self.index < n and self.index + 1 or 1
         elseif input:wasPressed("a") then
             confirm(self.choices[self.index])

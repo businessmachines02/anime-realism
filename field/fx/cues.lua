@@ -18,6 +18,23 @@
 -- growing the old if-chain.
 
 local Cues = {}
+Cues._Log = nil
+
+local function note(session, battle, tag, ...)
+  local Log = (session and session._deps and session._deps.Log) or Cues._Log
+  if not (Log and type(Log.note) == "function") then
+    return
+  end
+  pcall(Log.note, battle or (session and session._battle), tag, ...)
+end
+
+local function noteErr(session, battle, tag, err)
+  local Log = (session and session._deps and session._deps.Log) or Cues._Log
+  if not (Log and type(Log.err) == "function") then
+    return
+  end
+  pcall(Log.err, battle or (session and session._battle), tag, err)
+end
 
 -- Gen1 semi-invulnerable charge moves → field vanish flavor.
 Cues.VANISH_MOVES = {
@@ -234,6 +251,142 @@ local function restoreStepSpeed(ent)
   end
 end
 
+local function markPresented(session, side, mid)
+  if not (session and side and mid) then
+    return
+  end
+  session._presentedMove = session._presentedMove or {}
+  local set = session._presentedMove[side]
+  if type(set) ~= "table" then
+    local prev = (type(set) == "string") and set or nil
+    set = {}
+    if prev then
+      set[prev] = true
+    end
+    session._presentedMove[side] = set
+  end
+  set[mid] = true
+end
+
+local function wasPresented(session, side, mid)
+  if not (session and side and mid) then
+    return false
+  end
+  local set = session._presentedMove and session._presentedMove[side]
+  if type(set) == "string" then
+    return set == mid
+  end
+  return type(set) == "table" and set[mid] == true
+end
+
+local function markStruck(ent, mid)
+  if not (ent and mid) then
+    return
+  end
+  ent._struckMoves = ent._struckMoves or {}
+  ent._struckMoves[mid] = true
+  ent._closeStruckMoveId = mid
+end
+
+local function cueMoveId(opts)
+  local mid = opts and opts.moveId and tostring(opts.moveId):upper() or nil
+  if mid == "" then
+    return nil
+  end
+  return mid
+end
+
+local function cueForce(opts)
+  opts = opts or {}
+  if opts.releaseStrike then
+    return "release"
+  end
+  if opts.again then
+    return "again"
+  end
+  if opts.isCalled then
+    return "called"
+  end
+  if opts.followUp then
+    return "follow"
+  end
+  if opts.multiHit then
+    return "multi"
+  end
+  return nil
+end
+
+local function padSnap(ent)
+  if not ent then
+    return "nil"
+  end
+  local px = (type(ent.basePx) == "number") and "Y" or "N"
+  return tostring(ent.padU) .. "," .. tostring(ent.padV) .. " px=" .. px
+end
+
+local function wasStruck(ent, mid)
+  if not (ent and mid) then
+    return false
+  end
+  if ent._closeStruckMoveId == mid then
+    return true
+  end
+  return ent._struckMoves and ent._struckMoves[mid] == true
+end
+
+function Cues.awaitingReact(battle)
+  return battle and battle._arAwaitingReact == true
+end
+
+local function fieldMenuOpen(battle)
+  if Cues.awaitingReact(battle) then
+    return true
+  end
+  local stack = battle and battle.game and battle.game.stack
+  if not (stack and type(stack.top) == "function") then
+    return false
+  end
+  local top = stack:top()
+  return top ~= nil and top ~= battle
+end
+
+local function hasStruckThisTurn(ent)
+  if not ent then
+    return false
+  end
+  if ent._closeStruckMoveId then
+    return true
+  end
+  local struck = ent._struckMoves
+  return type(struck) == "table" and next(struck) ~= nil
+end
+
+local function playMeleeContact(session, side, ent, opts, jump)
+  opts = opts or {}
+  local deps = session and session._deps
+  local Projectiles = deps and deps.Projectiles
+  local Audio = deps and deps.Audio
+  local battle = session and session._battle
+  if Projectiles and type(Projectiles.contact) == "function" then
+    Projectiles.contact(session, side, {
+      moveType = opts.moveType,
+      moveId = opts.moveId,
+    })
+  end
+  if Audio and type(Audio.playMove) == "function" then
+    pcall(Audio.playMove, battle, opts.moveId, side == "player")
+  end
+  if type(ent.play) == "function" then
+    ent:play((jump or ent._attackJump) and "jump" or "attack")
+  end
+  local mid = opts.moveId and tostring(opts.moveId):upper() or nil
+  if mid and mid ~= "" then
+    markStruck(ent, mid)
+  end
+  ent._returnAt = now(session) + 0.42
+  ent._withdrawAfterStrike = true
+end
+
 --- Walk feet, not draw offsets / occupancy destination.
 local function walkPx(ent)
   if not ent then
@@ -282,6 +435,74 @@ function Cues.inMeleeReach(ent, foe)
   return false
 end
 
+local function num(v)
+  if type(v) ~= "number" then
+    return "-"
+  end
+  return string.format("%.0f", v)
+end
+
+local function occKey(session, ent)
+  local occ = session and session.grid and session.grid.occ
+  if not (occ and ent and ent.id) then
+    return "-"
+  end
+  for k, id in pairs(occ) do
+    if id == ent.id then
+      return tostring(k)
+    end
+  end
+  return "none"
+end
+
+local function describeEnt(session, ent, label)
+  if not ent then
+    return label .. "=nil"
+  end
+  local pend = ent._pendingCloseStrike
+  local pendId = "-"
+  if type(pend) == "table" then
+    pendId = tostring(pend.moveId or "Y")
+  end
+  return string.format(
+    "%s u=%s,v=%s px=%s,%s tgt=%s,%s walk=%s anim=%s pend=%s struck=%s occ=%s",
+    label,
+    tostring(ent.padU), tostring(ent.padV),
+    num(ent.basePx or ent.px), num(ent.basePy or ent.py),
+    num(ent.targetPx), num(ent.targetPy),
+    Cues.stillWalkingToPad(ent) and "Y" or "N",
+    tostring(ent.anim or "-"),
+    pendId,
+    hasStruckThisTurn(ent) and "Y" or "N",
+    occKey(session, ent))
+end
+
+--- Pad / pixel / walk / pending snapshot for crash trails.
+function Cues.describeField(session)
+  if not session then
+    return "you=nil", "foe=nil", "dist=-"
+  end
+  local dist = "-"
+  local Grid = session._deps and session._deps.Grid
+  if Grid and type(Grid.padDistance) == "function"
+      and session.playerMon and session.enemyMon then
+    dist = tostring(Grid.padDistance(session.grid, session.playerMon, session.enemyMon) or "-")
+  end
+  return describeEnt(session, session.playerMon, "you"),
+    describeEnt(session, session.enemyMon, "foe"),
+    "dist=" .. dist
+end
+
+function Cues.notePos(session, battle, tag)
+  tag = tag or "pos"
+  local ok, you, foe, dist = pcall(Cues.describeField, session)
+  if not ok then
+    return
+  end
+  note(session, battle, tag, you)
+  note(session, battle, tag, foe, dist)
+end
+
 --- damage_dealt often fires while CLOSE THE GAP is still walking (applyDamage
 --- reports the hit so the engine can continue). Hold the FIELD shove until
 --- the punch, or Body Slam etc. never push.
@@ -312,6 +533,21 @@ local function fireCloseStrike(session, side, ent, Grid)
     return
   end
   local pending = ent._pendingCloseStrike
+  local mid = pending and pending.moveId and tostring(pending.moveId):upper() or nil
+  if mid == "" then
+    mid = nil
+  end
+  local foe = foeOf(session, side)
+  local dist = "-"
+  local G = Grid or (session and session._deps and session._deps.Grid)
+  if foe and G and type(G.padDistance) == "function" then
+    dist = tostring(G.padDistance(session.grid, ent, foe) or "-")
+  end
+  note(session, session and session._battle, "closeStrike", side, mid,
+    "dist=" .. dist, describeEnt(session, ent, side))
+  if mid then
+    markStruck(ent, mid)
+  end
   ent._pendingCloseStrike = nil
   ent._closeStrikeDeadline = nil
   ent._closeStrikeWait = nil
@@ -335,6 +571,7 @@ local function fireCloseStrike(session, side, ent, Grid)
   -- Shove now that occupancy is adjacent. damage_dealt during the walk
   -- was stashed; a replay after this is skipped by shouldSkipEvent.
   Cues.flushCloseHit(session, Grid)
+  Cues.flushHeldHit(session, battle)
 end
 
 --- True while CLOSE THE GAP still owns the physical beat.
@@ -342,11 +579,101 @@ function Cues.closeGapHoldActive(session)
   if not (session and session.live) then
     return false
   end
+  local battle = session._battle
+  if Cues.awaitingReact(battle) then
+    return true
+  end
   if not Cues.closeTheGapEnabled(session) then
     return false
   end
   local p, e = session.playerMon, session.enemyMon
   return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
+end
+
+--- Park updateQueue during the walk so Harden cannot start — except while
+--- REACT is waiting. That menu is a queue `ui` row; parking it deadlocks
+--- (punch waits for the menu, menu waits for the queue).
+function Cues.shouldParkEngineQueue(session)
+  if not (session and session.live) then
+    return false
+  end
+  local battle = session._battle
+  if battle and battle._arCloseGapResuming then
+    return false
+  end
+  if Cues.awaitingReact(battle) then
+    return false
+  end
+  local p, e = session.playerMon, session.enemyMon
+  return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
+end
+
+--- Drop a close-the-gap walk without punching (REACT dodge miss / cancelled hit).
+function Cues.cancelCloseStrike(session, side, Grid)
+  local ent = (side == "player") and (session and session.playerMon)
+      or (session and session.enemyMon)
+  if not ent or not ent._pendingCloseStrike then
+    return false
+  end
+  ent._pendingCloseStrike = nil
+  ent._closeStrikeDeadline = nil
+  ent._closeStrikeWait = nil
+  ent._closeStrikeArmedAt = nil
+  restoreStepSpeed(ent)
+  ent._withdrawAfterStrike = true
+  ent._returnAt = now(session)
+  return true
+end
+
+--- A close-gap walk that leaked into the next turn (foe Harden while
+--- Scratch was still walking). Punch if already adjacent, else cancel
+--- and flush the held HP so the next swing starts clean.
+function Cues.settleOrphanCloseGap(session, battle, Grid)
+  if not (session and session.live) then
+    return false
+  end
+  Grid = Grid or (session._deps and session._deps.Grid)
+  local settled = false
+  for _, side in ipairs({ "player", "enemy" }) do
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    if ent and ent._pendingCloseStrike then
+      local mid = ent._pendingCloseStrike.moveId
+      local foe = foeOf(session, side)
+      local punch = Cues.inMeleeReach(ent, foe)
+      note(session, battle, "settleGap", side, mid or "-",
+        punch and "punch" or "cancel", padSnap(ent))
+      if punch then
+        fireCloseStrike(session, side, ent, Grid)
+      else
+        Cues.cancelCloseStrike(session, side, Grid)
+      end
+      settled = true
+    end
+  end
+  if settled then
+    Cues.flushHeldHit(session, battle)
+  end
+  return settled
+end
+
+--- Drop leftover close-gap punch clocks at turn start. Keep melee home /
+--- `_meleeAnchor` so idle roam does not bounce back to the opening cell.
+function Cues.resetTurnSide(session, side, keep, _)
+  local ent = (side == "player") and (session and session.playerMon)
+      or (session and session.enemyMon)
+  if not ent or keep then
+    return false
+  end
+  ent._pendingCloseStrike = nil
+  ent._closeStrikeDeadline = nil
+  ent._closeStrikeWait = nil
+  ent._closeStrikeArmedAt = nil
+  ent._closeStruckMoveId = nil
+  ent._struckMoves = nil
+  restoreStepSpeed(ent)
+  ent._returnAt = nil
+  ent._withdrawAfterStrike = nil
+  return true
 end
 
 --- True while a physical closer is still walking; engine damage must wait.
@@ -363,6 +690,20 @@ function Cues.shouldHoldEngineHit(session, ctx)
   return ent and ent._pendingCloseStrike and true or false
 end
 
+--- Normalize one held `{ ctx, record }` or a list of them.
+local function heldRunList(held)
+  if type(held) ~= "table" then
+    return nil
+  end
+  if held.ctx then
+    return { held }
+  end
+  if #held > 0 then
+    return held
+  end
+  return nil
+end
+
 --- Resume engine HP / hit that waited for the close-the-gap punch.
 function Cues.flushHeldHit(session, battle)
   if not battle then
@@ -372,9 +713,9 @@ function Cues.flushHeldHit(session, battle)
   if (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) then
     return false
   end
-  local held = battle._arCloseGapDamage
+  local runs = heldRunList(battle._arCloseGapDamage)
   local stashed = battle._arCloseGapApply
-  if not held and (type(stashed) ~= "table" or #stashed == 0) then
+  if not runs and (type(stashed) ~= "table" or #stashed == 0) then
     return false
   end
   battle._arCloseGapDamage = nil
@@ -383,19 +724,40 @@ function Cues.flushHeldHit(session, battle)
   -- before HP replay so a second damage_dealt cannot double-push.
   Cues.flushCloseHit(session, session._deps and session._deps.Grid)
   battle._arCloseGapResuming = true
-  local replayedRun = held and held.ctx and true or false
+  local replayedRun = runs and true or false
+  note(session, battle, "flushHeldHit", replayedRun and "runDamaging" or "applyDamage")
   if replayedRun then
-    -- Full effect applies HP + faint. Do not also replay applyDamage.
+    -- Resume the engine (or close-gap's orig), never the live React wrap.
+    -- Calling EffectRegistry.runDamaging here re-entered AUTO counter / Again!
+    -- after FURY_ATTACK and armed a second closeStrike.
     local okE, registry = pcall(require, "src.battle.EffectRegistry")
-    local run = okE and registry and registry.runDamaging
+    local react = okE and registry and registry._arReactRunDamaging
+    local function usable(fn)
+      return type(fn) == "function" and fn ~= react
+    end
+    local run = okE and registry and (
+      (usable(registry._arEngineRunDamaging) and registry._arEngineRunDamaging)
+      or (usable(registry._arVanillaRunDamaging) and registry._arVanillaRunDamaging)
+    )
     if type(run) == "function" then
-      pcall(run, battle, held.ctx, held.record)
+      for i = 1, #runs do
+        local held = runs[i]
+        if type(held) == "table" and held.ctx then
+          local okR, errR = pcall(run, battle, held.ctx, held.record)
+          if not okR then
+            noteErr(session, battle, "flushHeldHit.runDamaging", errR)
+          end
+        end
+      end
     end
   elseif type(stashed) == "table" and type(battle.applyDamage) == "function" then
     for i = 1, #stashed do
       local args = stashed[i]
       if type(args) == "table" then
-        pcall(battle.applyDamage, battle, unpack(args))
+        local okA, errA = pcall(battle.applyDamage, battle, unpack(args))
+        if not okA then
+          noteErr(session, battle, "flushHeldHit.applyDamage", errA)
+        end
       end
     end
     -- applyDamage alone does not run the engine faint script.
@@ -637,6 +999,8 @@ Cues.register("attack", function(session, side, kind, Grid, nudgeCamera, battle,
     -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
     -- when that split marks them special.
     if not Cues.isMeleeAttack(opts, Projectiles) then
+      note(session, battle or session._battle, "cue path", side,
+        opts.moveId or "-", "cast", padSnap(ent))
       if Audio and type(Audio.playMove) == "function" then
         pcall(Audio.playMove, battle or session._battle, opts.moveId,
           side == "player")
@@ -657,25 +1021,26 @@ Cues.register("attack", function(session, side, kind, Grid, nudgeCamera, battle,
         ent:play("cast")
       end
     else
-      -- Extra multi-hit swings stay in melee: replay contact + attack, no walk.
-      if opts.followUp then
-        if Projectiles and type(Projectiles.contact) == "function" then
-          Projectiles.contact(session, side, {
-            moveType = opts.moveType,
-            moveId = opts.moveId,
-          })
-        end
-        if Audio and type(Audio.playMove) == "function" then
-          pcall(Audio.playMove, battle or session._battle, opts.moveId,
-            side == "player")
-        end
-        if type(ent.play) == "function" then
-          ent:play(ent._attackJump and "jump" or "attack")
-        end
-        ent._returnAt = now(session) + 0.42
-        ent._withdrawAfterStrike = true
+      -- Extra swings (multi-hit, Again!, REACT counter after a punch, nameless
+      -- toasts) stay in melee. One close-the-gap walk per side per turn.
+      local thisId = opts.moveId and tostring(opts.moveId):upper() or nil
+      if thisId == "" then
+        thisId = nil
+      end
+      local inPlace = opts.followUp or opts.again
+          or hasStruckThisTurn(ent) or (ent._pendingCloseStrike and true)
+      if inPlace then
+        local why = opts.followUp and "follow"
+            or opts.again and "again"
+            or hasStruckThisTurn(ent) and "struck"
+            or "pending"
+        note(session, battle or session._battle, "cue path", side, thisId or "-",
+          "inPlace", why, padSnap(ent))
+        playMeleeContact(session, side, ent, opts, ent._attackJump)
         return true
       end
+      local delayStrike = Cues.closeTheGapEnabled(session, opts)
+          and not opts.releaseStrike
       -- Physical: mon charges (optional close-the-gap, else one step / jump).
       -- Jump only when cover blocks the path — already-adjacent mons attack in place.
       local obstructed = type(Grid.pathObstructed) == "function"
@@ -685,24 +1050,32 @@ Cues.register("attack", function(session, side, kind, Grid, nudgeCamera, battle,
       local closed = false
       if Cues.closeTheGapEnabled(session, opts)
           and type(Grid.closeGap) == "function" then
-        closed = Grid.closeGap(g, ent, foe) == true
+        local okC, did = pcall(Grid.closeGap, g, ent, foe)
+        if not okC then
+          noteErr(session, battle, "cue.closeGap", did)
+        else
+          closed = did == true
+        end
       end
       local stepped = closed
-      if not stepped then
-        stepped = Grid.attackStep(g, ent, foe) == true
+      if not stepped and type(Grid.attackStep) == "function" then
+        local okS, didS = pcall(Grid.attackStep, g, ent, foe)
+        if not okS then
+          noteErr(session, battle, "cue.attackStep", didS)
+        else
+          stepped = didS == true
+        end
       end
       ent._attackStepped = stepped
       -- CLOSE THE GAP owns the physical beat: the announce cue only starts
       -- the walk. Punch + engine damage wait until the sprite is in reach.
-      local delayStrike = Cues.closeTheGapEnabled(session, opts)
-          and not opts.releaseStrike
       if delayStrike then
         local speed = Cues.closeGapSpeed(ent, battle or session._battle, side)
         ent._savedStepSpeed = ent.stepSpeed
         ent.stepSpeed = speed
         ent._pendingCloseStrike = {
           moveType = opts.moveType,
-          moveId = opts.moveId,
+          moveId = thisId,
           movePower = opts.movePower,
           jump = jump,
         }
@@ -712,6 +1085,13 @@ Cues.register("attack", function(session, side, kind, Grid, nudgeCamera, battle,
         ent._returnAt = nil
         -- After the punch, withdraw 1–2 tiles from the foe instead of home.
         ent._withdrawAfterStrike = true
+        local dist = "-"
+        if foe and type(Grid.padDistance) == "function" then
+          dist = tostring(Grid.padDistance(g, ent, foe) or "-")
+        end
+        note(session, battle or session._battle, "cue path", side, thisId or "-",
+          "walk", closed and "gap" or (stepped and "step" or "stay"),
+          "dist=" .. dist, padSnap(ent), padSnap(foe))
       else
         if Projectiles and type(Projectiles.contact) == "function" then
           Projectiles.contact(session, side, {
@@ -902,6 +1282,23 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
   end
   kind = tostring(kind or "attack")
   opts = opts or {}
+  local flags = { "via=" .. tostring(opts.via or "-") }
+  local force = cueForce(opts)
+  if force then
+    flags[#flags + 1] = force
+  end
+  if ent._pendingCloseStrike then
+    flags[#flags + 1] = "pend"
+  end
+  if hasStruckThisTurn(ent) then
+    flags[#flags + 1] = "struck"
+  end
+  local mid0 = cueMoveId(opts)
+  if mid0 and wasPresented(session, side, mid0) then
+    flags[#flags + 1] = "seen"
+  end
+  note(session, battle, "cue", side, kind, opts.moveId, opts.category,
+    table.concat(flags, " "), describeEnt(session, ent, side))
   local category = normCategory(opts.category)
   session._lastCueSide = side
   session._lastCueKind = kind
@@ -916,6 +1313,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     end
     session._lastCueMoveId = mid
     session._lastCueMoveType = opts.moveType
+    if mid and not opts.followUp then
+      markPresented(session, side, mid)
+    end
     if kind == "attack" and not opts.followUp and Cues.isMultiHitMove(mid) then
       -- First FIELD swing already presented; the engine's hit-1 anim
       -- row must not replay it. Hits 2+ reuse that skip flag.
@@ -931,76 +1331,88 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
 
   local fn = HANDLERS[kind]
   if fn then
-    return fn(session, side, kind, Grid, nudgeCamera, battle, opts)
+    local tracer = (type(debug) == "table" and debug.traceback) or tostring
+    local ok, result = xpcall(function()
+      return fn(session, side, kind, Grid, nudgeCamera, battle, opts)
+    end, tracer)
+    if not ok then
+      noteErr(session, battle, "cue." .. kind, result)
+      return false
+    end
+    note(session, battle, "cue ok", side, kind, opts.moveId)
+    return result and true or false
   end
   if type(ent.play) == "function" and not ent._pendingCloseStrike then
     ent:play("attack")
   end
+  note(session, battle, "cue ok", side, kind, opts.moveId)
   return true
 end
 
-function Cues.shouldSkipEvent(session, side, kind, opts)
+function Cues.skipReason(session, side, kind, opts)
   kind = tostring(kind or "")
   opts = opts or {}
-  -- Faint / recall stay one-shot even after the 1.25s beat window: the
-  -- "fainted!" dialogue often becomes current well after the HP bar emptied.
   if session and (kind == "faint" or kind == "recall") then
     local ent = (side == "player") and session.playerMon or session.enemyMon
     if isExitPlaying(ent) then
-      return true
+      return "exit"
     end
   end
-  if not (session and session.live and session._lastCueAt) then
-    return false
+  if not (session and session.live) then
+    return nil
+  end
+  if cueForce(opts) then
+    return nil
+  end
+  if kind == "attack" or kind == "status" then
+    local mid = cueMoveId(opts)
+    if mid and wasPresented(session, side, mid) then
+      return "presented"
+    end
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    local pending = ent and ent._pendingCloseStrike
+    local pendingId = pending and pending.moveId
+        and tostring(pending.moveId):upper() or nil
+    if pending and (not mid or pendingId == mid) then
+      return "pending"
+    end
+    if mid and wasStruck(ent, mid) then
+      return "struck"
+    end
+  end
+  if not session._lastCueAt then
+    return nil
   end
   if session._lastCueSide ~= side then
-    return false
+    return nil
   end
   local last = session._lastCueKind
-  -- Again! / Dig-Fly release / extra multi-hit strikes must be allowed
-  -- after the first swing.
-  if opts.releaseStrike or opts.again or opts.isCalled
-      or opts.followUp or opts.multiHit then
-    return false
-  end
-  -- Announce toast (~1.5s) + REACT menu outlive the short beat window.
-  -- Same side + move already presented this turn: skip move_used / pumpCurrent
-  -- duplicates (Confusion / Surf / Psychic were replaying the travel FX).
   if (kind == "attack" or kind == "status")
       and (last == "attack" or last == "status") then
-    local mid = opts.moveId and tostring(opts.moveId):upper() or nil
-    if mid == "" then
-      mid = nil
-    end
+    local mid = cueMoveId(opts)
     if mid and session._lastCueMoveId == mid then
-      return true
+      return "same-move"
     end
   end
   if (now(session) - session._lastCueAt) > 1.25 then
-    return false
+    return nil
   end
-  if kind == "attack" and last == "attack" then
-    return true
+  if kind == last and (
+      kind == "attack" or kind == "vanish" or kind == "emerge"
+      or kind == "hit" or kind == "selfhit" or kind == "status"
+      or kind == "faint") then
+    return "beat"
   end
-  if kind == "vanish" and last == "vanish" then
-    return true
+  return nil
+end
+
+function Cues.shouldSkipEvent(session, side, kind, opts)
+  local reason = Cues.skipReason(session, side, kind, opts)
+  if reason then
+    note(session, session and session._battle, "cue skip", side, kind,
+      cueMoveId(opts) or "-", reason, "via=" .. tostring((opts and opts.via) or "-"))
   end
-  if kind == "emerge" and last == "emerge" then
-    return true
-  end
-  if kind == "hit" and last == "hit" then
-    return true
-  end
-  if kind == "selfhit" and last == "selfhit" then
-    return true
-  end
-  if kind == "status" and last == "status" then
-    return true
-  end
-  if kind == "faint" and last == "faint" then
-    return true
-  end
-  return false
+  return reason ~= nil
 end
 
 function Cues.isReactKind(kind)
@@ -1038,7 +1450,12 @@ function Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
       row._arFieldCueDone = true
       row._arOverlapShown = true
     end
-    Cues.apply(session, react.side, react.kind, Grid, nudgeCamera, battle, react)
+    Cues.apply(session, react.side, react.kind, Grid, nudgeCamera, battle, {
+      category = react.category,
+      moveType = react.moveType,
+      moveId = react.moveId,
+      via = "overlap",
+    })
     local Callouts = session._deps and session._deps.Callouts
     if Callouts and type(Callouts.push) == "function" and react.text
         and react.side == "enemy" and react.bubble ~= "narrator"
@@ -1113,20 +1530,36 @@ function Cues.pumpCurrent(session, battle, Grid, nudgeCamera)
   if cur and cue and not cur._arFieldCueDone then
     cur._arFieldCueDone = true
     local kind = tostring(cue.kind or "")
+    local pumpOpts = {
+      category = cue.category,
+      moveType = cue.moveType,
+      moveId = cue.moveId,
+      vanish = cue.vanish,
+      again = cue.again,
+      isCalled = cue.isCalled,
+      releaseStrike = cue.releaseStrike,
+      followUp = cue.followUp,
+      via = "pump",
+    }
     if kind ~= "faint" and kind ~= "recall"
-        and not Cues.shouldSkipEvent(session, cue.side, kind, cue) then
-      applied = Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, {
-        category = cue.category,
-        moveType = cue.moveType,
-        moveId = cue.moveId,
-        vanish = cue.vanish,
-        again = cue.again,
-        isCalled = cue.isCalled,
-        releaseStrike = cue.releaseStrike,
-      }) and true or false
+        and not Cues.shouldSkipEvent(session, cue.side, kind, pumpOpts) then
+      applied = Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, pumpOpts)
+          and true or false
     end
   end
-  local overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
+  -- Overlap dodge/brace onto the live swing (including a close-gap walk, and
+  -- late-attached reacts after the announce). After the punch, leftover
+  -- queue reacts must not replay onto the foe's counter.
+  local overlapped = false
+  local attackEnt
+  if cue and (cue.side == "player" or cue.side == "enemy") then
+    attackEnt = (cue.side == "player") and session.playerMon or session.enemyMon
+  end
+  local punched = hasStruckThisTurn(attackEnt)
+      and not (attackEnt and attackEnt._pendingCloseStrike)
+  if not punched then
+    overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
+  end
   return applied or overlapped or called
 end
 
@@ -1230,6 +1663,7 @@ function Cues.pumpFollowUpAnims(session, battle, Grid, nudgeCamera)
     moveId = moveId,
     moveType = session._lastCueMoveType,
     followUp = true,
+    via = "followUp",
   }
   Cues.apply(session, side, "attack", Grid, nudgeCamera, battle, opts)
   local foeSide = (side == "player") and "enemy" or "player"
@@ -1373,6 +1807,12 @@ function Cues.tickReturns(session, Grid)
   if not (session and session.grid) then
     return
   end
+  local battle = session._battle
+  local whiff = battle and battle._arWhiffCloseStrike
+  if whiff then
+    battle._arWhiffCloseStrike = nil
+    Cues.cancelCloseStrike(session, whiff, Grid)
+  end
   local t = now(session)
   for _, side in ipairs({ "player", "enemy" }) do
     local ent = (side == "player") and session.playerMon or session.enemyMon
@@ -1380,17 +1820,29 @@ function Cues.tickReturns(session, Grid)
       local foe = foeOf(session, side)
       if foe and Grid.padDistance and Grid.padDistance(session.grid, ent, foe) > 1 then
         if type(Grid.closeGap) == "function" then
-          Grid.closeGap(session.grid, ent, foe)
+          local okG, errG = pcall(Grid.closeGap, session.grid, ent, foe)
+          if not okG then
+            noteErr(session, battle, "tickReturns.closeGap", errG)
+          end
         end
       end
       if ent._closeStrikeWait then
         -- Cue just armed this tick (HUD confirm / announce). Walk first.
         ent._closeStrikeWait = nil
+      elseif fieldMenuOpen(session._battle) then
+        -- REACT! / other menus: keep the walk parked.
       elseif not Cues.stillWalkingToPad(ent) and Cues.inMeleeReach(ent, foe) then
-        fireCloseStrike(session, side, ent, Grid)
+        local okF, errF = pcall(fireCloseStrike, session, side, ent, Grid)
+        if not okF then
+          noteErr(session, battle, "tickReturns.punch", errF)
+        end
       elseif ent._closeStrikeArmedAt
-          and (t - ent._closeStrikeArmedAt) > 2.8 then
-        fireCloseStrike(session, side, ent, Grid)
+          and (t - ent._closeStrikeArmedAt) > 2.8
+          and not fieldMenuOpen(session._battle) then
+        local okF, errF = pcall(fireCloseStrike, session, side, ent, Grid)
+        if not okF then
+          noteErr(session, battle, "tickReturns.timeout", errF)
+        end
       end
     end
     if ent and ent._pendingCloseStrike then
@@ -1426,6 +1878,7 @@ function Cues.tickReturns(session, Grid)
           moveType = pending.moveType,
           moveId = pending.moveId,
           releaseStrike = true,
+          via = "release",
         })
       end
     end
