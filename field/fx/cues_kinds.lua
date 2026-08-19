@@ -174,6 +174,7 @@ return function(Cues)
             H.playAnim(ent, "cover")
         else
             Grid.dodge(g, ent, foe)
+            print("H:", H)
             H.playAnim(ent, "dodge")
         end
         return true

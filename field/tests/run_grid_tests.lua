@@ -3045,16 +3045,29 @@ function tests.world_space_projectiles()
     enemyTrainer = { u = grid.home.enemy.u + 1, v = grid.home.enemy.v },
   }
   session.grid.home = home
+  overworld.player = { px = 40, py = 56 }
   session.foe = { px = 90, py = 32 }
   session._battle = { kind = "trainer", game = { overworld = overworld } }
   player.px, player.py = 16, 32
+  player.basePx, player.basePy = 16, 32
   enemy.px, enemy.py = 80, 32
+  enemy.basePx, enemy.basePy = 80, 32
   local beam = Projectiles.recallBeam(session, "player")
   truthy(beam and beam.style == "recall", "player recall fires red laser")
-  truthy(beam.pinTip, "recall tip stays on the mon")
-  eq(beam.followEnt, player, "recall laser is pinned to the recalled mon")
-  eq(Projectiles.recallBeam(session, "enemy").style, "recall",
-    "trainer foe recall fires red laser")
+  eq(beam.sx, 48, "recall origin is the live player trainer sprite")
+  eq(beam.sy, 57, "recall origin uses trainer torso, not the home pad")
+  eq(beam.ex, 24, "recall tip is the mon's map pose")
+  eq(beam.ey, 36, "recall tip uses the faint/recall tile, not home")
+  truthy(beam.pinTip and beam.pinFrozen, "recall bolt spans trainer → faint pose")
+  eq(beam.followEnt, player, "recall laser remembers the recalled mon")
+  player.px, player.py = 16, 8
+  Projectiles.tick(session, 0.16)
+  eq(beam.ex, 24, "tip does not chase the recall shrink offset")
+  eq(beam.sx, 48, "origin stays on the trainer snapshot")
+  local foeBeam = Projectiles.recallBeam(session, "enemy")
+  eq(foeBeam.style, "recall", "trainer foe recall fires red laser")
+  eq(foeBeam.sx, 98, "foe recall origin is the live trainer sprite")
+  eq(foeBeam.ex, 88, "foe recall tip is the foe mon map pose")
   player._arFieldSide = "player"
   eq(Projectiles.recallBeam(session, "enemy", { target = player }), nil,
     "enemy recall cannot target the player send-out")

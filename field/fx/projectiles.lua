@@ -3158,6 +3158,7 @@ local function spawn(session, spec)
     seed = spec.seed,
     onDone = spec.onDone,
     pinTip = spec.pinTip,
+    pinFrozen = spec.pinFrozen == true,
     followSide = spec.followSide,
     followEnt = spec.followEnt,
     followPin = spec.followPin == true,
@@ -3977,7 +3978,38 @@ function Projectiles.faint(session, side)
   })
 end
 
+--- Live trainer sprite for this side (player OW sprite / parked foe NPC).
+local function trainerEnt(session, side)
+  if not session then
+    return nil
+  end
+  if side == "player" then
+    local battle = session._battle
+    local overworld = battle and battle.game and battle.game.overworld
+    return overworld and overworld.player
+  end
+  return session.foe
+end
+
+--- Map pose of a battler (basePx), not the recall-shrink draw offset on px.
+local function mapPose(session, ent)
+  if not ent then
+    return nil, nil
+  end
+  if type(ent.basePx) == "number" and type(ent.basePy) == "number" then
+    return ent.basePx + 8, ent.basePy + 4
+  end
+  return center(session, ent)
+end
+
+--- Laser origin: chest of the recalling trainer's live sprite. Home pad is
+--- only a fallback for tests / missing OW sprites — trainers can walk aside.
 local function trainerOrigin(session, side)
+  local trainer = trainerEnt(session, side)
+  if trainer and type(trainer.px) == "number" and type(trainer.py) == "number" then
+    -- Same lift as padCenterPx - 7: mid-tile X, torso rather than feet.
+    return trainer.px + 8, trainer.py + 1
+  end
   local home = session and session.grid and session.grid.home
   local slot = home and ((side == "player") and home.playerTrainer or home.enemyTrainer)
   if slot then
@@ -3987,11 +4019,7 @@ local function trainerOrigin(session, side)
   if side == "player" then
     return center(session, session.playerMon)
   end
-  -- Trainer battles keep session.foe parked on the enemy edge.
   local foe = session and session.foe
-  if foe and type(foe.px) == "number" then
-    return foe.px + 8, foe.py
-  end
   if foe and foe.cellX ~= nil then
     return foe.cellX * 16 + 8, foe.cellY * 16
   end
@@ -4012,7 +4040,7 @@ function Projectiles.recallBeam(session, side, opts)
   if target._arFieldSide and side and target._arFieldSide ~= side then
     return nil
   end
-  local ex, ey = center(session, target)
+  local ex, ey = mapPose(session, target)
   if not (session and ex) then
     return nil
   end
@@ -4036,7 +4064,10 @@ function Projectiles.recallBeam(session, side, opts)
     duration = opts.duration or 0.48,
     arc = 0,
     color = { 1.00, 0.28, 0.18 },
+    -- Full bolt trainer → faint pose. Do not chase the shrink offset or a
+    -- replacement send-out on this side.
     pinTip = true,
+    pinFrozen = true,
     followEnt = target,
     followSide = side,
   })
@@ -4093,22 +4124,24 @@ function Projectiles.tick(session, dt)
         end
       end
     elseif p.pinTip then
-      -- Recall laser: tip locked on the mon that was recalled, not whichever
-      -- battler currently occupies that side (send-out would steal the beam).
-      local ent = p.followEnt
-      if not ent or ent._removed or ent.hidden then
-        ent = nil
-      end
-      if not ent and p.followSide then
-        ent = (p.followSide == "player") and session.playerMon or session.enemyMon
-        if ent and ent.anim == "sendout" then
+      -- Frozen tips (recall) stay on the snapshot pose. Live tips follow the
+      -- original target, never a replacement send-out on that side.
+      if not p.pinFrozen then
+        local ent = p.followEnt
+        if not ent or ent._removed or ent.hidden then
           ent = nil
         end
-      end
-      if ent then
-        local cx, cy = center(session, ent)
-        if cx then
-          p.ex, p.ey = cx, cy
+        if not ent and p.followSide then
+          ent = (p.followSide == "player") and session.playerMon or session.enemyMon
+          if ent and ent.anim == "sendout" then
+            ent = nil
+          end
+        end
+        if ent then
+          local cx, cy = center(session, ent)
+          if cx then
+            p.ex, p.ey = cx, cy
+          end
         end
       end
       p.px = p.ex
