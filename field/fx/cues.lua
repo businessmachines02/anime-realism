@@ -100,13 +100,15 @@ function H.playAnim(ent, name)
     end
 end
 
--- Punch the camera into the clash and slow the present clock. Optical
--- Zoom.offset is integer and recrops the voxel pass — we pan + time-scale
--- instead of fighting survey zoom. Glow / hair trails paint on the overlay
--- so voxel battlers still read the beat.
-function H.clashFocus(session, side, opts)
+-- Punch the camera in. Optical Zoom.offset recrops voxel, so we pan +
+-- time-scale. Clash is the full counter beat (glow, hair, heavy hit).
+function H.punchIn(session, side, spec)
+    spec = spec or {}
     local ent = H.sideEnt(session, side)
     if not (session and ent) then
+        return false
+    end
+    if spec.mode ~= "clash" and session._clashPunch then
         return false
     end
     local foe = H.foeOf(session, side)
@@ -114,20 +116,64 @@ function H.clashFocus(session, side, opts)
     local ay = (ent.basePy or ent.py or 0) + 8
     local bx = foe and ((foe.basePx or foe.px or 0) + 8) or ax
     local by = foe and ((foe.basePy or foe.py or 0) + 8) or ay
-    session.cameraNudgeX = (ax + bx) * 0.5
-    session.cameraNudgeY = (ay + by) * 0.5
-    session.cameraNudgeT = 0.62
-    session._clashPunch = true
-    session._clashSlowT = 0.78
-    session._clashSlowDur = 0.78
-    session._clashHitFx = true
-    local Projectiles = session._deps and session._deps.Projectiles
-    if Projectiles and type(Projectiles.clashBurst) == "function" then
-        Projectiles.clashBurst(session, side, opts or {})
-    elseif Projectiles and type(Projectiles.powerHit) == "function" then
-        local foeSide = (side == "player") and "enemy" or "player"
-        Projectiles.powerHit(session, foeSide, opts or {})
+    local lift = spec.lift or 6
+    local focus = spec.focus or "mid"
+    local nx, ny
+    if focus == "user" then
+        nx, ny = ax, ay - lift
+    elseif focus == "foe" and foe then
+        nx, ny = bx, by - lift
+    else
+        nx, ny = (ax + bx) * 0.5, (ay + by) * 0.5 - lift
     end
+    session.cameraNudgeX = nx
+    session.cameraNudgeY = ny
+    session.cameraNudgeT = spec.hold or 0.55
+    if spec.mode == "clash" then
+        session._clashPunch = true
+        session._clashHitFx = true
+    end
+    local slow = tonumber(spec.slow) or 0
+    if slow > 0 then
+        session._clashSlowT = slow
+        session._clashSlowDur = slow
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if spec.burst and Projectiles and type(Projectiles.clashBurst) == "function" then
+        Projectiles.clashBurst(session, side, spec.opts or spec)
+    elseif spec.mode == "clash" and Projectiles and type(Projectiles.powerHit) == "function" then
+        local foeSide = (side == "player") and "enemy" or "player"
+        Projectiles.powerHit(session, foeSide, spec.opts or spec)
+    end
+    return true
+end
+
+function H.clashFocus(session, side, opts)
+    return H.punchIn(session, side, {
+        mode = "clash",
+        focus = "mid",
+        hold = 0.88,
+        slow = 0.78,
+        lift = 6,
+        burst = true,
+        opts = opts or {},
+    })
+end
+
+--- Contact juice without a fake zoom: freeze a few frames and bump the camera.
+--- Classic battle.fx.shake recrops the voxel pass and can abort Love.
+function H.impactKick(session, spec)
+    spec = spec or {}
+    if not session then
+        return false
+    end
+    local heavy = spec.powerful == true or spec.clash == true
+    if spec.clash ~= true and (session._clashSlowT or 0) <= 0 then
+        session._hitStopT = heavy and 0.08 or 0.045
+    end
+    session._camShakeDur = heavy and 0.16 or 0.10
+    session._camShakeT = session._camShakeDur
+    session._camShakeAmp = heavy and 2.8 or 1.6
     return true
 end
 

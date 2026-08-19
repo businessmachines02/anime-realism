@@ -3398,21 +3398,6 @@ function Projectiles.drawUi(session, battle)
   end
   Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   Projectiles.draw(session, camX, camY, mapFn)
-  if love and love.graphics
-      and (session._clashPunch or (session._clashSlowT or 0) > 0) then
-    local g = love.graphics
-    local k = 1
-    local dur = session._clashSlowDur
-    if dur and dur > 0 and session._clashSlowT then
-      k = math.min(1, session._clashSlowT / dur + 0.2)
-    end
-    g.setColor(0.03, 0.04, 0.10, 0.34 * k)
-    g.rectangle("fill", 0, 0, 160, 16)
-    g.rectangle("fill", 0, 128, 160, 16)
-    g.rectangle("fill", 0, 0, 12, 144)
-    g.rectangle("fill", 148, 0, 12, 144)
-    g.setColor(1, 1, 1, 1)
-  end
 end
 
 function Projectiles.move(session, side, opts)

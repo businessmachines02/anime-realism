@@ -24,7 +24,7 @@
 --
 --   EXIT RESTORE       put zoom / voxel / camera / entities back
 --   FOLLOWERS          hide the walking buddy so it is not in the fight
---   WORLD OVERLAY      floor + cover paint (projectiles live in UI)
+--   WORLD OVERLAY      floor + cover + clash letterbox (projectiles live in UI)
 --   SESSION            get / active / liveBattle — find the live fight
 --   CAMERA             pan, mouse peek, keep action on screen
 --   BEGIN              survey the pad, spawn the cast, go Live
@@ -47,7 +47,7 @@ Lifecycle.CAMERA_UI_BIAS_Y = 18
 -- Soft pan toward the live fight (higher = snappier). Nudges / off-screen catch-up use a faster rate.
 Lifecycle.CAMERA_PAN_RATE = 4.2
 Lifecycle.CAMERA_PAN_NUDGE_RATE = 10
-Lifecycle.CAMERA_PAN_CLASH_RATE = 24
+Lifecycle.CAMERA_PAN_CLASH_RATE = 9.5
 Lifecycle.CAMERA_PAN_CATCHUP_RATE = 7.2
 Lifecycle.CAMERA_PAN_SNAP = 1.25
 -- Follow battlers this far past the surveyed envelope (wander / knockback slack).
@@ -449,6 +449,95 @@ function Lifecycle.drawWorldOverlay(battle)
     if deps and deps.Spectators and type(deps.Spectators.draw) == "function" then
         pcall(deps.Spectators.draw, session, cameraX, cameraY, renderer)
     end
+    Lifecycle.drawClashLetterbox(session, battle)
+end
+
+--- Soft edge vignette for COUNTER clash. Spans the world canvas (survey zoom
+--- can be wider than the 160×144 UI overlay) instead of a hard cinema crop.
+function Lifecycle.clashLetterboxSize(viewW, viewH)
+    viewW = math.max(1, tonumber(viewW) or 160)
+    viewH = math.max(1, tonumber(viewH) or 144)
+    local edge = math.max(32, math.floor(viewH * (40 / 144) + 0.5))
+    return viewW, viewH, edge, 0.48
+end
+
+function Lifecycle.drawClashLetterbox(session, battle)
+    if not (session and (session._clashPunch or (session._clashSlowT or 0) > 0)) then
+        return
+    end
+    local g = love and love.graphics
+    if not g then
+        return
+    end
+    local k = 1
+    local dur = session._clashSlowDur
+    if dur and dur > 0 and session._clashSlowT then
+        k = math.min(1, session._clashSlowT / dur + 0.15)
+    end
+    local viewW, viewH
+    local canvas = g.getCanvas and g.getCanvas()
+    if canvas and canvas.getDimensions then
+        local ok, gotW, gotH = pcall(canvas.getDimensions, canvas)
+        if ok and type(gotW) == "number" and gotW > 0 then
+            viewW, viewH = gotW, gotH or viewH
+        end
+    end
+    if not viewW then
+        if type(g.getDimensions) == "function" then
+            local ok, gotW, gotH = pcall(g.getDimensions)
+            if ok and type(gotW) == "number" and gotW > 0 then
+                viewW, viewH = gotW, gotH
+            end
+        end
+    end
+    if not viewW then
+        viewW, viewH = 160, 144
+        if session._viewW then
+            viewW, viewH = session._viewW, session._viewH or viewH
+        else
+            local renderer = battle and battle.game and battle.game.renderer
+            if renderer and type(renderer.worldViewSize) == "function" then
+                local ok, gotW, gotH = pcall(renderer.worldViewSize, renderer)
+                if ok and type(gotW) == "number" then
+                    viewW, viewH = gotW, gotH or viewH
+                end
+            end
+        end
+    end
+    local w, h, _, alpha = Lifecycle.clashLetterboxSize(viewW, viewH)
+    local bandH = math.max(5, math.floor(h * 5 / 144 + 0.5))
+    local bandW = math.max(4, math.floor(w * 4 / 160 + 0.5))
+    g.push("all")
+    -- World draw may still be in camera space; the fade must span the canvas.
+    if type(g.origin) == "function" then
+        g.origin()
+    end
+    for i = 1, 8 do
+        local a = (alpha - (i - 1) * (alpha / 9.5)) * k
+        local y0, x0 = (i - 1) * bandH, (i - 1) * bandW
+        g.setColor(0.02, 0.03, 0.08, a)
+        g.rectangle("fill", 0, y0, w, bandH)
+        g.rectangle("fill", 0, h - y0 - bandH, w, bandH)
+        g.rectangle("fill", x0, 0, bandW, h)
+        g.rectangle("fill", w - x0 - bandW, 0, bandW, h)
+    end
+    for i = 0, 11 do
+        local y = (3 + i * 2.4) * (h / 144)
+        local a = (0.20 - i * 0.012) * k
+        local streakH = math.max(1.6, 1.6 * h / 144)
+        g.setColor(0.04, 0.05, 0.10, a)
+        g.rectangle("fill", 0, y, w, streakH)
+        g.rectangle("fill", 0, h - y - streakH, w, streakH)
+    end
+    for i = 0, 8 do
+        local x = (2 + i * 2.2) * (w / 160)
+        local a = (0.16 - i * 0.012) * k
+        local streakW = math.max(1.5, 1.5 * w / 160)
+        g.setColor(0.04, 0.05, 0.10, a)
+        g.rectangle("fill", x, 0, streakW, h)
+        g.rectangle("fill", w - x - streakW, 0, streakW, h)
+    end
+    g.pop()
 end
 
 -- ---------------------------------------------------------------------------
@@ -851,9 +940,17 @@ function Lifecycle.focusCamera(battle, dt)
     local nudgeT = session.cameraNudgeT or 0
     if not looking and nudgeT > 0 and session.cameraNudgeX and session.cameraNudgeY then
         local punch = session._clashPunch == true
-        local blend = math.min(1, nudgeT / 0.35) * (punch and 0.88 or 0.55)
+        -- Full lock on the clash while the hold is up; ease out in the last 0.4s.
+        local hold = punch and 0.45 or 0.35
+        local blend = math.min(1, nudgeT / hold) * (punch and 1 or 0.55)
         focusX = focusX * (1 - blend) + session.cameraNudgeX * blend
         focusY = focusY * (1 - blend) + session.cameraNudgeY * blend
+        if punch then
+            -- Drop the menu bias so the pair fills the frame.
+            session._clashUiBias = 4
+        end
+    else
+        session._clashUiBias = nil
     end
 
     local viewW, viewH = cameraViewSize(session, game)
@@ -861,7 +958,8 @@ function Lifecycle.focusCamera(battle, dt)
     -- Battle menus occupy the lower screen. Aim the camera below the action so
     -- the compact pad appears in the unobstructed upper viewport.
     local targetX = focusX
-    local targetY = focusY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
+    local targetY = focusY + (session._clashUiBias
+        or session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
     if looking then
         local spanX, spanY = Lifecycle.mouseLookSpan(viewW, viewH)
         targetX = targetX + (session.mouseLookX or 0) * spanX
@@ -914,6 +1012,27 @@ function Lifecycle.focusCamera(battle, dt)
 
     applyCameraFocus(camera, currentX, currentY, viewW, viewH)
     session.cameraFocusX, session.cameraFocusY = currentX, currentY
+    -- Pixel bump on the live camera, not Zoom.offset (that recrops voxel).
+    if (session._camShakeT or 0) > 0 then
+        local dur = session._camShakeDur or 0.10
+        session._camShakeT = session._camShakeT - useDt
+        local u = 0
+        if dur > 0 then
+            u = math.max(0, session._camShakeT / dur)
+        end
+        if session._camShakeT <= 0 then
+            session._camShakeT = nil
+            session._camShakeDur = nil
+            session._camShakeAmp = nil
+        else
+            local amp = (session._camShakeAmp or 1.6) * u
+            local r = (love and love.math and love.math.random) or math.random
+            local ox = math.floor((r() * 2 - 1) * amp + 0.5)
+            local oy = math.floor((r() * 2 - 1) * amp * 0.6 + 0.5)
+            camera.x = (camera.x or 0) + ox
+            camera.y = (camera.y or 0) + oy
+        end
+    end
 end
 
 function Lifecycle.nudgeCamera(battle, side, seconds)
@@ -2037,6 +2156,15 @@ function Lifecycle.tick(battle, dt, deps)
     deps = deps or session._deps
     dt = dt or (1 / 60)
     local wallDt = dt
+    -- A few frozen frames on contact (not a cinematic). Clash slow-mo owns
+    -- the clock when a counter is already hanging.
+    if (session._hitStopT or 0) > 0 and (session._clashSlowT or 0) <= 0 then
+        session._hitStopT = session._hitStopT - wallDt
+        if session._hitStopT <= 0 then
+            session._hitStopT = nil
+        end
+        dt = 0
+    end
     -- Counter clash: deep slow-mo, then ease back. Camera punch uses wall
     -- time so the zoom snaps in while the mons hang in the hit.
     if (session._clashSlowT or 0) > 0 then
@@ -2147,7 +2275,7 @@ function Lifecycle.tick(battle, dt, deps)
 
     -- Soft-pan every present tick so intro / nudge easing stays continuous.
     -- Clash punch-in uses wall time so the camera dives while action hangs.
-    Lifecycle.focusCamera(battle, session._clashPunch and wallDt or dt)
+    Lifecycle.focusCamera(battle, (session._clashPunch or (session._camShakeT or 0) > 0) and wallDt or dt)
 
     session._faceAcc = (session._faceAcc or 0) + dt
     if session._faceAcc >= 0.15 then

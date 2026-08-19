@@ -342,6 +342,7 @@ return function(Cues)
         local Projectiles = session._deps and session._deps.Projectiles
         local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
             and Projectiles.isPowerfulMove(opts)
+        H.impactKick(session, { powerful = powerful, clash = clash })
         if clash or powerful then
             local obstacle = Grid.obstacleBehind(g, ent, foe, clash and 1 or 2)
             if not session._clashHitFx and Projectiles and Projectiles.powerHit then
@@ -393,6 +394,7 @@ return function(Cues)
         if Projectiles and type(Projectiles.selfHit) == "function" then
             Projectiles.selfHit(session, side)
         end
+        H.impactKick(session, { powerful = false })
         H.playAnim(ent, "selfhit")
         return true
     end)

@@ -1454,6 +1454,8 @@ function tests.powerful_moves_push_and_impact()
   end
   truthy(weakStyles.light_hit, "weak physical hit paints a spark on the target")
   truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
+  truthy((session._hitStopT or 0) > 0, "contact freezes a few frames")
+  truthy((session._camShakeT or 0) > 0, "contact bumps the camera")
 end
 
 function tests.counter_clash_punches_in()
@@ -1501,6 +1503,14 @@ function tests.counter_clash_punches_in()
   }), "clash hit cue")
   eq(enemy.lastAnim, "hit", "foe takes the clash")
   truthy(enemy._heavyHit, "clash knock is heavy")
+end
+
+function tests.clash_letterbox_spans_world_view()
+  local w, h, edge, alpha = Lifecycle.clashLetterboxSize(320, 288)
+  eq(w, 320, "vignette is as wide as the world canvas")
+  eq(h, 288, "vignette uses the world canvas height")
+  truthy(edge >= 32, "edge fade has real depth")
+  truthy(alpha > 0.4 and alpha < 0.6, "fade is a soft veil, not a cinema crop")
 end
 
 function tests.physical_jumps_cover()
