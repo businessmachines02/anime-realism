@@ -1485,7 +1485,7 @@ function tests.counter_clash_punches_in()
   }), "counter cue")
   eq(player.lastAnim, "counter", "attacker plays the rebound pose")
   truthy(session._clashPunch, "camera punch-in is armed")
-  truthy((session._clashSlowT or 0) > 0, "present clock slows for the clash")
+  truthy((session._clashSlowT or 0) >= 0.7, "present clock holds a real slow-mo beat")
   truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
     "nudge sits on the clash midpoint")
   local styles = {}
@@ -1493,6 +1493,8 @@ function tests.counter_clash_punches_in()
     styles[session.projectiles[i].style] = true
   end
   truthy(styles.power_hit, "clash paints the power_hit ring")
+  truthy(styles.clash_glow, "clash rims the mons with glow")
+  truthy(styles.clash_trail, "clash paints hair trails")
 
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
     category = "physical", clash = true, push = true,

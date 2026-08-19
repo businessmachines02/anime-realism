@@ -563,6 +563,88 @@ local function drawPowerBurst(g, x, y, t, age, c, opts)
   g.circle("fill", x, y, impact and 4 or 3)
 end
 
+local function withAdd(g, fn)
+  local restored = false
+  if g and g.setBlendMode then
+    restored = pcall(g.setBlendMode, "add")
+  end
+  fn()
+  if restored then
+    pcall(g.setBlendMode, "alpha")
+  end
+end
+
+--- Rim light + bloom around a battler (overlay; voxel sprites skip ent:draw).
+local function drawClashGlow(g, p, x, y, t, c)
+  local fade = 1 - t * 0.45
+  if t > 0.72 then
+    fade = fade * (1 - (t - 0.72) / 0.28)
+  end
+  local pulse = 0.62 + 0.38 * math.abs(math.sin((p.age or 0) * 16))
+  local cr, cg, cb = c[1] or 1, c[2] or 0.92, c[3] or 0.55
+  withAdd(g, function()
+    g.setColor(cr, cg, cb, 0.22 * fade * pulse)
+    if g.ellipse then
+      g.ellipse("fill", x, y + 2, 13 + pulse * 2, 7.5)
+    else
+      g.circle("fill", x, y + 2, 11)
+    end
+    g.setColor(1.00, 0.96, 0.72, 0.32 * fade * pulse)
+    g.circle("fill", x, y - 2, 6.5 + pulse)
+    g.setColor(1, 1, 1, 0.42 * fade * pulse)
+    g.circle("fill", x, y - 3, 3.2)
+    for i = 1, 6 do
+      local a = (p.age or 0) * 9 + i * 1.05
+      local rx = 8 + (i % 3)
+      g.setColor(cr, cg, cb, 0.28 * fade)
+      g.setLineWidth(1.4)
+      g.line(x, y - 1,
+        x + math.cos(a) * rx,
+        y + math.sin(a) * rx * 0.55 - 2)
+    end
+  end)
+end
+
+--- Speed-line hair behind a lunge. dirX/dirY is the strike heading.
+local function drawClashTrail(g, p, x, y, t, c)
+  local fade = 1 - t * 0.4
+  if t > 0.7 then
+    fade = fade * (1 - (t - 0.7) / 0.3)
+  end
+  local dx, dy = p.dirX or 1, p.dirY or 0
+  local bx, by = -dx, -dy
+  local nx, ny = -dy, dx
+  local pulse = 0.7 + 0.3 * math.abs(math.sin((p.age or 0) * 22))
+  local cr, cg, cb = c[1] or 1, c[2] or 0.9, c[3] or 0.55
+  withAdd(g, function()
+    for i = 1, 8 do
+      local off = (i - 4.5) * 1.7
+      local len = (10 + i * 2.6) * (1.12 - t * 0.35)
+      local sx = x + nx * off - 0.4
+      local sy = y + ny * off * 0.5 - 1.5
+      local ex = sx + bx * len
+      local ey = sy + by * len * 0.7
+      g.setColor(cr, cg, cb, 0.20 * fade * pulse)
+      g.setLineWidth(2.6)
+      g.line(sx, sy, ex, ey)
+      g.setColor(1.00, 0.97, 0.86, 0.55 * fade * pulse)
+      g.setLineWidth(1)
+      g.line(sx, sy, ex, ey)
+    end
+    for i = 1, 4 do
+      local u = i / 5
+      local px = x + bx * (5 + u * 11)
+      local py = y + by * (4 + u * 8) - 1
+      g.setColor(1, 1, 1, (0.28 - u * 0.18) * fade)
+      if g.ellipse then
+        g.ellipse("fill", px, py, 4.2 - u, 1.35)
+      else
+        g.circle("fill", px, py, 2.2 - u * 0.5)
+      end
+    end
+  end)
+end
+
 local function drawBall(g, x, y)
   g.setColor(0.08, 0.06, 0.07, 1)
   g.circle("fill", x, y, 4)
@@ -2735,6 +2817,12 @@ end)
 Projectiles.registerStyle("power_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = false })
 end)
+Projectiles.registerStyle("clash_glow", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawClashGlow(g, p, x, y, t, c)
+end)
+Projectiles.registerStyle("clash_trail", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawClashTrail(g, p, x, y, t, c)
+end)
 Projectiles.registerStyle("power_impact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
 end)
@@ -3072,6 +3160,7 @@ local function spawn(session, spec)
     pinTip = spec.pinTip,
     followSide = spec.followSide,
     followEnt = spec.followEnt,
+    followPin = spec.followPin == true,
   }
   local dx, dy = p.ex - p.sx, p.ey - p.sy
   local len = math.sqrt(dx * dx + dy * dy)
@@ -3309,6 +3398,21 @@ function Projectiles.drawUi(session, battle)
   end
   Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   Projectiles.draw(session, camX, camY, mapFn)
+  if love and love.graphics
+      and (session._clashPunch or (session._clashSlowT or 0) > 0) then
+    local g = love.graphics
+    local k = 1
+    local dur = session._clashSlowDur
+    if dur and dur > 0 and session._clashSlowT then
+      k = math.min(1, session._clashSlowT / dur + 0.2)
+    end
+    g.setColor(0.03, 0.04, 0.10, 0.34 * k)
+    g.rectangle("fill", 0, 0, 160, 16)
+    g.rectangle("fill", 0, 128, 160, 16)
+    g.rectangle("fill", 0, 0, 12, 144)
+    g.rectangle("fill", 148, 0, 12, 144)
+    g.setColor(1, 1, 1, 1)
+  end
 end
 
 function Projectiles.move(session, side, opts)
@@ -3761,6 +3865,82 @@ function Projectiles.emerge(session, side, flavor)
   })
 end
 
+function Projectiles.clashBurst(session, side, opts)
+  opts = opts or {}
+  local atk = (side == "player") and session.playerMon or session.enemyMon
+  local def = (side == "player") and session.enemyMon or session.playerMon
+  local ax, ay = center(session, atk)
+  local bx, by = center(session, def)
+  if not ax then
+    return nil
+  end
+  local dx, dy = (bx or ax) - ax, (by or ay) - ay
+  local len = math.sqrt(dx * dx + dy * dy)
+  if len > 0.1 then
+    dx, dy = dx / len, dy / len
+  else
+    dx, dy = 1, 0
+  end
+  local moveType = tostring(opts.moveType or "NORMAL"):upper()
+  local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
+  local foeSide = (side == "player") and "enemy" or "player"
+  spawn(session, {
+    kind = "effect",
+    style = "clash_glow",
+    sx = ax, sy = ay, ex = ax, ey = ay,
+    duration = 0.72,
+    arc = 0,
+    color = color,
+    followPin = true,
+    followEnt = atk,
+    followSide = side,
+  })
+  if bx then
+    spawn(session, {
+      kind = "effect",
+      style = "clash_glow",
+      sx = bx, sy = by, ex = bx, ey = by,
+      duration = 0.62,
+      arc = 0,
+      color = color,
+      followPin = true,
+      followEnt = def,
+      followSide = foeSide,
+    })
+  end
+  local trail = spawn(session, {
+    kind = "effect",
+    style = "clash_trail",
+    sx = ax, sy = ay, ex = ax, ey = ay,
+    duration = 0.58,
+    arc = 0,
+    color = color,
+    followPin = true,
+    followEnt = atk,
+    followSide = side,
+  })
+  if trail then
+    trail.dirX, trail.dirY = dx, dy
+  end
+  if bx then
+    local kick = spawn(session, {
+      kind = "effect",
+      style = "clash_trail",
+      sx = bx, sy = by, ex = bx, ey = by,
+      duration = 0.42,
+      arc = 0,
+      color = color,
+      followPin = true,
+      followEnt = def,
+      followSide = foeSide,
+    })
+    if kick then
+      kick.dirX, kick.dirY = -dx, -dy
+    end
+  end
+  return Projectiles.powerHit(session, foeSide, opts)
+end
+
 function Projectiles.powerHit(session, side, opts)
   opts = opts or {}
   local target = (side == "player") and session.playerMon or session.enemyMon
@@ -3913,7 +4093,21 @@ function Projectiles.tick(session, dt)
     local p = list[i]
     p.age = (p.age or 0) + (dt or 0)
     local t = math.min(1, math.max(0, p.age) / math.max(0.01, p.duration))
-    if p.pinTip then
+    if p.followPin then
+      local ent = p.followEnt
+      if not ent or ent._removed or ent.hidden then
+        ent = nil
+      end
+      if not ent and p.followSide then
+        ent = (p.followSide == "player") and session.playerMon or session.enemyMon
+      end
+      if ent then
+        local cx, cy = center(session, ent)
+        if cx then
+          p.sx, p.sy, p.ex, p.ey, p.px, p.py = cx, cy, cx, cy, cx, cy
+        end
+      end
+    elseif p.pinTip then
       -- Recall laser: tip locked on the mon that was recalled, not whichever
       -- battler currently occupies that side (send-out would steal the beam).
       local ent = p.followEnt

@@ -1323,9 +1323,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "counter" then
-      -- Rebound into the foe: overlap a frame, then ease off. Trail reads as speed.
+      -- Rebound into the foe: overlap, hang in the clash, then ease off.
       self.animT = (self.animT or 0) + dt
-      local dur = 0.32
+      local dur = 0.52
       local t = math.min(1, self.animT / dur)
       local tx = (towardX or self.basePx) - self.basePx
       local ty = (towardY or self.basePy) - self.basePy
@@ -1337,21 +1337,21 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         tx, ty = 0, -1
       end
       local lunge
-      if t < 0.22 then
-        lunge = (t / 0.22)
-      elseif t < 0.42 then
+      if t < 0.18 then
+        lunge = t / 0.18
+      elseif t < 0.58 then
         lunge = 1
       else
-        lunge = 1 - (t - 0.42) / 0.58 * 0.35
+        lunge = 1 - (t - 0.58) / 0.42 * 0.38
       end
-      ox = ox + tx * lunge * 20
-      oy = oy + ty * lunge * 20 - math.sin(math.min(1, t / 0.42) * math.pi) * 6
-      self.drawScale = 1 + lunge * 0.12
+      ox = ox + tx * lunge * 22
+      oy = oy + ty * lunge * 22 - math.sin(math.min(1, t / 0.36) * math.pi) * 7
+      self.drawScale = 1 + lunge * 0.16
       self._walkFrame = 1
       if self.px and self.py then
         local trail = self._dodgeTrail or {}
         trail[#trail + 1] = { px = self.px, py = self.py }
-        while #trail > 5 do
+        while #trail > 7 do
           table.remove(trail, 1)
         end
         self._dodgeTrail = trail

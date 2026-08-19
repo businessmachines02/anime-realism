@@ -102,7 +102,8 @@ end
 
 -- Punch the camera into the clash and slow the present clock. Optical
 -- Zoom.offset is integer and recrops the voxel pass — we pan + time-scale
--- instead of fighting survey zoom.
+-- instead of fighting survey zoom. Glow / hair trails paint on the overlay
+-- so voxel battlers still read the beat.
 function H.clashFocus(session, side, opts)
     local ent = H.sideEnt(session, side)
     if not (session and ent) then
@@ -115,13 +116,16 @@ function H.clashFocus(session, side, opts)
     local by = foe and ((foe.basePy or foe.py or 0) + 8) or ay
     session.cameraNudgeX = (ax + bx) * 0.5
     session.cameraNudgeY = (ay + by) * 0.5
-    session.cameraNudgeT = 0.34
+    session.cameraNudgeT = 0.62
     session._clashPunch = true
-    session._clashSlowT = 0.20
+    session._clashSlowT = 0.78
+    session._clashSlowDur = 0.78
     session._clashHitFx = true
     local Projectiles = session._deps and session._deps.Projectiles
-    local foeSide = (side == "player") and "enemy" or "player"
-    if Projectiles and type(Projectiles.powerHit) == "function" then
+    if Projectiles and type(Projectiles.clashBurst) == "function" then
+        Projectiles.clashBurst(session, side, opts or {})
+    elseif Projectiles and type(Projectiles.powerHit) == "function" then
+        local foeSide = (side == "player") and "enemy" or "player"
         Projectiles.powerHit(session, foeSide, opts or {})
     end
     return true

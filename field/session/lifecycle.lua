@@ -47,7 +47,7 @@ Lifecycle.CAMERA_UI_BIAS_Y = 18
 -- Soft pan toward the live fight (higher = snappier). Nudges / off-screen catch-up use a faster rate.
 Lifecycle.CAMERA_PAN_RATE = 4.2
 Lifecycle.CAMERA_PAN_NUDGE_RATE = 10
-Lifecycle.CAMERA_PAN_CLASH_RATE = 18
+Lifecycle.CAMERA_PAN_CLASH_RATE = 24
 Lifecycle.CAMERA_PAN_CATCHUP_RATE = 7.2
 Lifecycle.CAMERA_PAN_SNAP = 1.25
 -- Follow battlers this far past the surveyed envelope (wander / knockback slack).
@@ -2037,14 +2037,22 @@ function Lifecycle.tick(battle, dt, deps)
     deps = deps or session._deps
     dt = dt or (1 / 60)
     local wallDt = dt
-    -- Counter clash: slow the present clock (~0.4× for 0.2s). Wall time
-    -- still drains the hold so close-gap deadlines do not freeze.
+    -- Counter clash: deep slow-mo, then ease back. Camera punch uses wall
+    -- time so the zoom snaps in while the mons hang in the hit.
     if (session._clashSlowT or 0) > 0 then
+        local dur = session._clashSlowDur or 0.78
         session._clashSlowT = session._clashSlowT - wallDt
         if session._clashSlowT <= 0 then
             session._clashSlowT = nil
+            session._clashSlowDur = nil
         else
-            dt = wallDt * 0.42
+            local u = session._clashSlowT / dur
+            if u > 0.38 then
+                dt = wallDt * 0.24
+            else
+                local k = 1 - (u / 0.38)
+                dt = wallDt * (0.24 + 0.76 * k * k)
+            end
         end
     end
 
@@ -2092,7 +2100,8 @@ function Lifecycle.tick(battle, dt, deps)
     end
 
     if session.cameraNudgeT and session.cameraNudgeT > 0 then
-        session.cameraNudgeT = math.max(0, session.cameraNudgeT - dt)
+        local nudgeDt = session._clashPunch and wallDt or dt
+        session.cameraNudgeT = math.max(0, session.cameraNudgeT - nudgeDt)
         if session.cameraNudgeT <= 0 then
             session._clashPunch = nil
         end
@@ -2137,7 +2146,8 @@ function Lifecycle.tick(battle, dt, deps)
         or (enemyMon and enemyMon.anim and enemyMon.anim ~= "idle")
 
     -- Soft-pan every present tick so intro / nudge easing stays continuous.
-    Lifecycle.focusCamera(battle, dt)
+    -- Clash punch-in uses wall time so the camera dives while action hangs.
+    Lifecycle.focusCamera(battle, session._clashPunch and wallDt or dt)
 
     session._faceAcc = (session._faceAcc or 0) + dt
     if session._faceAcc >= 0.15 then
