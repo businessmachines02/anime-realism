@@ -26,7 +26,7 @@ Catalog.TYPE_COLORS = {
 
 -- Named move overrides (style on effect/move; glitz tunes the paint).
 Catalog.MOVE_FX = {
-  HYPER_BEAM = { style = "beam", glitz = "thick", duration = 0.46 },
+  HYPER_BEAM = { style = "beam", glitz = "hyper", duration = 0.72 },
   SOLARBEAM = { style = "beam", glitz = "thick", duration = 0.44, color = { 0.72, 1.00, 0.42 } },
   ICE_BEAM = {
     style = "beam",
@@ -35,12 +35,17 @@ Catalog.MOVE_FX = {
     color = { 0.48, 0.86, 1.00 },
   },
   AURORA_BEAM = { style = "beam", glitz = "frost" },
-  PSYBEAM = { style = "beam", glitz = "psy" },
+  PSYBEAM = {
+    style = "beam",
+    glitz = "psy",
+    duration = 0.52,
+    color = { 0.96, 0.42, 0.88 },
+  },
   THUNDERBOLT = { style = "beam", glitz = "bolt", duration = 0.36 },
   THUNDERSHOCK = { style = "beam", glitz = "bolt", duration = 0.30 },
   THUNDER = { style = "bolt", duration = 0.42 },
   FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.52 },
-  FIRE_BLAST = { style = "blast", glitz = "flame", radius = 24, duration = 0.56 },
+  FIRE_BLAST = { style = "blast", glitz = "flame", radius = 26, duration = 0.64 },
   EMBER = { style = "ember", glitz = "flame", duration = 0.54, arc = 13 },
   FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
   HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
@@ -81,7 +86,7 @@ Catalog.MOVE_FX = {
   RAZOR_LEAF = {
     style = "razor",
     glitz = "blade",
-    duration = 0.58,
+    duration = 0.68,
     color = { 0.42, 0.88, 0.22 },
   },
   PETAL_DANCE = { style = "multi", glitz = "leaf", duration = 0.44 },
@@ -120,6 +125,12 @@ Catalog.MOVE_FX = {
     glitz = "star",
     duration = 0.52,
     color = { 1.00, 0.92, 0.42 },
+  },
+  DOUBLE_TEAM = {
+    style = "clones",
+    glitz = "afterimage",
+    duration = 0.82,
+    color = { 0.70, 0.78, 0.94 },
   },
   TRI_ATTACK = { style = "multi", glitz = "tri", duration = 0.40 },
   NIGHT_SHADE = {
@@ -210,11 +221,31 @@ Catalog.MOVE_FX = {
   CLAMP = { style = "contact", glitz = "pinch" },
   CRABHAMMER = { style = "contact", glitz = "impact" },
   WATERFALL = { style = "stream", glitz = "bubble" },
-  SEISMIC_TOSS = { style = "contact", glitz = "impact" },
-  FIRE_PUNCH = { style = "contact", glitz = "punch" },
-  ICE_PUNCH = { style = "contact", glitz = "punch" },
-  THUNDERPUNCH = { style = "contact", glitz = "punch" },
-  THUNDER_PUNCH = { style = "contact", glitz = "punch" },
+  SEISMIC_TOSS = { style = "contact", glitz = "toss", duration = 0.72 },
+  FIRE_PUNCH = {
+    style = "contact",
+    glitz = "firepunch",
+    duration = 0.42,
+    color = { 1.00, 0.34, 0.12 },
+  },
+  ICE_PUNCH = {
+    style = "contact",
+    glitz = "icepunch",
+    duration = 0.42,
+    color = { 0.52, 0.90, 1.00 },
+  },
+  THUNDERPUNCH = {
+    style = "contact",
+    glitz = "thunderpunch",
+    duration = 0.42,
+    color = { 1.00, 0.88, 0.18 },
+  },
+  THUNDER_PUNCH = {
+    style = "contact",
+    glitz = "thunderpunch",
+    duration = 0.42,
+    color = { 1.00, 0.88, 0.18 },
+  },
   DIZZY_PUNCH = { style = "contact", glitz = "punch" },
   HYPER_FANG = { style = "contact", glitz = "bite" },
   THRASH = { style = "contact", glitz = "impact" },
