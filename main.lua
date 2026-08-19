@@ -11,7 +11,7 @@
 --
 -- Flip to false for release builds. When true, lib/log.lua prints battle
 -- traces to the Love / stdout console (independent of DEV OVERLAY).
-local DEV = true
+local DEV = false
 
 return function(mod)
     local Hud
@@ -906,6 +906,7 @@ return function(mod)
                     st.dodgeWhiffDone = nil
                     st.keepDodgeMissAnim = nil
                     st.dodgeMissName = nil
+                    st.dodgeMissSide = nil
                 end
                 dev.log(battle, "TURN start",
                     string.format("keepCounter=%s youTmp=%s foeTmp=%s",
@@ -1100,9 +1101,11 @@ return function(mod)
                 if target.isPlayer and isDodgeHide(state.temp) then
                     state.keepDodgeMissAnim = true
                     state.dodgeMissName = coverName(target)
+                    state.dodgeMissSide = "player"
                 elseif (not target.isPlayer) and isDodgeHide(state.enemyTemp) then
                     state.keepDodgeMissAnim = true
                     state.dodgeMissName = coverName(target)
+                    state.dodgeMissSide = "enemy"
                 end
                 if countering then
                     -- Your counter whiffed — may snap-back (rolled in resolve).
@@ -1589,16 +1592,20 @@ return function(mod)
                 or state.dodgeWhiffDone then
                 state.keepDodgeMissAnim = false
                 state.dodgeMissName = nil
+                state.dodgeMissSide = nil
                 return text, false
             end
             local name = state.dodgeMissName or "POKéMON"
+            local side = state.dodgeMissSide == "enemy" and "enemy" or "player"
             state.keepDodgeMissAnim = false
             state.dodgeMissName = nil
+            state.dodgeMissSide = nil
             state.dodgeWhiffDone = true
             local line = pickFormatted(S.DODGE_WHIFF_CALLS, name)
                 or ("But " .. name .. "\ndodged aside!")
             -- Signal wrapBattleSay to park COUNTER! after this miss line + anim.
-            return line, true
+            -- Side is who dodged (the miss target), not who attacked.
+            return line, true, side
         end
 
         -- Drop orphaned dodge-miss lines that somehow landed after COUNTER!.
@@ -1607,6 +1614,7 @@ return function(mod)
             if state then
                 state.keepDodgeMissAnim = false
                 state.dodgeMissName = nil
+                state.dodgeMissSide = nil
                 state.dodgeWhiffDone = true
             end
             local q = battle and battle.queue
@@ -1640,10 +1648,11 @@ return function(mod)
             return kind == "trainer" or kind == "link"
         end
 
-        -- Auto foe dodge/brace once per turn when you attack (trainer battles).
-        -- Returns reactionText, buffList, trackTempBuffs, failNarrator.
-        -- On a failed dodge: reactionText is still the trainer order (bubble), and
-        -- failNarrator is the bottom-box "...but it was too slow!" (no bubble).
+        -- Auto foe REACT once per turn when you attack (trainer battles).
+        -- Same Focus costs as the player; pick is weighted (commit / dodge / brace)
+        -- instead of special→dodge / physical→brace. Returns reactionText,
+        -- buffList, trackTempBuffs, failNarrator. Failed dodge still spends
+        -- Focus: trainer order bubble + "...but it was too slow!".
         local function tryFoeCoverReaction(battle, moveDef)
             if not trainerFoeReactionsOn(battle) or not moveDef then
                 return nil
@@ -1660,19 +1669,51 @@ return function(mod)
                 return nil
             end
             state.enemyReactedThisTurn = true
+            local special = foeMoveIsSpecial(moveDef)
+            local action = "commit"
+            if ReactiveDefense and type(ReactiveDefense.pickFoeReact) == "function" then
+                action = ReactiveDefense.pickFoeReact(battle, moveDef, special) or "commit"
+            end
+            local foeSide = ReactiveDefense and ReactiveDefense.sideState(battle, false)
+            local focusNow = foeSide and tonumber(foeSide.focus) or 0
+            if action ~= "dodge" and action ~= "brace" then
+                dev.log(battle, "FOE react",
+                    string.format("commit focus=%d", focusNow))
+                return nil
+            end
+            if ReactiveDefense then
+                local ok = ReactiveDefense.spend(battle, false, action)
+                if not ok then
+                    dev.log(battle, "FOE react",
+                        string.format("broke %s focus=%d", action, focusNow))
+                    return nil
+                end
+                if foeSide then
+                    foeSide.reactedThisTurn = true
+                end
+                focusNow = tonumber(foeSide and foeSide.focus) or focusNow
+            end
             local foe = enemyMonName(battle)
-            if foeMoveIsSpecial(moveDef) then
+            if action == "dodge" then
                 local line = pickFoeTrainerLine(
                     battle, S.TRAINER_FOE_DODGE_CALLS, S.FOE_DODGE_CALLS, foe)
-                if not rollDodgeSuccess() then
-                    dev.log(battle, "FOE dodge", "FAIL")
+                local chance = 0.65
+                if ReactiveDefense and type(ReactiveDefense.dodgeSuccessChance) == "function" then
+                    chance = ReactiveDefense.dodgeSuccessChance(
+                        battle.enemy, battle.player)
+                end
+                local r = (love and love.math and love.math.random) or math.random
+                if r() > chance then
+                    dev.log(battle, "FOE dodge",
+                        string.format("FAIL p=%.2f focus=%d", chance, focusNow))
                     if line then
                         return line, nil, false, S.DODGE_TOO_SLOW
                     end
                     return S.DODGE_TOO_SLOW, nil, false, nil
                 end
                 state.enemyTemp.cover = true
-                dev.log(battle, "FOE dodge", "OK EV+1")
+                dev.log(battle, "FOE dodge",
+                    string.format("OK EV+1 p=%.2f focus=%d", chance, focusNow))
                 return line, {
                     { who = "enemy", stat = "evasion", delta = 1 },
                 }, true, nil
@@ -1680,7 +1721,8 @@ return function(mod)
             -- Brace is a guard, not a hide — don't mark dodge cover.
             local line = pickFoeTrainerLine(
                 battle, S.TRAINER_FOE_BRACE_CALLS, S.FOE_BRACE_CALLS, foe)
-            dev.log(battle, "FOE brace", "OK DF+1")
+            dev.log(battle, "FOE brace",
+                string.format("OK DF+1 focus=%d", focusNow))
             return line, {
                 { who = "enemy", stat = "defense", delta = 1 },
             }, true, nil
@@ -1727,7 +1769,7 @@ return function(mod)
         -- Trainer slides on-screen while their banter line plays.
         -- Speech bubbles: slower glyphs; after typing they wait for A/B (no auto).
         -- Effective frames/glyph while a bubble is up (engine slow is 5).
-        -- FIELD: ~1.5s hold after each condensed toast finishes typing.
+        -- FIELD: short hold after each condensed toast, skipped by A.
 
         local function fieldFlowsText(battle)
             return type(battle) == "table"
@@ -3473,9 +3515,9 @@ return function(mod)
                         and type(FieldBattleViewer.isFieldBattle) == "function"
                         and FieldBattleViewer.isFieldBattle(battle)
                 end,
-                fieldReact = function(battle, side, kind)
+                fieldReact = function(battle, side, kind, opts)
                     if FieldBattleViewer and type(FieldBattleViewer.react) == "function" then
-                        return FieldBattleViewer.react(battle, side, kind)
+                        return FieldBattleViewer.react(battle, side, kind, opts)
                     end
                 end,
                 momentumState = momentumState,
@@ -3545,6 +3587,22 @@ return function(mod)
                         return Notices.push(battle, text, opts)
                     end
                 end,
+                armFieldChip = function(battle, side, text)
+                    if FieldBattleViewer
+                        and type(FieldBattleViewer.armStatusChip) == "function" then
+                        return FieldBattleViewer.armStatusChip(battle, side, text)
+                    end
+                end,
+                isFieldBattle = function(battle)
+                    return FieldBattleViewer
+                        and type(FieldBattleViewer.isFieldBattle) == "function"
+                        and FieldBattleViewer.isFieldBattle(battle)
+                end,
+                fieldReact = function(battle, side, kind, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.react) == "function" then
+                        return FieldBattleViewer.react(battle, side, kind, opts)
+                    end
+                end,
                 tagFieldCue = tagFieldCue,
                 pickCounterStrikeMove = function(battle, kind, battler)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
@@ -3564,6 +3622,7 @@ return function(mod)
                 resolvePlayerCounterAttempt = resolvePlayerCounterAttempt,
                 tryFoeCoverReaction = tryFoeCoverReaction,
                 enqueueReactWithAttack = enqueueReactWithAttack,
+                enqueueNpcFlavor = enqueueNpcFlavor,
                 fieldCueForFoeCover = fieldCueForFoeCover,
                 isDodgeFailNarrator = isDodgeFailNarrator,
                 resetBattleCamera = resetBattleCamera,
@@ -3604,17 +3663,19 @@ return function(mod)
                         end
                         local curItem = self and self.current
                         local shownLine = self and self.shown and self.shown[#self.shown]
-                        -- FIELD toasts auto-cycle (~1.5s). B pauses; A or B resumes.
+                        -- FIELD toasts auto-cycle. A skips the hold; B pauses.
                         if fieldFlowsText(self) then
                             self._arBubbleAcc = 0
                             if self.phase ~= "messages" then
                                 self._arFieldToastPaused = nil
                             else
                                 local input = self.game and self.game.input
+                                local pressedA = false
                                 if input and type(input.wasPressed) == "function" then
+                                    pressedA = input:wasPressed("a") == true
                                     if input:wasPressed("b") then
                                         self._arFieldToastPaused = not self._arFieldToastPaused
-                                    elseif self._arFieldToastPaused and input:wasPressed("a") then
+                                    elseif self._arFieldToastPaused and pressedA then
                                         self._arFieldToastPaused = false
                                     end
                                 end
@@ -3622,10 +3683,16 @@ return function(mod)
                                     -- Already played as an overlay during the attack.
                                     curItem.auto = true
                                     curItem.autoDelay = 0
+                                elseif pressedA and curItem and not self._arFieldToastPaused then
+                                    -- Do not restamp the 1s hold; let origUpdateQueue
+                                    -- dismiss this line on the same click.
+                                    curItem.auto = true
+                                    curItem.autoDelay = 0
                                 elseif self._arFieldToastPaused and curItem then
                                     curItem.auto = nil
                                     curItem.autoDelay = nil
-                                elseif curItem and curItem.text and curItem.auto ~= false then
+                                elseif curItem and curItem.text and curItem.auto ~= false
+                                    and curItem.autoDelay == nil then
                                     applyFieldToastAuto(curItem)
                                 end
                             end
@@ -4190,6 +4257,7 @@ return function(mod)
                 tryFoeCoverReaction = tryFoeCoverReaction,
                 fieldCueForFoeCover = fieldCueForFoeCover,
                 enqueueReactWithAttack = enqueueReactWithAttack,
+                enqueueNpcFlavor = enqueueNpcFlavor,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 isDodgeFailNarrator = isDodgeFailNarrator,

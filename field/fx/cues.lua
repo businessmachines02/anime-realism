@@ -100,6 +100,33 @@ function H.playAnim(ent, name)
     end
 end
 
+-- Punch the camera into the clash and slow the present clock. Optical
+-- Zoom.offset is integer and recrops the voxel pass — we pan + time-scale
+-- instead of fighting survey zoom.
+function H.clashFocus(session, side, opts)
+    local ent = H.sideEnt(session, side)
+    if not (session and ent) then
+        return false
+    end
+    local foe = H.foeOf(session, side)
+    local ax = (ent.basePx or ent.px or 0) + 8
+    local ay = (ent.basePy or ent.py or 0) + 8
+    local bx = foe and ((foe.basePx or foe.px or 0) + 8) or ax
+    local by = foe and ((foe.basePy or foe.py or 0) + 8) or ay
+    session.cameraNudgeX = (ax + bx) * 0.5
+    session.cameraNudgeY = (ay + by) * 0.5
+    session.cameraNudgeT = 0.34
+    session._clashPunch = true
+    session._clashSlowT = 0.20
+    session._clashHitFx = true
+    local Projectiles = session._deps and session._deps.Projectiles
+    local foeSide = (side == "player") and "enemy" or "player"
+    if Projectiles and type(Projectiles.powerHit) == "function" then
+        Projectiles.powerHit(session, foeSide, opts or {})
+    end
+    return true
+end
+
 function H.cueMoveId(opts)
     local mid = opts and opts.moveId and tostring(opts.moveId):upper() or nil
     if mid == "" then
@@ -247,7 +274,8 @@ function Cues.closeTheGapEnabled(session, opts)
     return true
 end
 
---- Dash px/s: slower base Speed walks slower; Attack adds a boost; hard cap.
+--- Dash px/s: at least a brisk walk (idle gait is ~28–80). Attack adds a boost.
+--- Player charges a bit harder so your swing does not stall after the walk.
 function Cues.closeGapSpeed(ent, battle, side)
     local spe, atk = 70, 70
     local stats = ent and ent._closeGapStats
@@ -280,13 +308,16 @@ function Cues.closeGapSpeed(ent, battle, side)
     end
     local speedU = math.max(0, math.min(1, spe / 120))
     local atkU = math.max(0, math.min(1, (atk - 40) / 100))
-    local gait = 26 + 54 * speedU -- Raise base gait & speed scaling for faster minimums
+    local gait = 48 + 72 * speedU
     local boost = 1 + 0.4 * atkU
     local px = gait * boost
-    if px < 28 then -- Raise the minimum a bit from 22 to 28
-        px = 28
-    elseif px > 86 then
-        px = 86
+    if side == "player" then
+        px = px * 1.4
+    end
+    if px < 52 then
+        px = 52
+    elseif px > 130 then
+        px = 130
     end
     return px
 end
@@ -405,13 +436,10 @@ function Cues.stillWalkingToPad(ent)
     return (dx * dx + dy * dy) > 8 * 8
 end
 
---- True when the sprite is within one tile of the foe (pixel reach).
+--- True when the sprite is close enough to swing (last tile of the charge).
 --- Never use targetPx: closeGap writes that to the adjacent cell immediately.
 function Cues.inMeleeReach(ent, foe)
     if not (ent and foe) then
-        return false
-    end
-    if Cues.stillWalkingToPad(ent) then
         return false
     end
     local ax, ay = H.walkPx(ent)
@@ -419,8 +447,8 @@ function Cues.inMeleeReach(ent, foe)
     if type(ax) == "number" and type(fx) == "number" then
         local dx = fx - ax
         local dy = (fy or 0) - (ay or 0)
-        -- One pad tile is 16px; a little slack so the punch lunge connects.
-        return (dx * dx + dy * dy) <= 18 * 18
+        -- 16px tile; 28 covers a diagonal step and a lunge before feet stop.
+        return (dx * dx + dy * dy) <= 28 * 28
     end
     return false
 end
@@ -662,7 +690,7 @@ function Cues.skipReason(session, side, kind, opts)
     if kind == last and (
             kind == "attack" or kind == "vanish" or kind == "emerge"
             or kind == "hit" or kind == "selfhit" or kind == "status"
-            or kind == "faint") then
+            or kind == "counter" or kind == "faint" or Cues.isReactKind(kind)) then
         return "beat"
     end
     return nil

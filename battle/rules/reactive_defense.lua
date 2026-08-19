@@ -362,18 +362,61 @@ function RD.dodgeSuccessChance(defender, attacker)
   local speDef = speedStat(defender)
   local speAtk = speedStat(attacker)
   local chance = clamp(35 + (speDef - speAtk) * 0.14, 20, 85) / 100
-
-  print(
-    "Has cover type bonus: " .. tostring(hasCoverTypeBonus(defender)) ..
-    ", Chance: " .. tostring(chance) ..
-    ", Clamped chance: " .. tostring(clamp(chance * 1.5, 0, 1))
-  )
-
-
-  if hasCoverTypeBonus(defender) then 
+  if hasCoverTypeBonus(defender) then
     return clamp(chance * 1.5, 0, 1)
   end
   return chance
+end
+
+--- Trainer-foe REACT pick. Weighted, not a fixed special→dodge / physical→brace
+--- split. Unaffordable options drop out so a drained foe has to Commit.
+function RD.pickFoeReact(battle, move, isSpecial)
+  if not battle or not RD.canReact(battle, false) or RD.isUnreactable(move) then
+    return "commit"
+  end
+  if isSpecial == nil then
+    isSpecial = moveIsSpecial(move)
+  end
+  local enemy = battle.enemy
+  local player = battle.player
+  local focus = (RD.sideState(battle, false).focus) or 0
+  local speGap = speedStat(enemy) - speedStat(player)
+  local bulk = isSpecial and specialStat(enemy) or defenseStat(enemy)
+
+  local function jitter(w)
+    return math.max(0, (w or 0) * (0.70 + rng() * 0.60))
+  end
+
+  local wCommit = jitter(30)
+  local wDodge = jitter(isSpecial and 32 or 16)
+  local wBrace = jitter(isSpecial and 16 or 32)
+  wDodge = wDodge + clamp(speGap * 0.12, -14, 16)
+  wBrace = wBrace + clamp((bulk - 70) * 0.08, -10, 14)
+  if focus <= 22 then
+    wCommit = wCommit + 20
+  end
+  if not RD.affordable(battle, false, "dodge") then
+    wDodge = 0
+  end
+  if not RD.affordable(battle, false, "brace") then
+    wBrace = 0
+  end
+  wDodge = math.max(0, wDodge)
+  wBrace = math.max(0, wBrace)
+  wCommit = math.max(0, wCommit)
+  local total = wCommit + wDodge + wBrace
+  if total <= 0 then
+    return "commit"
+  end
+  local roll = rng() * total
+  if roll < wCommit then
+    return "commit"
+  end
+  roll = roll - wCommit
+  if roll < wDodge then
+    return "dodge"
+  end
+  return "brace"
 end
 
 function RD.braceReduction(defender, category)
@@ -540,6 +583,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
         "Narrowly avoided it!",
         "Evaded skillfully!"
       }
+      result.chip = "DODGE"
       result.lines[#result.lines + 1] = dodgeLines[math.random(#dodgeLines)]
  
       if (side.dodgeCounterCd or 0) <= 0 and rng() < RD.DODGE_COUNTER_CHANCE then
@@ -573,9 +617,11 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
         return RD.resolveIncoming(battle, "commit", nil, ctx)
       end
       result.focusSpent = RD.COST.cover
+      result.chip = "COVER"
       result.lines[#result.lines + 1] = "Took cover!"
     else
       side.reactedThisTurn = true
+      result.chip = "COVER"
       result.lines[#result.lines + 1] = "Holding cover!"
     end
     -- Incoming hit vs durability handled in RD.applyCoverHit after damage known,
@@ -607,6 +653,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     if braceCall == cat then
       local red = RD.braceReduction(target, cat)
       result.damageMult = 1 - red
+      result.chip = "BRACE"
       result.lines[#result.lines + 1] = "Braced right!\nTook it well!"
       result.statusResist = RD.BRACE_STATUS_RESIST
       if (side.braceCounterCd or 0) <= 0 and rng() < RD.BRACE_COUNTER_CHANCE then
@@ -634,6 +681,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
         return RD.resolveIncoming(battle, "commit", nil, ctx)
       end
       result.focusSpent = RD.COST.entrench
+      result.chip = "HOLD"
       result.lines[#result.lines + 1] = "Entrenched!\n(" .. tostring(turns) .. " turns)"
     else
       side.reactedThisTurn = true
@@ -660,6 +708,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     else
       local mit = RD.entrenchMitigation(target, cat)
       result.damageMult = 1 - mit
+      result.chip = "HOLD"
       result.lines[#result.lines + 1] = "The shell\nheld!"
     end
     return result

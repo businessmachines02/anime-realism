@@ -73,7 +73,9 @@ function Fx.foeCoverCue(foeBuffs, foeLine)
             end
         end
     end
-    return { side = "enemy", kind = "dodge" }
+    -- Failed dodge still returns the trainer order as foeLine. Do not
+    -- pose a dodge (or arm a DODGE chip) just because they were told to.
+    return { side = "enemy", kind = "hit" }
 end
 
 -- Play dodge / cover / brace / entrench FX for Focus reacts.

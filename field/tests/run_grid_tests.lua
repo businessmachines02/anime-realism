@@ -379,6 +379,39 @@ function tests.water_types_may_step_onto_water()
   truthy(Sprites.isWaterType({ def = { types = { "WATER" } } }), "def.types WATER")
 end
 
+function tests.dodge_styles_follow_type_and_cycle()
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "GHOST" } },
+  }), "phase", "ghost phases through")
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "ELECTRIC" } },
+  }), "static", "electric static-dashes")
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "WATER", "FLYING" } },
+  }), "lift", "flying beats water on dual-types")
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "WATER" } },
+  }), "splash", "water splashes")
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "BUG" } },
+  }), "burrow", "bugs burrow")
+  eq(Sprites.pickDodgeStyle({
+    _battleBattler = { curTypes = { "GRASS" } },
+  }), "burrow", "grass burrows")
+  eq(Sprites.pickDodgeStyle({
+    _closeGapStats = { speed = 120 },
+  }), "blur", "fast mons blur-step")
+  eq(Sprites.pickDodgeStyle({
+    _spriteSpecies = "JIGGLYPUFF",
+  }), "hop", "round bodies hop")
+  local generic = {}
+  eq(Sprites.pickDodgeStyle(generic), "sidehop", "first generic is a side-hop")
+  eq(Sprites.pickDodgeStyle(generic), "duck", "second generic ducks")
+  eq(Sprites.pickDodgeStyle(generic), "lean", "third generic leans")
+  eq(Sprites.pickDodgeStyle(generic), "hop", "fourth generic hops")
+  eq(Sprites.pickDodgeStyle(generic), "sidehop", "generic cycle wraps")
+end
+
 function tests.survey_relocates_mons_off_buildings()
   -- Mid-strip formation lands mon homes on solid roof tiles; survey must
   -- snap them onto open path cells and never force-mark roofs walkable.
@@ -478,8 +511,17 @@ end
 
 function tests.status_chip_abbreviations()
   eq(UI.chipAbbrev("Braced right!\nTook it well!"), "BRACE", "brace success")
-  eq(UI.chipAbbrev("Braced the\nwrong way!"), "WRONG", "brace miss")
-  eq(UI.chipAbbrev("But SQUIRTLE\ndodged aside!"), "DODGE", "dodge")
+  eq(UI.chipAbbrev("Braced the\nwrong way!"), nil, "failed brace is not a chip")
+  eq(UI.chipAbbrev("Couldn't dodge!\nCaught off-balance!"), nil, "failed dodge is not a chip")
+  eq(UI.chipAbbrev("Onix!\nBrace yourself!"), nil, "react order is not a chip")
+  eq(UI.chipAbbrev("PIKACHU!\nDodge it!"), nil, "player order is not a chip")
+  eq(UI.chipAbbrev("BROCK:\nOnix, dodge!"), nil, "NPC dodge order is not a chip")
+  eq(UI.chipAbbrev("COUNTER!"), nil, "counter toast is not inferred")
+  local counterBattle = { frame = 4 }
+  UI.armStatusChip(counterBattle, "player", "COUNTER")
+  eq(counterBattle._arStatusChips.player.text, "COUNTER", "successful counter arms COUNTER")
+  eq(UI.chipAbbrev("But SQUIRTLE\ndodged aside!"), "DODGE",
+    "success flavor still maps, but is not auto-armed")
   eq(UI.chipAbbrev("Entrenched!\n(3 turns)"), "HOLD", "entrench")
   eq(UI.chipAbbrev("It's super effective!"), nil, "effectiveness stays a toast")
   eq(UI.chipAbbrev("SQUIRTLE used TACKLE!"), nil, "move used stays a toast")
@@ -487,8 +529,7 @@ function tests.status_chip_abbreviations()
   eq(UI.chipAbbrev("A wild PIDGEY appeared!"), nil, "intro stays a toast")
   eq(UI.chipSide({ current = { arFieldCue = { side = "enemy" } } }, "x"),
     "enemy", "cue side wins")
-  eq(UI.chipAbbrev("TACKLE!", { current = { arFieldCue = { kind = "attack" } } }),
-    nil, "attack cue is not a REACT chip")
+  eq(UI.chipAbbrev("TACKLE!"), nil, "attack toast is not a REACT chip")
   local overlap = {
     current = {
       text = "SURF!",
@@ -498,8 +539,18 @@ function tests.status_chip_abbreviations()
       },
     },
   }
-  eq(UI.chipAbbrev("SURF!", overlap), "BRACE", "overlap brace chips during the attack")
-  eq(UI.chipSide(overlap, "SURF!"), "enemy", "overlap chip sits on the defender")
+  UI.syncStatusChips(overlap)
+  eq(overlap._arStatusChips, nil, "foe order overlap does not arm a chip")
+  local battle = { frame = 12 }
+  battle.current = {
+    text = "But SQUIRTLE\ndodged aside!",
+    arFieldCue = { kind = "dodge", side = "enemy" },
+  }
+  UI.syncStatusChips(battle)
+  eq(battle._arStatusChips, nil, "engine miss dodge is not a chip")
+  UI.armStatusChip(battle, "player", "DODGE")
+  eq(battle._arStatusChips.player.text, "DODGE", "successful REACT! pick arms the chip")
+  eq(battle._arStatusChips.player.untilFrame, 12 + UI.CHIP_HOLD, "chip holds a beat")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -710,6 +761,44 @@ function tests.hp_chip_stays_on_screen_near_top()
   truthy(minY >= UI.HP_CHIP_TOP, "top-of-screen mon does not clip its HP chip")
 end
 
+function tests.hp_bar_tracks_live_hp()
+  local ratio, hp, maxHP = UI.battlerHP({
+    shownHP = 0,
+    mon = { hp = 12, stats = { hp = 40 } },
+  })
+  eq(hp, 12, "live HP wins over a drained display numerator")
+  eq(maxHP, 40, "max HP comes from stats")
+  eq(ratio, 12 / 40, "ratio is remaining over max")
+
+  ratio, hp = UI.battlerHP({
+    shownHP = 20,
+    mon = { name = "EKANS", stats = { hp = 20 } },
+  })
+  eq(hp, 20, "shownHP is the fallback when mon.hp is missing")
+  eq(ratio, 1, "full shownHP paints a full bar")
+
+  ratio, hp = UI.battlerHP({
+    shownHP = 8,
+    mon = { hp = 0, stats = { hp = 20 } },
+  })
+  eq(hp, 0, "fainted mon paints empty even if shownHP lags")
+  eq(ratio, 0, "fainted ratio is 0")
+
+  local inner = UI.HP_BAR_W - 2
+  eq(inner, 18, "compact bar is a short track")
+  eq(UI.hpFillWidth(inner, 0, 40), 0, "KO is an empty track")
+  truthy(UI.hpFillWidth(inner, 1, 100) >= 1, "1 HP still occupies a pixel")
+  eq(UI.hpFillWidth(inner, 40, 40), inner, "full HP fills the track")
+  eq(UI.hpFillWidth(inner, 20, 40), 9, "half HP is half the track")
+  eq(UI.hpFillWidth(inner, 39, 40), 17, "a 1 HP hit on 40 max drops a pixel")
+  local low = UI.hpFillWidth(inner, 4, 40)
+  truthy(low >= 1, "low but living HP is not rounded to an empty bar")
+  eq(UI.easeHpFill(nil, 18), 18, "first paint snaps to the true fill")
+  eq(UI.easeHpFill(18, 12), 17, "damage ticks one pixel per frame")
+  eq(UI.easeHpFill(18, 18), 18, "settled fill holds")
+  eq(UI.easeHpFill(0, 18), 18, "send-out snaps up to full")
+end
+
 function tests.focus_bar_paints_above_hp_when_enabled()
   local prevVisible, prevRatio = UI.focusBarVisible, UI.focusRatio
   UI.focusBarVisible = function() return true end
@@ -877,6 +966,59 @@ end
 local function sampleGrid()
   local plan = Layout.plan(10, 10, 18, 10)
   return Grid.build(nil, plan), plan
+end
+
+function tests.npc_react_spends_focus_and_mixes_picks()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local battle = {
+    player = { stats = { speed = 80, defense = 50, special = 60 } },
+    enemy = { stats = { speed = 55, defense = 90, special = 40 } },
+  }
+  local ember = { id = "EMBER", power = 40, category = "special" }
+  local hyper = { id = "HYPER_BEAM", power = 150, category = "special" }
+  RD.state(battle)
+  local side = RD.sideState(battle, false)
+  local start = side.focus
+  truthy(start >= RD.COST.dodge, "foe starts with enough focus to dodge")
+  local spentOk = RD.spend(battle, false, "dodge")
+  truthy(spentOk, "foe dodge spends")
+  eq(side.focus, start - RD.COST.dodge, "foe dodge costs the same as the player")
+  side.focus = 10
+  eq(RD.pickFoeReact(battle, ember, true), "commit",
+    "drained foe has to take the hit")
+  eq(RD.pickFoeReact(battle, hyper, true), "commit",
+    "unreactable moves are not dodged")
+  side.focus = start
+  local seen = { commit = 0, dodge = 0, brace = 0 }
+  for _ = 1, 48 do
+    local pick = RD.pickFoeReact(battle, ember, true)
+    seen[pick] = (seen[pick] or 0) + 1
+  end
+  truthy(seen.dodge < 48, "ember is not an automatic dodge")
+  truthy((seen.commit + seen.brace) > 0, "foe sometimes braces or stands in")
+  RD.clear(battle)
+end
+
+function tests.failed_npc_dodge_is_not_a_dodge_cue()
+  local Fx = assert(loadfile(root .. "/../battle/fx.lua"))()
+  local cue = Fx.foeCoverCue(nil, "BROCK:\nOnix, dodge!")
+  eq(cue.kind, "hit", "failed order is not a dodge cue")
+  eq(cue.side, "enemy", "fail still belongs to the foe")
+  cue = Fx.foeCoverCue(
+    { { who = "enemy", stat = "evasion", delta = 1 } },
+    "BROCK:\nOnix, dodge!")
+  eq(cue.kind, "dodge", "landed evasion is a dodge")
+  cue = Fx.foeCoverCue(
+    { { who = "enemy", stat = "defense", delta = 1 } },
+    "BROCK:\nOnix, brace!")
+  eq(cue.kind, "brace", "landed defense is a brace")
+  Fx.bind({
+    isDodgeFailNarrator = function(text)
+      return type(text) == "string" and text:find("too slow", 1, true) ~= nil
+    end,
+  })
+  cue = Fx.foeCoverCue(nil, "...but it was\ntoo slow!")
+  eq(cue.kind, "hit", "too-slow narrator is a hit")
 end
 
 function tests.nearby_trainers_spectate_and_restore()
@@ -1314,6 +1456,51 @@ function tests.powerful_moves_push_and_impact()
   truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
 end
 
+function tests.counter_clash_punches_in()
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 2, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 4, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 40,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  truthy(Cues.apply(session, "player", "counter", Grid, nil, nil, {
+    category = "physical", moveId = "SCRATCH",
+  }), "counter cue")
+  eq(player.lastAnim, "counter", "attacker plays the rebound pose")
+  truthy(session._clashPunch, "camera punch-in is armed")
+  truthy((session._clashSlowT or 0) > 0, "present clock slows for the clash")
+  truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
+    "nudge sits on the clash midpoint")
+  local styles = {}
+  for i = 1, #(session.projectiles or {}) do
+    styles[session.projectiles[i].style] = true
+  end
+  truthy(styles.power_hit, "clash paints the power_hit ring")
+
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    category = "physical", clash = true, push = true,
+  }), "clash hit cue")
+  eq(enemy.lastAnim, "hit", "foe takes the clash")
+  truthy(enemy._heavyHit, "clash knock is heavy")
+end
+
 function tests.physical_jumps_cover()
   local plan = Layout.plan(0, 0, 8, 0)
   local grid = Grid.build({
@@ -1358,6 +1545,40 @@ function tests.physical_jumps_cover()
   eq(fx.sx, fx.ex, "no traveling physical projectile")
 end
 
+function tests.idle_gait_slows_with_bulk()
+  eq(Cast.idleStepSpeed({}), Cast.STEP_SPEED, "unknown mons keep the default walk")
+  local pidgey = Cast.idleStepSpeed({
+    _closeGapStats = { hp = 40, defense = 30, speed = 56 },
+    _dexWeightLbs = 4,
+  })
+  local gengar = Cast.idleStepSpeed({
+    _closeGapStats = { hp = 60, defense = 60, speed = 110 },
+    _dexWeightLbs = 89,
+  })
+  local onix = Cast.idleStepSpeed({
+    _closeGapStats = { hp = 35, defense = 160, speed = 70 },
+    _dexWeightLbs = 463,
+  })
+  local snorlax = Cast.idleStepSpeed({
+    _closeGapStats = { hp = 160, defense = 65, speed = 30 },
+    _dexWeightLbs = 1014,
+  })
+  local fromDex = Cast.idleStepSpeed({
+    _battleBattler = {
+      def = {
+        baseStats = { hp = 160, defense = 65, speed = 30 },
+        dexEntry = { weight = 10141 },
+      },
+    },
+  })
+  truthy(pidgey > Cast.STEP_SPEED, "light mons wander faster")
+  truthy(snorlax < Cast.STEP_SPEED, "snorlax lumbers home")
+  truthy(snorlax < onix, "snorlax is heavier than onix")
+  truthy(gengar > onix, "gengar is lighter than onix")
+  truthy(snorlax >= 28, "tanks still reach home")
+  truthy(math.abs(fromDex - snorlax) < 0.5, "dex tenths-of-a-pound maps to lbs")
+end
+
 function tests.close_the_gap_physicals()
   local snorlax = Cues.closeGapSpeed({ _closeGapStats = { speed = 30, attack = 110 } })
   local dragonite = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 134 } })
@@ -1368,8 +1589,8 @@ function tests.close_the_gap_physicals()
   truthy(snorlax < dragonite, "snorlax closes slower than dragonite")
   truthy(snorlax > weakSlow, "snorlax's attack boosts a slow gait")
   truthy(electrode > magikarp, "higher speed closes faster")
-  truthy(rocket <= 86, "dash speed is capped")
-  truthy(snorlax >= 22, "even slow mons still close")
+  truthy(rocket <= 130, "dash speed is capped")
+  truthy(snorlax >= 52, "even slow mons still close")
 
   local plan = Layout.plan(0, 0, 8, 0)
   local grid = Grid.build({
@@ -1460,10 +1681,9 @@ function tests.close_the_gap_physicals()
   session._now = 11
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil,
     { category = "physical", moveType = "NORMAL" }), "adjacent physical with gap on")
-  eq(player.lastAnim, nil, "adjacent cue still waits one present tick")
+  eq(player.lastAnim, nil, "adjacent cue does not punch on HUD confirm")
   truthy(player._pendingCloseStrike, "adjacent strike is still gated")
-  Cues.tickReturns(session, Grid)
-  eq(player.lastAnim, nil, "arming tick does not punch")
+  truthy(not player._closeStrikeWait, "already in reach: skip the walk-first tick")
   Cues.tickReturns(session, Grid)
   eq(player.lastAnim, "attack", "adjacent punch plays on the next present tick")
 end
@@ -1701,6 +1921,17 @@ function tests.cues_and_dedupe()
   truthy(Cues.shouldSkipEvent(session, "player", "selfhit"), "dedupe self-hit")
   truthy(not Cues.shouldSkipEvent(session, "player", "hit"),
     "self-hit does not swallow a later hit")
+
+  session._now = 14.2
+  session._lastCueAt = nil
+  enemy.lastAnim = nil
+  player.lastAnim = nil
+  truthy(Cues.apply(session, "enemy", "dodge", Grid, nil, nil), "foe dodge cue")
+  eq(enemy.lastAnim, "dodge", "foe dodge animation")
+  truthy(Cues.shouldSkipEvent(session, "enemy", "dodge"),
+    "same-beat foe dodge does not replay")
+  truthy(not Cues.shouldSkipEvent(session, "player", "dodge"),
+    "player may still dodge after the foe does")
 
   session._now = 16
   truthy(Cues.apply(session, "enemy", "faint", Grid, nil, nil), "faint cue")
@@ -2515,6 +2746,35 @@ function tests.attack_overlap_fires_foe_dodge()
   eq(enemy.lastAnim, "dodge", "dodge cue still plays")
   truthy(not (session._trainerCallouts and session._trainerCallouts.foe),
     "dodged-it is not an NPC overlay")
+
+  -- Failed NPC dodge: trainer still shouted, but the cue is a hit, not a sidestep.
+  session._now = 36.1
+  enemy.lastAnim = nil
+  session._trainerCallouts = nil
+  battle.current._arFieldCueDone = true
+  battle.current.arOverlapReact = {
+    { side = "enemy", kind = "hit", text = "BROCK:\nOnix, dodge!", bubble = "foe" },
+  }
+  battle.queue = {}
+  truthy(not Cues.pumpCurrent(session, battle, Grid, nil),
+    "failed dodge order does not pump a react pose")
+  eq(enemy.lastAnim, nil, "failed NPC dodge does not sidestep")
+
+  -- Miss result toast after the overlap dodge: do not make the player flinch,
+  -- and do not replay the foe's dodge before their next attack.
+  session._now = 36.2
+  player.lastAnim = nil
+  enemy.lastAnim = nil
+  battle.current = {
+    text = "But SLOWPOKE\ndodged aside!",
+    arFieldCue = { side = "enemy", kind = "dodge" },
+    arDodgeWhiff = true,
+  }
+  battle.queue = {}
+  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
+    "dodge-whiff after overlap is not a second dodge")
+  eq(player.lastAnim, nil, "player does not flinch into the foe's next move")
+  eq(enemy.lastAnim, nil, "foe dodge does not replay on the miss line")
 end
 
 function tests.callout_filters_narrative_and_sits_outside_fight()
@@ -2809,6 +3069,18 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "FIRE", moveId = "EMBER",
   }), "ember is a travel FX")
+  truthy(ember.variant, "ember picks a flight pattern")
+  local rockThrow = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_THROW",
+  })
+  eq(rockThrow.style, "rock", "rock throw lobs tumbling shards")
+  eq(rockThrow.glitz, "rock", "rock throw paints rock glitz")
+  truthy(rockThrow.sx < rockThrow.ex, "rock throw travels toward the foe")
+  truthy((rockThrow.arc or 0) >= 18, "rock throw arcs like a thrown stone")
+  truthy((rockThrow.duration or 0) >= 0.5, "rock throw holds the lob")
+  truthy(Projectiles.isTravelFx({
+    moveType = "ROCK", moveId = "ROCK_THROW",
+  }), "rock throw is a travel FX")
   local fireBlast = Projectiles.move(session, "player", {
     moveType = "FIRE", moveId = "FIRE_BLAST",
   })
@@ -2967,6 +3239,20 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "PSYCHIC", moveId = "PSYCHIC",
   }), "psychic is a travel FX")
+  local sandAttack = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "SAND_ATTACK",
+  })
+  eq(sandAttack.style, "sand", "sand attack uses a grit spray")
+  eq(sandAttack.glitz, "grit", "sand attack uses grit glitz")
+  truthy(sandAttack.sx < sandAttack.ex, "sand attack travels toward the foe")
+  truthy(sandAttack.pinTip, "sand attack locks onto the face")
+  truthy(Projectiles.isTravelFx({
+    moveType = "NORMAL", moveId = "SAND_ATTACK",
+  }), "sand attack is a travel FX")
+  local sandAlias = Projectiles.status(session, "player", {
+    moveType = "GROUND", moveId = "SANDATTACK",
+  })
+  eq(sandAlias.style, "sand", "SANDATTACK aliases sand spray")
   local slash = Projectiles.contact(session, "player", {
     moveType = "NORMAL", moveId = "SLASH",
   })
@@ -3075,6 +3361,15 @@ function tests.supersonic_and_confuse_ray_paint()
   truthy(calls.ellipse > 0, "confuse ray paints a short smog wad")
   truthy(calls.circle > 0, "confuse ray paints smog wisps")
   truthy(calls.line > 0, "confuse ray leaves a light trail")
+
+  calls.arc, calls.line, calls.circle, calls.ellipse = 0, 0, 0, 0
+  local sand = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "SAND_ATTACK",
+  })
+  sand.age = 0.32
+  sand:draw(0, 0)
+  truthy(calls.circle > 0, "sand attack paints grit grains")
+  truthy(calls.ellipse > 0, "sand attack paints a dust scuff")
   love = prevLove
 end
 
@@ -3120,6 +3415,25 @@ function tests.fire_tongues_and_gust_paint()
   ember.age = 0.28
   ember:draw(0, 0)
   truthy(calls.polygon > 0, "ember paints flame-tongue polygons, not red blobs")
+
+  for _, variant in ipairs({ "volley", "hop", "spray", "corkscrew", "pop" }) do
+    calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+    local shot = Projectiles.move(session, "player", {
+      moveType = "FIRE", moveId = "EMBER",
+    })
+    shot.variant = variant
+    shot.age = 0.28
+    shot:draw(0, 0)
+    truthy(calls.polygon > 0, variant .. " ember paints flame tongues")
+  end
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local rockThrow = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_THROW",
+  })
+  rockThrow.age = 0.32
+  rockThrow:draw(0, 0)
+  truthy(calls.polygon > 0, "rock throw paints tumbling rock shards")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local flamethrower = Projectiles.move(session, "player", {
@@ -3509,6 +3823,13 @@ function tests.sprite_cast_and_animation()
     "player occupies tracked cell")
   eq(grid.occ[Coords.key(enemy.padU, enemy.padV)], enemy.id,
     "enemy occupies tracked cell")
+
+  player:play("dodge")
+  truthy(player._dodgeStyle, "dodge picks a style")
+  for _ = 1, 40 do
+    Cast.tick(session, 1 / 60)
+  end
+  eq(player.anim, "idle", "dodge returns to idle")
 
   player:play("attack")
   for _ = 1, 30 do

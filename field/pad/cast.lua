@@ -10,6 +10,120 @@ local Cast = {}
 
 Cast.STEP_SPEED = 56
 
+local function clamp01(x)
+    if x < 0 then
+        return 0
+    end
+    if x > 1 then
+        return 1
+    end
+    return x
+end
+
+local function speciesDef(ent)
+    local battler = ent and ent._battleBattler
+    if not battler then
+        return nil
+    end
+    local mon = battler.mon
+    local def = battler.def or (mon and (mon.pokemon or mon.def))
+    if type(def) == "table" then
+        return def
+    end
+    return nil
+end
+
+--- Pokedex weight in pounds. Gen 1/2 `dexEntry.weight` is tenths of a pound.
+local function weightLbs(ent)
+    if not ent then
+        return nil
+    end
+    local hook = tonumber(ent._dexWeightLbs)
+    if hook then
+        return hook
+    end
+    local stats = ent._closeGapStats
+    if type(stats) == "table" then
+        if tonumber(stats.weightLbs) then
+            return tonumber(stats.weightLbs)
+        end
+        if tonumber(stats.weightKg) then
+            return tonumber(stats.weightKg) * 2.2046
+        end
+    end
+    local def = speciesDef(ent)
+    local dex = def and def.dexEntry
+    if type(dex) ~= "table" then
+        return nil
+    end
+    if tonumber(dex.weightKg) then
+        return tonumber(dex.weightKg) * 2.2046
+    end
+    if tonumber(dex.weight) then
+        return tonumber(dex.weight) / 10
+    end
+    return nil
+end
+
+local function gaitStats(ent)
+    local stats = ent and ent._closeGapStats
+    if type(stats) == "table" and (stats.hp or stats.defense or stats.def
+        or stats.speed or stats.spe) then
+        return stats
+    end
+    local def = speciesDef(ent)
+    if def and type(def.baseStats) == "table" then
+        return def.baseStats
+    end
+    local battler = ent and ent._battleBattler
+    local mon = battler and battler.mon
+    if battler and type(battler.stats) == "table" then
+        return battler.stats
+    end
+    if mon and type(mon.stats) == "table" then
+        return mon.stats
+    end
+    return nil
+end
+
+--- Wander / home-back px/s. Light mons zip; tanks lumber. Close-the-gap
+--- dashes still use Cues.closeGapSpeed (speed + attack).
+function Cast.idleStepSpeed(ent)
+    local stats = gaitStats(ent)
+    local lbs = weightLbs(ent)
+    if not stats and not lbs then
+        return Cast.STEP_SPEED
+    end
+    local hp, def, spe = 70, 70, 70
+    if type(stats) == "table" then
+        hp = tonumber(stats.hp) or hp
+        def = tonumber(stats.defense or stats.def) or def
+        spe = tonumber(stats.speed or stats.spe) or spe
+    end
+    -- Live battle stats are often ~2× base; keep the gait reading as species.
+    if hp > 200 or def > 180 then
+        hp = hp * 0.5
+        def = def * 0.5
+        spe = spe * 0.5
+    end
+    local bulkT = clamp01(((hp + def) * 0.5 - 45) / 90)
+    local weightT
+    if lbs then
+        weightT = clamp01((lbs - 20) / 480)
+    else
+        local speedT = clamp01(spe / 120)
+        weightT = clamp01(0.35 * bulkT + 0.65 * (1 - speedT))
+    end
+    local heaviness = 0.55 * weightT + 0.45 * bulkT
+    local px = 78 - 46 * heaviness
+    if px < 28 then
+        px = 28
+    elseif px > 80 then
+        px = 80
+    end
+    return px
+end
+
 local function worldBlockKeys(session, ignoreEnt)
     local keys = {}
     local function mark(e)
@@ -96,7 +210,7 @@ local function bindHome(ent, plan, side, grid)
     if not ent then
         return
     end
-    ent.stepSpeed = Cast.STEP_SPEED
+    ent.stepSpeed = Cast.idleStepSpeed(ent)
     ent._grid = grid
     local homeSide = (side == "player") and "player" or "enemy"
     local trainerSide = (side == "player") and "playerTrainer" or "enemyTrainer"

@@ -52,7 +52,9 @@ return function(Cues)
             movePower = opts.movePower,
             jump = jump,
         }
-        ent._closeStrikeWait = true
+        -- Already next to the foe: punch on the next present tick, do not
+        -- burn a "walk first" frame (that stall is most obvious on your mon).
+        ent._closeStrikeWait = not Cues.inMeleeReach(ent, foe)
         ent._closeStrikeArmedAt = H.now(session)
         ent._returnAt = nil
         ent._withdrawAfterStrike = true
@@ -149,6 +151,7 @@ return function(Cues)
             return false
         end
         Grid.dodge(session.grid, ent, H.foeOf(session, side))
+        -- Pose variety (type / speed / cycle) is picked inside play("dodge").
         H.playAnim(ent, "dodge")
         return true
     end)
@@ -298,6 +301,21 @@ return function(Cues)
         else
             playMeleeApproach(session, side, ent, foe, Grid, g, opts, battle)
         end
+        if battle and battle._arCounterClash then
+            battle._arCounterClash = nil
+            H.clashFocus(session, side, opts)
+        end
+        return true
+    end)
+
+    Cues.register("counter", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        opts = opts or {}
+        H.clashFocus(session, side, opts)
+        H.playAnim(ent, "counter")
         return true
     end)
 
@@ -310,8 +328,9 @@ return function(Cues)
         local foe = H.foeOf(session, side)
         local g = session.grid
         local category = H.normCategory(opts.category)
+        local clash = opts.clash == true or session._clashPunch == true
 
-        if type(nudgeCamera) == "function" and battle then
+        if type(nudgeCamera) == "function" and battle and not clash then
             nudgeCamera(battle, side, 0.35)
         end
         local Audio = session._deps and session._deps.Audio
@@ -323,13 +342,14 @@ return function(Cues)
         local Projectiles = session._deps and session._deps.Projectiles
         local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
             and Projectiles.isPowerfulMove(opts)
-        if powerful then
-            local obstacle = Grid.obstacleBehind(g, ent, foe, 2)
-            if Projectiles.powerHit then
+        if clash or powerful then
+            local obstacle = Grid.obstacleBehind(g, ent, foe, clash and 1 or 2)
+            if not session._clashHitFx and Projectiles and Projectiles.powerHit then
                 Projectiles.powerHit(session, side, opts)
             end
-            Grid.knockbackTiles(g, ent, foe, 2)
-            if obstacle and Projectiles.wallImpact then
+            session._clashHitFx = nil
+            Grid.knockbackTiles(g, ent, foe, clash and 1 or 2)
+            if obstacle and Projectiles and Projectiles.wallImpact then
                 Projectiles.wallImpact(session, obstacle, opts)
             end
             ent._heavyHit = true

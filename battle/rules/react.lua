@@ -249,24 +249,33 @@ local function flushPendingFoeReaction(battle)
     end
     -- Insert fail first, then order: each insertBeforeAnim lands before anim,
     -- so later inserts sit earlier in the queue (order → fail → anim).
+    local delay = (S().CALLOUT_AUTO_DELAY or 55)
     if failNarr then
         local failItem = {
             text = failNarr,
             auto = true,
-            autoDelay = (S().CALLOUT_AUTO_DELAY or 55),
+            autoDelay = delay,
         }
         hostCall("tagFieldCue", failItem, "enemy", "hit")
         hostCall("insertBeforeAnim", battle, failItem)
-    end
-    if foeLine then
-        local cue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
-        local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
-        if not hostCall("enqueueReactWithAttack", battle, foeLine, (S().CALLOUT_AUTO_DELAY or 55),
-            bubble, cue) then
+        -- Order shout without a dodge pose — they were told to dodge and missed it.
+        if foeLine and not hostCall("enqueueNpcFlavor", battle, foeLine, delay) then
             local item = {
                 text = foeLine,
                 auto = true,
-                autoDelay = (S().CALLOUT_AUTO_DELAY or 55),
+                autoDelay = delay,
+            }
+            hostCall("markBubbleWait", item, "foe", true, battle)
+            hostCall("insertBeforeAnim", battle, item)
+        end
+    elseif foeLine then
+        local cue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
+        local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
+        if not hostCall("enqueueReactWithAttack", battle, foeLine, delay, bubble, cue) then
+            local item = {
+                text = foeLine,
+                auto = true,
+                autoDelay = delay,
             }
             hostCall("markBubbleWait", item, bubble, true, battle)
             hostCall("tagFieldCue", item, cue.side, cue.kind)
@@ -506,14 +515,21 @@ local function queueReactCounterStrike(battle, result, ctx)
                 return
             end
             hostCall("pushNotice", battle, line, { kind = "counter" })
-            if move then
+            hostCall("armFieldChip", battle, "player", "COUNTER")
+            if hostCall("isFieldBattle", battle) then
+                hostCall("fieldReact", battle, "player", "counter", {
+                    category = "physical",
+                    moveId = moveId,
+                    moveType = move and move.type,
+                })
+            elseif move then
                 hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
                     isCalled = true,
                 })
             end
         end,
     })
-    if move then
+    if move and not hostCall("isFieldBattle", battle) then
         hostCall("queueMoveAttackAnim", battle, move, true)
     end
     -- Never restore the incoming foe clip. That made leftover FURY_ATTACK
@@ -521,8 +537,8 @@ local function queueReactCounterStrike(battle, result, ctx)
 
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
-        arFx = true,
-        arFieldCue = { side = "enemy", kind = "hit", category = "physical" },
+            arFx = true,
+            arFieldCue = { side = "enemy", kind = "hit", category = "physical", clash = true },
         fn = function()
             local target = battle.enemy
             if not target or not target.mon or (target.mon.hp or 0) <= 0 then
@@ -585,6 +601,12 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     -- Dodge / cover / brace FX before the foe's swing (or instead of it).
     if type(host.playFocusReactFx) == "function" then
         host.playFocusReactFx(battle, result.action or action, result)
+    end
+
+    -- FIELD HP chips: only a successful player REACT! pick, never the
+    -- order toast, a failed react, or an engine miss / auto foe dodge.
+    if result.chip then
+        hostCall("armFieldChip", battle, "player", result.chip)
     end
 
     -- Beat flavor rides the top-right notice stack so it cannot bury the swing.
@@ -792,6 +814,8 @@ local function finishSameTurnCounter(battle, choice)
             -- Idle BC camera often takes over during the COUNTER! menu — snap it
             -- back; performMove wrap + engine move_used re-arm the attack cam.
             hostCall("resetBattleCamera", battle)
+            hostCall("armFieldChip", battle, "player", "COUNTER")
+            battle._arCounterClash = true
             battle:performMove(battle.player, battle.enemy, moveInst)
         end,
     })

@@ -8,7 +8,8 @@
 -- PAR / FRZ / PSN / BRN / SLP / confusion auras are drawn around live field
 -- sprites each frame. Cover plants the mon behind a real pad prop (or a
 -- crouch shade if none is nearby) — never a looping crate glued to the sprite.
--- Fire specials paint teardrop flame tongues (not red blobs); Gust is a
+-- Fire specials paint teardrop flame tongues (not red blobs); Ember picks a
+-- flight pattern each cast. Rock Throw lobs tumbling shards. Gust is a
 -- traveling wind projectile even though Gen1 Flying is physical.
 
 local Coords = require("coords")
@@ -368,6 +369,8 @@ local FOE_STATUS_MOVES = {
   LOVELY_KISS = true,
   SING = true,
   SUPERSONIC = true,
+  SAND_ATTACK = true,
+  SANDATTACK = true,
 }
 
 -- Strong hits: always shove the target back + typed impact FX (Gen1 roster + high BP).
@@ -494,8 +497,10 @@ local TRAVEL_STYLES = {
   sonic = true,
   ray = true,
   ember = true,
+  rock = true,
   blast = true,
   gust = true,
+  sand = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -1369,8 +1374,52 @@ local function drawWindSlash(g, px, py, ang, scale, c, alpha)
   end
 end
 
---- Ember: staggered bouncing flame tongues caster → foe.
-local function drawEmberVolley(g, x, y, ox, oy, t, age, c)
+local ROCK_SHAPES = {
+  { { -3.4, 1.6 }, { -1.2, 3.2 }, { 2.8, 2.2 }, { 3.6, -0.8 }, { 0.8, -3.1 }, { -2.6, -2.0 } },
+  { { -2.9, 2.6 }, { 0.6, 3.5 }, { 3.4, 1.0 }, { 2.2, -2.8 }, { -1.6, -3.2 }, { -3.5, -0.2 } },
+  { { -2.4, 3.0 }, { 2.0, 2.8 }, { 3.5, 0.2 }, { 1.4, -3.0 }, { -2.8, -2.2 }, { -3.3, 0.8 } },
+  { { -3.1, 0.8 }, { -0.4, 3.4 }, { 3.2, 2.4 }, { 3.0, -1.6 }, { 0.2, -3.3 }, { -3.2, -1.8 } },
+}
+
+local function drawRockChunk(g, px, py, rot, scale, c, alpha, shape)
+  if type(px) ~= "number" or type(py) ~= "number" then
+    return
+  end
+  scale = math.max(0.22, scale or 1)
+  alpha = alpha or 1
+  local verts = ROCK_SHAPES[(((shape or 1) - 1) % #ROCK_SHAPES) + 1]
+  local ca, sa = math.cos(rot or 0), math.sin(rot or 0)
+  local pts = {}
+  local unpackFn = table.unpack or unpack
+  for i = 1, #verts do
+    local lx, ly = verts[i][1], verts[i][2]
+    pts[#pts + 1] = px + (lx * ca - ly * sa) * scale
+    pts[#pts + 1] = py + (lx * sa + ly * ca) * scale
+  end
+  local cr, cg, cb = c[1] or 0.66, c[2] or 0.56, c[3] or 0.34
+  -- Grounded shadow so the lob reads against grass / cave floors.
+  if g.ellipse then
+    g.setColor(0.18, 0.12, 0.08, 0.28 * alpha)
+    g.ellipse("fill", px + 0.4, py + 2.4 * scale, 3.4 * scale, 1.15 * scale)
+  end
+  g.setColor(cr * 0.62, cg * 0.58, cb * 0.48, alpha)
+  g.polygon("fill", unpackFn(pts))
+  -- Lit facet (first three verts pulled toward a highlight).
+  local hx = px + (-1.1 * ca - (-1.6) * sa) * scale
+  local hy = py + (-1.1 * sa + (-1.6) * ca) * scale
+  local ix = px + (1.4 * ca - (-0.4) * sa) * scale
+  local iy = py + (1.4 * sa + (-0.4) * ca) * scale
+  local jx = px + (0.2 * ca - 0.6 * sa) * scale
+  local jy = py + (0.2 * sa + 0.6 * ca) * scale
+  g.setColor(math.min(1, cr * 1.25), math.min(1, cg * 1.22),
+    math.min(1, cb * 1.15), 0.55 * alpha)
+  g.polygon("fill", hx, hy, ix, iy, jx, jy)
+  g.setColor(1, 1, 1, 0.28 * alpha)
+  g.circle("fill", px - 0.6 * scale, py - 0.9 * scale, 0.7 * scale)
+end
+
+--- Rock Throw: kick a tumbling stone, then shatter it on the foe.
+local function drawRockThrow(g, x, y, ox, oy, t, age, c)
   if type(x) ~= "number" or type(y) ~= "number"
       or type(ox) ~= "number" or type(oy) ~= "number" then
     return
@@ -1381,11 +1430,121 @@ local function drawEmberVolley(g, x, y, ox, oy, t, age, c)
   if len > 0.1 then
     nx, ny = -dy / len, dx / len
   end
-  local heading = math.atan2(dy, dx) + math.pi * 0.5
+  local cr, cg, cb = c[1] or 0.66, c[2] or 0.56, c[3] or 0.34
   local fade = 1
-  if t > 0.82 then
-    fade = 1 - (t - 0.82) / 0.18
+  if t > 0.86 then
+    fade = 1 - (t - 0.86) / 0.14
   end
+  local kick = math.min(1, t / 0.14)
+  local travel = math.max(0, math.min(1, (t - 0.04) / 0.70))
+  local smash = math.max(0, (t - 0.68) / 0.32)
+
+  -- Scuff at the thrower's feet.
+  g.setColor(cr, cg, cb, 0.32 * kick * (1 - smash) * fade)
+  g.ellipse("fill", ox, oy + 5, 4 + kick * 5, 1.8 + kick * 1.1)
+  for i = 1, 4 do
+    local a = (age or 0) * 7 + i * 1.4
+    g.setColor(cr * 0.8, cg * 0.75, cb * 0.65, (0.55 - i * 0.08) * kick * fade)
+    g.circle("fill",
+      ox + math.cos(a) * (1.8 + kick * 2.4),
+      oy + 4 - kick * (2 + i * 0.6),
+      0.9 + (i % 2) * 0.35)
+  end
+
+  -- Dust ribbon behind the lob.
+  if travel > 0.06 and smash < 0.55 then
+    for i = 1, 5 do
+      local u = math.max(0, travel - i * 0.07)
+      if u > 0.04 then
+        local px = ox + dx * u + nx * math.sin(u * 9 + i) * 1.2
+        local py = oy + dy * u - math.sin(u * math.pi) * 2.2
+        g.setColor(cr, cg, cb, (0.42 - i * 0.06) * fade * (1 - smash))
+        g.circle("fill", px, py, 1.35 - i * 0.14)
+      end
+    end
+  end
+
+  -- Main stone + two chips, until the hit.
+  if smash < 0.82 then
+    local spin = (age or 0) * 14
+    local bodyA = fade * (1 - smash * 0.85)
+    drawRockChunk(g, x, y, spin, 1.18 * (1 - smash * 0.35), c, bodyA, 1)
+    for i = 1, 2 do
+      local delay = 0.08 + (i - 1) * 0.07
+      local u = (t - delay) / 0.62
+      if u > 0.04 and u < 0.98 then
+        local along = math.min(1, u)
+        local side = (i == 1) and 1 or -1
+        local px = ox + dx * along + nx * side * (2.2 + along * 2.6)
+        local py = oy + dy * along - math.sin(along * math.pi) * (3 + i)
+            + ny * side * 0.8
+        drawRockChunk(g, px, py, -spin * (0.8 + i * 0.3),
+          0.52 + i * 0.08, c, bodyA * 0.9, i + 1)
+      end
+    end
+  end
+
+  -- Impact shatter.
+  if smash > 0.02 then
+    local burst = math.min(1, smash)
+    g.setColor(cr, cg, cb, 0.28 * fade * (1 - burst * 0.4))
+    g.ellipse("fill", x, y + 2, 5 + burst * 9, 2.4 + burst * 2.2)
+    for i = 1, 8 do
+      local a = i * 0.85 + (age or 0) * 3
+      local dist = burst * (5 + (i % 4) * 2.2)
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.55 - burst * 3.2
+      local shardSpin = a + burst * 8 + i
+      drawRockChunk(g, px, py, shardSpin,
+        0.38 + (i % 3) * 0.08, c, (0.9 - burst * 0.55) * fade, i)
+    end
+    for i = 1, 6 do
+      local a = i * 1.1 + burst * 4
+      g.setColor(0.86, 0.76, 0.58, (0.55 - burst * 0.35) * fade)
+      g.circle("fill",
+        x + math.cos(a) * burst * (3 + i),
+        y + math.sin(a) * burst * 2.2 - burst * 2,
+        1.1 - burst * 0.4)
+    end
+  end
+end
+
+local EMBER_VARIANTS = { "volley", "hop", "spray", "corkscrew", "pop" }
+
+local function emberFade(t)
+  if t > 0.82 then
+    return 1 - (t - 0.82) / 0.18
+  end
+  return 1
+end
+
+local function emberAxes(x, y, ox, oy)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  return dx, dy, nx, ny, math.atan2(dy, dx) + math.pi * 0.5
+end
+
+local function drawEmberImpact(g, x, y, t, age, fade)
+  if t <= 0.62 then
+    return
+  end
+  local burst = (t - 0.62) / 0.38
+  for i = 1, 5 do
+    local a = i * 1.256 + (age or 0) * 4
+    local dist = burst * (4 + i)
+    drawFlameTongue(g,
+      x + math.cos(a) * dist,
+      y + math.sin(a) * dist * 0.5 - burst * 2,
+      a + math.pi * 0.5, 0.42, (0.7 - burst * 0.5) * fade)
+  end
+end
+
+--- Ember / volley: staggered bouncing flame tongues caster → foe.
+local function drawEmberVolley(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
   local n = 6
   for i = 1, n do
     local delay = (i - 1) * 0.07
@@ -1413,17 +1572,138 @@ local function drawEmberVolley(g, x, y, ox, oy, t, age, c)
       end
     end
   end
-  if t > 0.62 then
-    local burst = (t - 0.62) / 0.38
-    for i = 1, 5 do
-      local a = i * 1.256 + (age or 0) * 4
-      local dist = burst * (4 + i)
-      drawFlameTongue(g,
-        x + math.cos(a) * dist,
-        y + math.sin(a) * dist * 0.5 - burst * 2,
-        a + math.pi * 0.5, 0.42, (0.7 - burst * 0.5) * fade)
+end
+
+--- Ember / hop: two or three bigger fireballs that skip toward the foe.
+local function drawEmberHop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  for i = 1, 3 do
+    local delay = (i - 1) * 0.11
+    local u = (t - delay) / 0.72
+    if u > 0 and u < 1.12 then
+      local along = math.min(1, u)
+      local hops = 1 + (i % 2)
+      local bounce = math.abs(math.sin(along * math.pi * hops)) * (7.5 + i * 1.6)
+      local side = ((i % 2) * 2 - 1) * (1.4 + along * 1.2)
+      local px = ox + dx * along + nx * side
+      local py = oy + dy * along + ny * side * 0.25 - bounce
+      local flick = 0.8 + 0.2 * math.abs(math.sin((age or 0) * 18 + i))
+      local a = fade * (u < 1 and 1 or (1.12 - u) / 0.12) * flick
+      drawFlameTongue(g, px, py, heading + math.sin((age or 0) * 8 + i) * 0.4,
+        (0.95 + (i % 3) * 0.12) * flick, a)
+      -- Spark kick at each bounce peak.
+      local peak = math.sin(along * math.pi * hops)
+      if peak > 0.82 then
+        for k = 1, 3 do
+          local aa = (age or 0) * 12 + i * 2 + k
+          drawFlameTongue(g,
+            px + math.cos(aa) * 2.2,
+            py + 1.2,
+            aa, 0.32, a * 0.7)
+        end
+      end
+      g.setColor(1, 0.78, 0.22, 0.4 * a)
+      g.circle("fill", px, py + 1.4, 1.4)
     end
   end
+end
+
+--- Ember / spray: a widening fan of small tongues.
+local function drawEmberSpray(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  for i = 1, 9 do
+    local delay = (i - 1) * 0.035
+    local u = (t - delay) / 0.62
+    if u > 0 and u < 1.1 then
+      local along = math.min(1, u)
+      local lane = (i - 5) / 4
+      local spread = along * 7.2 * lane
+      local loft = -along * 2.4 - math.sin(along * math.pi) * 2.1
+      local px = ox + dx * along + nx * spread
+      local py = oy + dy * along + ny * spread * 0.3 + loft
+      local flick = 0.78 + 0.22 * math.abs(math.sin((age or 0) * 20 + i))
+      local a = fade * (u < 1 and 0.9 or (1.1 - u) / 0.1) * flick
+      drawFlameTongue(g, px, py,
+        heading + lane * 0.55 + math.sin((age or 0) * 11 + i) * 0.25,
+        (0.48 + (i % 3) * 0.1) * flick, a)
+    end
+  end
+end
+
+--- Ember / corkscrew: tongues spiral around the flight line.
+local function drawEmberCorkscrew(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  for i = 1, 5 do
+    local delay = (i - 1) * 0.06
+    local u = (t - delay) / 0.70
+    if u > 0 and u < 1.12 then
+      local along = math.min(1, u)
+      local ang = along * math.pi * 4.2 + i * 1.256 + (age or 0) * 6
+      local rad = 2.2 + along * 3.4
+      local px = ox + dx * along + nx * math.cos(ang) * rad
+      local py = oy + dy * along + ny * math.sin(ang) * rad * 0.55
+          - math.sin(along * math.pi) * 2.4
+      local flick = 0.8 + 0.2 * math.abs(math.sin((age or 0) * 15 + i))
+      local a = fade * (u < 1 and 0.95 or (1.12 - u) / 0.12) * flick
+      drawFlameTongue(g, px, py, ang + math.pi * 0.5, 0.7 * flick, a)
+      if along > 0.08 then
+        g.setColor(1, 0.7, 0.16, 0.35 * a)
+        g.circle("fill",
+          ox + dx * math.max(0, along - 0.06),
+          oy + dy * math.max(0, along - 0.06),
+          1.0)
+      end
+    end
+  end
+end
+
+--- Ember / pop: a few tongues that burst into sparks mid-flight.
+local function drawEmberPop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  for i = 1, 4 do
+    local delay = (i - 1) * 0.09
+    local u = (t - delay) / 0.68
+    if u > 0 and u < 1.16 then
+      local along = math.min(1, u)
+      local side = ((i % 2) * 2 - 1)
+      local px = ox + dx * along + nx * side * (1.6 + along)
+      local py = oy + dy * along - math.sin(along * math.pi) * (4.5 + i)
+      local flick = 0.82 + 0.18 * math.abs(math.sin((age or 0) * 14 + i))
+      local a = fade * (u < 1 and 0.95 or (1.16 - u) / 0.16) * flick
+      if along < 0.52 then
+        drawFlameTongue(g, px, py, heading + side * 0.2, 0.88 * flick, a)
+      else
+        local pop = (along - 0.52) / 0.48
+        for k = 1, 4 do
+          local aa = i * 1.7 + k * 1.4 + (age or 0) * 5
+          local dist = pop * (3.5 + k)
+          drawFlameTongue(g,
+            px + math.cos(aa) * dist,
+            py + math.sin(aa) * dist * 0.55 - pop * 2.4,
+            aa + math.pi * 0.5, 0.4 + (1 - pop) * 0.2,
+            a * (0.85 - pop * 0.4))
+        end
+      end
+    end
+  end
+end
+
+local function drawEmberCast(g, x, y, ox, oy, t, age, c, variant)
+  if type(x) ~= "number" or type(y) ~= "number"
+      or type(ox) ~= "number" or type(oy) ~= "number" then
+    return
+  end
+  local dx, dy, nx, ny, heading = emberAxes(x, y, ox, oy)
+  local fade = emberFade(t)
+  variant = variant or "volley"
+  if variant == "hop" then
+    drawEmberHop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  elseif variant == "spray" then
+    drawEmberSpray(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  elseif variant == "corkscrew" then
+    drawEmberCorkscrew(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  elseif variant == "pop" then
+    drawEmberPop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  else
+    drawEmberVolley(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  end
+  drawEmberImpact(g, x, y, t, age, fade)
 end
 
 --- Flamethrower: dense jet of flame tongues along the stream.
@@ -1618,6 +1898,105 @@ local function drawGustWind(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Sand Attack: scuff at the caster's feet, then a grit cone into the face.
+local function drawSandSpray(g, x, y, ox, oy, t, age, c)
+  if type(x) ~= "number" or type(y) ~= "number"
+      or type(ox) ~= "number" or type(oy) ~= "number" then
+    return
+  end
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local cr, cg, cb = c[1] or 0.82, c[2] or 0.62, c[3] or 0.32
+  local fade = 1
+  if t > 0.82 then
+    fade = 1 - (t - 0.82) / 0.18
+  end
+  local kick = math.min(1, t / 0.16)
+  local travel = math.max(0, math.min(1, (t - 0.06) / 0.52))
+  local face = math.max(0, (t - 0.48) / 0.52)
+
+  -- Scuff / dust ring at the kicker's feet.
+  g.setColor(cr, cg, cb, 0.28 * kick * fade)
+  g.ellipse("fill", ox, oy + 5, 5 + kick * 7, 2.2 + kick * 1.6)
+  g.setColor(0.42, 0.28, 0.12, 0.45 * kick * fade)
+  g.setLineWidth(1)
+  g.ellipse("line", ox, oy + 5, 4 + kick * 6, 1.8 + kick * 1.2)
+  for i = 1, 6 do
+    local a = (age or 0) * 8 + i * 1.1
+    local rise = kick * (3 + i * 0.8) - math.sin(a) * 0.8
+    g.setColor(cr * 0.85, cg * 0.8, cb * 0.7, (0.65 - i * 0.06) * kick * fade)
+    g.circle("fill",
+      ox + math.cos(a) * (2.5 + kick * 3),
+      oy + 4 - rise,
+      1.1 + (i % 3) * 0.4)
+  end
+
+  -- Widening grit cone along the path.
+  local n = 16
+  for i = 1, n do
+    local u = travel - (i - 1) * 0.035
+    if u > 0.02 and u < 1.08 then
+      local along = math.min(1, u)
+      local spread = 1.2 + along * 7.5
+      local side = ((i % 2) * 2 - 1)
+      local wobble = math.sin((age or 0) * 14 + i * 1.7) * spread * 0.55
+      local loft = -along * 5 - math.sin(along * math.pi) * 2.4
+          + math.sin((age or 0) * 11 + i) * 1.2
+      local px = ox + dx * along + nx * (side * spread * 0.42 + wobble)
+      local py = oy + dy * along + ny * wobble * 0.35 + loft
+      local grain = 0.7 + (i % 4) * 0.45
+      local a = (0.85 - along * 0.25) * fade * (u < 1 and 1 or (1.08 - u) / 0.08)
+      g.setColor(cr, cg, cb, a)
+      g.circle("fill", px, py, grain)
+      if i % 3 == 0 then
+        g.setColor(0.95, 0.86, 0.62, a * 0.7)
+        g.circle("fill", px - 0.35, py - 0.4, grain * 0.4)
+      elseif i % 3 == 1 then
+        g.setColor(0.48, 0.32, 0.14, a * 0.8)
+        g.circle("fill", px + 0.3, py + 0.2, grain * 0.55)
+      end
+    end
+  end
+
+  -- A few heavier pebbles in the stream.
+  for i = 1, 5 do
+    local u = travel - 0.04 - i * 0.07
+    if u > 0.05 and u < 0.98 then
+      local side = ((i % 2) * 2 - 1)
+      local px = ox + dx * u + nx * side * (2 + u * 4)
+      local py = oy + dy * u - 2 - math.sin(u * math.pi) * 3
+      g.setColor(0.52, 0.36, 0.16, 0.9 * fade)
+      g.circle("fill", px, py, 1.6 + (i % 2) * 0.4)
+      g.setColor(0.72, 0.54, 0.28, 0.7 * fade)
+      g.circle("fill", px - 0.4, py - 0.5, 0.7)
+    end
+  end
+
+  -- Face puff: sand in the eyes.
+  if face > 0.02 then
+    local burst = math.min(1, face)
+    g.setColor(cr, cg, cb, 0.32 * fade * (1 - burst * 0.35))
+    g.ellipse("fill", x, y - 3, 7 + burst * 8, 4.2 + burst * 3)
+    g.setColor(0.92, 0.82, 0.55, 0.22 * fade)
+    g.ellipse("fill", x - 1, y - 5, 4 + burst * 3, 2.2)
+    for i = 1, 8 do
+      local a = i * 0.85 + (age or 0) * 6
+      local dist = 2 + burst * (5 + i % 3)
+      g.setColor(cr, cg, cb, (0.8 - burst * 0.4) * fade)
+      g.circle("fill",
+        x + math.cos(a) * dist,
+        y - 3 + math.sin(a) * dist * 0.55 - burst * 2,
+        1.15 + (i % 3) * 0.3)
+    end
+  end
+end
+
 local function drawMove(g, p, x, y)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "orb"
@@ -1718,10 +2097,7 @@ local function drawMove(g, p, x, y)
   end
 
   if glitz == "rock" then
-    g.setColor(c[1], c[2], c[3], 0.95)
-    g.polygon("fill", x - 3, y + 2, x + 3, y + 2, x + 2, y - 3, x - 2, y - 2)
-    g.setColor(1, 1, 1, 0.35)
-    g.polygon("fill", x - 1, y - 1, x + 2, y - 2, x + 1, y)
+    drawRockChunk(g, x, y, (p.age or 0) * 11, 1.08, c, 0.95, 1)
     return
   end
 
@@ -2131,13 +2507,19 @@ Projectiles.registerStyle("swift", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
 end)
 Projectiles.registerStyle("ember", function(g, p, x, y, ox, oy, t, c, glitz)
-    drawEmberVolley(g, x, y, ox, oy, t, p.age, c)
+    drawEmberCast(g, x, y, ox, oy, t, p.age, c, p.variant)
+end)
+Projectiles.registerStyle("rock", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawRockThrow(g, x, y, ox, oy, t, p.age, c)
 end)
 Projectiles.registerStyle("blast", function(g, p, x, y, ox, oy, t, c, glitz)
     drawFireBlast(g, x, y, ox, oy, t, p.age, c, p.radius)
 end)
 Projectiles.registerStyle("gust", function(g, p, x, y, ox, oy, t, c, glitz)
     drawGustWind(g, x, y, ox, oy, t, p.age, c)
+end)
+Projectiles.registerStyle("sand", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawSandSpray(g, x, y, ox, oy, t, p.age, c)
 end)
 Projectiles.registerStyle("spiral", function(g, p, x, y, ox, oy, t, c, glitz)
     if glitz == "psy" then
@@ -2684,6 +3066,8 @@ local function spawn(session, spec)
     style = spec.style,
     glitz = spec.glitz,
     radius = spec.radius,
+    variant = spec.variant,
+    seed = spec.seed,
     onDone = spec.onDone,
     pinTip = spec.pinTip,
     followSide = spec.followSide,
@@ -3103,14 +3487,30 @@ function Projectiles.move(session, side, opts)
   end
 
   if fx.style == "ember" then
+    local roll = (love and love.math and love.math.random) or math.random
+    local variant = EMBER_VARIANTS[roll(#EMBER_VARIANTS)]
     return spawn(session, {
       kind = "effect",
       style = "ember",
       glitz = fx.glitz or "flame",
       sx = sx, sy = sy, ex = ex, ey = ey,
-      duration = fx.duration or 0.48,
-      arc = fx.arc or 12,
+      duration = fx.duration or 0.54,
+      arc = fx.arc or 13,
       color = fx.color,
+      variant = variant,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "rock" then
+    return spawn(session, {
+      kind = "effect",
+      style = "rock",
+      glitz = fx.glitz or "rock",
+      sx = sx, sy = sy, ex = ex, ey = ey,
+      duration = fx.duration or 0.58,
+      arc = fx.arc or 22,
+      color = fx.color or TYPE_COLORS.ROCK,
       onDone = opts.onDone,
     })
   end
@@ -3138,6 +3538,21 @@ function Projectiles.move(session, side, opts)
       duration = fx.duration or 0.56,
       arc = 6,
       color = fx.color,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "sand" then
+    return spawn(session, {
+      kind = "effect",
+      style = "sand",
+      glitz = fx.glitz or "grit",
+      sx = sx, sy = sy, ex = ex, ey = (ey or 0) - 4,
+      duration = fx.duration or 0.58,
+      arc = 5,
+      color = fx.color,
+      pinTip = true,
+      followSide = (side == "player") and "enemy" or "player",
       onDone = opts.onDone,
     })
   end
@@ -3224,22 +3639,31 @@ function Projectiles.status(session, side, opts)
   local ex, ey = center(session, targetEnt)
   if not ex then return nil end
 
-  if fx.style == "seed" or fx.style == "sonic" or fx.style == "ray" then
+  if fx.style == "seed" or fx.style == "sonic" or fx.style == "ray"
+      or fx.style == "sand" then
     local sx, sy = center(session, fromEnt)
     if not sx then
       sx, sy = ex, ey
     end
     local color = fx.color
     if not color then
-      color = (fx.style == "seed") and TYPE_COLORS.GRASS or TYPE_COLORS[fx.moveType]
+      color = (fx.style == "seed") and TYPE_COLORS.GRASS
+          or (fx.style == "sand") and TYPE_COLORS.GROUND
+          or TYPE_COLORS[fx.moveType]
+    end
+    local faceY = ey
+    if fx.style == "sand" then
+      faceY = ey - 4
     end
     return spawn(session, {
       kind = "effect",
       style = fx.style,
-      glitz = fx.glitz or (fx.style == "seed" and "leaf" or nil),
-      sx = sx, sy = sy, ex = ex, ey = ey,
-      duration = fx.duration or (fx.style == "seed" and 0.58 or 0.62),
-      arc = (fx.style == "seed") and 8 or 0,
+      glitz = fx.glitz or (fx.style == "seed" and "leaf"
+          or (fx.style == "sand" and "grit" or nil)),
+      sx = sx, sy = sy, ex = ex, ey = faceY,
+      duration = fx.duration or (fx.style == "seed" and 0.58
+          or (fx.style == "sand" and 0.58 or 0.62)),
+      arc = (fx.style == "seed" and 8) or (fx.style == "sand" and 5) or 0,
       color = color,
       pinTip = foeTarget and true or nil,
       followSide = foeTarget and ((side == "player") and "enemy" or "player") or nil,

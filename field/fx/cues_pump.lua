@@ -135,6 +135,7 @@ return function(Cues)
                 vanish = cue.vanish,
                 again = cue.again,
                 isCalled = cue.isCalled,
+                clash = cue.clash == true,
                 releaseStrike = cue.releaseStrike,
                 followUp = cue.followUp,
                 via = "pump",

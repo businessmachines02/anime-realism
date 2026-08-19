@@ -151,11 +151,11 @@ remain on their normal presentation path.
   them attached through camera movement and bobbing.
 - During FIELD message beats, the large bottom panel yields to small speech
   popups. Common narration is condensed (`DEFENSE DOWN!`, `CRITICAL!`,
-  `MISSED!`) and speaker bubbles track the active Pokémon. Lines auto-advance
-  about every 1.5 seconds so fights flow into the move HUD. On the
+  `MISSED!`) and speaker bubbles track the active Pokémon.   Lines auto-advance after a short beat; **A** skips the hold so you can
+  click through. On the
   move list or diamond (end of turn), **B** pauses into FIGHT / PKMN / ITEM / RUN.
   Pick FIGHT to return to moves. During dialogue, **B** pauses a
-  toast; **A** or **B** again resumes.
+  toast; **A** skips to the next line (or resumes if paused).
 - FIELD move selection defaults to a compact full-width **classic** 2×2
   (U/R/L/D labels, D-pad moves the cursor, **A** confirms). **MOVE HUD**
   `DIAMOND` keeps the compass layout and instant-casts on that direction.

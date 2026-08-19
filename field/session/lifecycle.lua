@@ -47,6 +47,7 @@ Lifecycle.CAMERA_UI_BIAS_Y = 18
 -- Soft pan toward the live fight (higher = snappier). Nudges / off-screen catch-up use a faster rate.
 Lifecycle.CAMERA_PAN_RATE = 4.2
 Lifecycle.CAMERA_PAN_NUDGE_RATE = 10
+Lifecycle.CAMERA_PAN_CLASH_RATE = 18
 Lifecycle.CAMERA_PAN_CATCHUP_RATE = 7.2
 Lifecycle.CAMERA_PAN_SNAP = 1.25
 -- Follow battlers this far past the surveyed envelope (wander / knockback slack).
@@ -849,7 +850,8 @@ function Lifecycle.focusCamera(battle, dt)
     local looking = (session.mouseLookT or 0) > 0
     local nudgeT = session.cameraNudgeT or 0
     if not looking and nudgeT > 0 and session.cameraNudgeX and session.cameraNudgeY then
-        local blend = math.min(1, nudgeT / 0.35) * 0.55
+        local punch = session._clashPunch == true
+        local blend = math.min(1, nudgeT / 0.35) * (punch and 0.88 or 0.55)
         focusX = focusX * (1 - blend) + session.cameraNudgeX * blend
         focusY = focusY * (1 - blend) + session.cameraNudgeY * blend
     end
@@ -895,6 +897,8 @@ function Lifecycle.focusCamera(battle, dt)
         local rate = Lifecycle.CAMERA_PAN_RATE
         if looking then
             rate = Lifecycle.CAMERA_LOOK_RATE
+        elseif session._clashPunch then
+            rate = Lifecycle.CAMERA_PAN_CLASH_RATE
         elseif nudgeT > 0 then
             rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
         elseif offscreen then
@@ -2032,6 +2036,17 @@ function Lifecycle.tick(battle, dt, deps)
     -- Present clock: never gate on waitingUI, stack top, or current.auto.
     deps = deps or session._deps
     dt = dt or (1 / 60)
+    local wallDt = dt
+    -- Counter clash: slow the present clock (~0.4× for 0.2s). Wall time
+    -- still drains the hold so close-gap deadlines do not freeze.
+    if (session._clashSlowT or 0) > 0 then
+        session._clashSlowT = session._clashSlowT - wallDt
+        if session._clashSlowT <= 0 then
+            session._clashSlowT = nil
+        else
+            dt = wallDt * 0.42
+        end
+    end
 
     if session._playerSendLockT then
         session._playerSendLockT = session._playerSendLockT - dt
@@ -2078,6 +2093,9 @@ function Lifecycle.tick(battle, dt, deps)
 
     if session.cameraNudgeT and session.cameraNudgeT > 0 then
         session.cameraNudgeT = math.max(0, session.cameraNudgeT - dt)
+        if session.cameraNudgeT <= 0 then
+            session._clashPunch = nil
+        end
     end
 
     local playerMon, enemyMon = session.playerMon, session.enemyMon

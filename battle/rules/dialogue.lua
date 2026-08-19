@@ -270,8 +270,8 @@ function Dialogue.wrapBattleSay(methodName)
             bare, isEnemy = Dialogue.stripEnemyPrefix(mon)
         end
         local reaction, buffs, trackTemp, fieldCue = hostCall("reactionAfterMoveAnnounce", self, text)
-        local dodgeWhiff
-        text, dodgeWhiff = hostCall("rewriteDodgeMissText", self, text)
+        local dodgeWhiff, dodgeSide
+        text, dodgeWhiff, dodgeSide = hostCall("rewriteDodgeMissText", self, text)
         if dodgeWhiff == nil and type(text) == "table" then
             -- host forgot to return two values
         end
@@ -310,7 +310,10 @@ function Dialogue.wrapBattleSay(methodName)
             local item = self.queue and self.queue[self.nextInsert]
             if type(item) == "table" and item.text then
                 item.arDodgeWhiff = true
-                hostCall("tagFieldCue", item, "player", "dodge")
+                -- Who dodged, not who attacked — a foe Ember-whiff must not
+                -- make the player flinch before the foe's next swing.
+                hostCall("tagFieldCue", item,
+                    dodgeSide == "enemy" and "enemy" or "player", "dodge")
             end
         end
         if dodgeWhiff then
@@ -370,7 +373,17 @@ function Dialogue.wrapBattleSay(methodName)
                 elseif damaging then
                     local foeLine, foeBuffs, foeTrack, failNarr =
                         hostCall("tryFoeCoverReaction", self, moveDef)
-                    if foeLine then
+                    if failNarr then
+                        -- Trainer still shouted dodge; the mon did not make it.
+                        -- Do not overlap a dodge pose / DODGE chip on the fail.
+                        if foeLine then
+                            hostCall("enqueueNpcFlavor", self, foeLine,
+                                strings().CALLOUT_AUTO_DELAY or 55)
+                        end
+                        hostCall("enqueueAutoAfter", self, failNarr,
+                            strings().CALLOUT_AUTO_DELAY or 55, "narrator",
+                            { side = "enemy", kind = "hit" })
+                    elseif foeLine then
                         local foeBubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
                         local foeCue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
                         hostCall("enqueueReactWithAttack", self, foeLine,
@@ -388,11 +401,6 @@ function Dialogue.wrapBattleSay(methodName)
                                 hostCall("enqueueBraceAnim", self, { foe = true })
                             end
                         end
-                    end
-                    if failNarr then
-                        hostCall("enqueueAutoAfter", self, failNarr,
-                            strings().CALLOUT_AUTO_DELAY or 55, "narrator",
-                            { side = "enemy", kind = "hit" })
                     end
                 end
             end

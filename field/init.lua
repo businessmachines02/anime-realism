@@ -344,6 +344,16 @@ return function(env)
     return modRef.options:get("status_chips") ~= false
   end
 
+  function FBV.armStatusChip(battle, side, text)
+    if not FBV.statusChipsEnabled(mod) then
+      return false
+    end
+    if UI and type(UI.armStatusChip) == "function" then
+      return UI.armStatusChip(battle, side, text)
+    end
+    return false
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true

@@ -62,7 +62,7 @@ return function(Cues)
                     ent._closeStrikeWait = nil
                 elseif H.fieldMenuOpen(session._battle) then
                     -- REACT! / other menus: keep the walk parked.
-                elseif not Cues.stillWalkingToPad(ent) and Cues.inMeleeReach(ent, foe) then
+                elseif Cues.inMeleeReach(ent, foe) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.punch")
                 elseif ent._closeStrikeArmedAt
                     and (t - ent._closeStrikeArmedAt) > 2.8

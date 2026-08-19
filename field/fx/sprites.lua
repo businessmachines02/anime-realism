@@ -4,6 +4,8 @@
 -- if that mod is loaded, else GSC follower sheets. GSC / HGSS / POKEDEX
 -- pull from PokePCFollowers, FOLLOWERS_EX, or Wilds packs. FIELD always
 -- uses animated 2D overworld art — never voxel mon meshes.
+-- Dodge poses (issue #66) live here: type/speed pick a style, then tick
+-- offsets + squash/fade/afterimages on the live sprite.
 
 local Sprites = {}
 
@@ -247,7 +249,7 @@ local function wildsExportSheet(mod, game, species, style, shiny, surface)
   return nil
 end
 
-function Sprites.isWaterType(battler, game, species)
+local function typesFromBattler(battler, game, species)
   local types = battler and battler.curTypes
   if (not types or #types == 0) and battler and battler.def then
     types = battler.def.types
@@ -266,12 +268,300 @@ function Sprites.isWaterType(battler, game, species)
     local def = poke and poke[species]
     types = def and def.types
   end
+  local out = {}
   for i = 1, #(types or {}) do
-    if tostring(types[i] or ""):upper() == "WATER" then
+    local name = tostring(types[i] or ""):upper()
+    if name ~= "" then
+      out[#out + 1] = name
+    end
+  end
+  return out
+end
+
+function Sprites.monTypes(source, game, species)
+  if source and source._battleBattler then
+    return typesFromBattler(
+      source._battleBattler,
+      game or source._spriteGame,
+      species or source._spriteSpecies)
+  end
+  return typesFromBattler(source, game, species)
+end
+
+function Sprites.hasType(source, want, game, species)
+  want = tostring(want or ""):upper()
+  local types = Sprites.monTypes(source, game, species)
+  for i = 1, #types do
+    if types[i] == want then
       return true
     end
   end
   return false
+end
+
+function Sprites.isWaterType(battler, game, species)
+  return Sprites.hasType(battler, "WATER", game, species)
+end
+
+-- Sprite-shift + type-flavored dodges (issue #66). Generics cycle so two
+-- Normal-types in a row do not always hop the same way.
+local DODGE_GENERIC = { "sidehop", "duck", "lean", "hop" }
+local DODGE_ROUND = {
+  VOLTORB = true, ELECTRODE = true, JIGGLYPUFF = true, WIGGLYTUFF = true,
+  CHANSEY = true, DITTO = true, KOFFING = true, WEEZING = true,
+  SHELLDER = true, CLOYSTER = true, EXEGGCUTE = true,
+  MAGNEMITE = true, MAGNETON = true,
+}
+local DODGE_DUR = {
+  sidehop = 0.38, duck = 0.40, lean = 0.42, hop = 0.42, blur = 0.28,
+  lift = 0.46, phase = 0.44, splash = 0.40, burrow = 0.42, static = 0.34,
+}
+
+local function dodgeRand()
+  return (love and love.math and love.math.random) or math.random
+end
+
+local function dodgeSpecies(ent)
+  if not ent then
+    return ""
+  end
+  local id = ent._spriteSpecies or ent.species
+  if not id and ent._battleBattler then
+    local battler = ent._battleBattler
+    local mon = battler.mon
+    id = battler.species
+        or (mon and (mon.pokemon or mon.id or mon.species or mon.name))
+  end
+  return tostring(id or ""):upper():gsub("%s+", "_")
+end
+
+local function dodgeSpeed(ent)
+  local stats = ent and ent._closeGapStats
+  if type(stats) ~= "table" then
+    local battler = ent and ent._battleBattler
+    stats = battler and (battler.stats or (battler.mon and battler.mon.stats))
+  end
+  if type(stats) == "table" then
+    return tonumber(stats.speed or stats.spe) or 0
+  end
+  return 0
+end
+
+function Sprites.pickDodgeStyle(ent)
+  if Sprites.hasType(ent, "GHOST") then
+    return "phase"
+  end
+  if Sprites.hasType(ent, "ELECTRIC") then
+    return "static"
+  end
+  if Sprites.hasType(ent, "FLYING") then
+    return "lift"
+  end
+  if Sprites.hasType(ent, "WATER") then
+    return "splash"
+  end
+  if Sprites.hasType(ent, "BUG") or Sprites.hasType(ent, "GRASS") then
+    return "burrow"
+  end
+  if dodgeSpeed(ent) >= 100 then
+    return "blur"
+  end
+  if DODGE_ROUND[dodgeSpecies(ent)] then
+    return "hop"
+  end
+  local n = (ent and ent._dodgeGenericN or 0) + 1
+  if ent then
+    ent._dodgeGenericN = n
+  end
+  return DODGE_GENERIC[((n - 1) % #DODGE_GENERIC) + 1]
+end
+
+local function clearDodgePose(self)
+  self.drawScale = 1
+  self.drawScaleX = nil
+  self.drawScaleY = nil
+  self.drawAngle = 0
+  self.drawAlpha = 1
+  self._dodgeTrail = nil
+  self._dodgeBits = nil
+  self._dodgeFxSpawned = nil
+  self._dodgeStyle = nil
+end
+
+local function spawnDodgeBits(self, count, color, kind)
+  local rand = dodgeRand()
+  self._dodgeBits = self._dodgeBits or {}
+  local bx = self.basePx or self.px or 0
+  local by = (self.basePy or self.py or 0) + 10
+  for _ = 1, count do
+    self._dodgeBits[#self._dodgeBits + 1] = {
+      kind = kind or "spark",
+      t = 0,
+      life = 0.26 + rand() * 0.14,
+      x = bx + (rand() - 0.5) * 12,
+      y = by + (rand() - 0.5) * 4,
+      vx = (rand() - 0.5) * 52,
+      vy = -14 - rand() * 30,
+      color = color,
+    }
+  end
+end
+
+local function finiteCoord(n, fallback)
+  if type(n) ~= "number" or n ~= n or n == math.huge or n == -math.huge then
+    return fallback
+  end
+  return n
+end
+
+local function voxelFacing(facing)
+  if facing == "up" or facing == "down" or facing == "left" or facing == "right" then
+    return facing
+  end
+  return "down"
+end
+
+local function faceFromDelta(dx, dy)
+  if math.abs(dx or 0) >= math.abs(dy or 0) then
+    return (dx or 0) >= 0 and "right" or "left"
+  end
+  return (dy or 0) >= 0 and "down" or "up"
+end
+
+local function tickDodgeBits(self, dt)
+  local bits = self._dodgeBits
+  if not bits then
+    return
+  end
+  local live = {}
+  for i = 1, #bits do
+    local bit = bits[i]
+    bit.t = bit.t + dt
+    bit.x = bit.x + bit.vx * dt
+    bit.y = bit.y + bit.vy * dt
+    bit.vy = bit.vy + 90 * dt
+    if bit.t < bit.life then
+      live[#live + 1] = bit
+    end
+  end
+  self._dodgeBits = live
+end
+
+--- Extra ox/oy + drawScale/alpha/angle for the live dodge style.
+local function tickDodge(self, dt, towardX, towardY)
+  self.animT = (self.animT or 0) + dt
+  local style = self._dodgeStyle or "sidehop"
+  local dur = DODGE_DUR[style] or 0.38
+  local t = math.min(1, self.animT / dur)
+  local pulse = math.sin(t * math.pi)
+  local tx = self.basePx - (towardX or self.basePx)
+  local ty = self.basePy - (towardY or self.basePy)
+  local len = math.sqrt(tx * tx + ty * ty)
+  local lx, ly = 1, 0
+  local ax, ay = 0, -1
+  if len > 0.1 then
+    lx, ly = -ty / len, tx / len
+    ax, ay = tx / len, ty / len
+    self.facing = faceFromDelta(tx, ty)
+  end
+
+  local ox, oy = 0, 0
+  self.drawScale = 1
+  self.drawScaleX = nil
+  self.drawScaleY = nil
+  self.drawAngle = 0
+  self.drawAlpha = 1
+
+  if style == "duck" then
+    ox = lx * pulse * 5
+    oy = pulse * 7
+    self.drawScaleX = 1 + pulse * 0.22
+    self.drawScaleY = 1 - pulse * 0.42
+  elseif style == "lean" then
+    ox = ax * pulse * 9 + lx * pulse * 4
+    oy = ay * pulse * 4
+    self.drawAngle = (tx >= 0 and 1 or -1) * pulse * 0.38
+  elseif style == "hop" then
+    ox = lx * pulse * 6
+    oy = -pulse * 16
+    local squash = (t < 0.18 or t > 0.82) and 0.18 or -0.10
+    self.drawScaleX = 1 + pulse * squash
+    self.drawScaleY = 1 - pulse * squash
+  elseif style == "blur" then
+    ox = lx * pulse * 18
+    oy = ly * pulse * 18 - pulse * 3
+    self.drawAlpha = 0.82
+    self._walkFrame = (math.floor(self.animT * 18) % 2)
+  elseif style == "lift" then
+    ox = lx * pulse * 7 + math.sin(t * math.pi * 2) * 2
+    oy = -pulse * 18 - math.sin(t * math.pi * 4) * 2.5
+    self.drawScaleY = 1 + math.sin(t * math.pi * 4) * 0.12
+    self._walkFrame = (t < 0.9) and 1 or 0
+  elseif style == "phase" then
+    ox = lx * pulse * 10
+    oy = -pulse * 3
+    self.drawAlpha = 0.18 + 0.62 * (0.5 + 0.5 * math.sin(t * math.pi * 9))
+    self.drawScale = 1 + pulse * 0.06
+  elseif style == "splash" then
+    ox = lx * pulse * 14
+    oy = ly * pulse * 10 - pulse * 3
+    if not self._dodgeFxSpawned then
+      spawnDodgeBits(self, 7, { 0.45, 0.78, 1.0 }, "ripple")
+      spawnDodgeBits(self, 5, { 0.85, 0.95, 1.0 }, "spark")
+      self._dodgeFxSpawned = true
+    end
+  elseif style == "burrow" then
+    ox = lx * pulse * 4
+    oy = pulse * 11
+    self.drawScaleX = 1 + pulse * 0.28
+    self.drawScaleY = 1 - pulse * 0.52
+    if not self._dodgeFxSpawned then
+      spawnDodgeBits(self, 6, { 0.42, 0.32, 0.16 }, "crumb")
+      self._dodgeFxSpawned = true
+    end
+  elseif style == "static" then
+    local snap = 0
+    if t > 0.14 and t < 0.86 then
+      snap = 1
+    end
+    ox = lx * snap * 16 + math.sin(self.animT * 70) * 1.8
+    oy = ly * snap * 10 - snap * 2
+    if t > 0.12 and t < 0.28 then
+      self.drawAlpha = 0.08
+    elseif t > 0.28 and t < 0.42 then
+      self.drawAlpha = 0.35 + math.sin(self.animT * 90) * 0.25
+    end
+    if not self._dodgeFxSpawned then
+      spawnDodgeBits(self, 8, { 1.0, 0.92, 0.25 }, "spark")
+      self._dodgeFxSpawned = true
+    end
+    self._walkFrame = (math.floor(self.animT * 22) % 2)
+  else
+    -- sidehop: classic lateral hop.
+    ox = lx * pulse * 14
+    oy = ly * pulse * 14 - pulse * 4
+    self._walkFrame = (t < 0.85) and 1 or 0
+  end
+
+  if style == "blur" or style == "static" or style == "phase" then
+    local trail = self._dodgeTrail or {}
+    if self.px and self.py then
+      trail[#trail + 1] = { px = self.px, py = self.py }
+      while #trail > 4 do
+        table.remove(trail, 1)
+      end
+    end
+    self._dodgeTrail = trail
+  end
+
+  tickDodgeBits(self, dt)
+
+  if self.animT >= dur then
+    self.anim = "idle"
+    self.animT = 0
+    clearDodgePose(self)
+  end
+  return ox, oy
 end
 
 local function swimPackPath(mod, game, species, shiny)
@@ -362,27 +652,6 @@ end
 local STAND = { down = 0, up = 1, left = 2, right = 2 }
 local WALK = { down = 3, up = 4, left = 5, right = 5 }
 
-local function finiteCoord(n, fallback)
-  if type(n) ~= "number" or n ~= n or n == math.huge or n == -math.huge then
-    return fallback
-  end
-  return n
-end
-
-local function voxelFacing(facing)
-  if facing == "up" or facing == "down" or facing == "left" or facing == "right" then
-    return facing
-  end
-  return "down"
-end
-
-local function faceFromDelta(dx, dy)
-  if math.abs(dx or 0) >= math.abs(dy or 0) then
-    return (dx or 0) >= 0 and "right" or "left"
-  end
-  return (dy or 0) >= 0 and "down" or "up"
-end
-
 local Coords
 do
   local ok, c = pcall(require, "coords")
@@ -393,15 +662,24 @@ end
 
 local function healthRatio(battler)
   local mon = battler and battler.mon
-  local maxHP = mon and mon.stats and tonumber(mon.stats.hp) or 1
-  local hp = tonumber(battler and battler.shownHP) or tonumber(mon and mon.hp) or 0
-  return math.max(0, math.min(1, hp / math.max(1, maxHP)))
+  local maxHP = tonumber(mon and mon.stats and mon.stats.hp) or 1
+  if maxHP < 1 then
+    maxHP = 1
+  end
+  local hp = tonumber(mon and mon.hp)
+  if hp == nil then
+    hp = tonumber(battler and battler.shownHP) or 0
+  end
+  if hp < 0 then
+    hp = 0
+  end
+  return math.max(0, math.min(1, hp / maxHP)), hp, maxHP
 end
 
 local function drawHealthBar(ent, camX, camY)
   if not (ent._battleBattler and love and love.graphics) then return end
   local g = love.graphics
-  local ratio = healthRatio(ent._battleBattler)
+  local ratio, hp = healthRatio(ent._battleBattler)
   local x = math.floor((ent.px or 0) - (camX or 0) + 8.5)
   local y = math.floor((ent.py or 0) - (camY or 0)
     - (ent._fieldBarLift or 8) + 0.5)
@@ -411,6 +689,9 @@ local function drawHealthBar(ent, camX, camY)
   g.setColor(0.94, 0.91, 0.77, 1)
   g.rectangle("fill", x - w / 2 + 1, y + 1, w - 2, 2)
   local fill = math.floor((w - 2) * ratio + 0.5)
+  if hp and hp > 0 and fill < 1 then
+    fill = 1
+  end
   if fill > 0 then
     if ratio <= 0.2 then
       g.setColor(0.82, 0.16, 0.12, 1)
@@ -589,19 +870,73 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
           self._walkFrame or 0, false)
       end
     end
-    local scale = self.drawScale or 1
-    if scale ~= 1 and love and love.graphics then
-      local cx = (self.px or 0) - (camX or 0) + 8
-      local cy = (self.py or 0) - (camY or 0) + 8
-      g = love.graphics
-      g.push()
-      g.translate(cx, cy)
-      g.scale(scale, scale)
-      g.translate(-cx, -cy)
-      drawBody()
-      g.pop()
-    else
-      drawBody()
+    local function drawBodyAt(px, py, scaleX, scaleY, angle, alpha)
+      local savedPx, savedPy = self.px, self.py
+      self.px, self.py = px, py
+      local sx = scaleX or 1
+      local sy = scaleY or sx
+      local ang = angle or 0
+      local a = alpha or 1
+      g = love and love.graphics
+      local need = g and (sx ~= 1 or sy ~= 1 or ang ~= 0 or a < 0.999)
+      if need then
+        local cx = (px or 0) - (camX or 0) + 8
+        local cy = (py or 0) - (camY or 0) + 8
+        -- Uneven scale squashes from the feet (duck / burrow).
+        if math.abs(sx - sy) > 0.01 then
+          cy = cy + 8
+        end
+        g.push()
+        g.translate(cx, cy)
+        if ang ~= 0 then
+          g.rotate(ang)
+        end
+        g.scale(sx, sy)
+        g.translate(-cx, -cy)
+        if a < 0.999 then
+          g.setColor(1, 1, 1, a)
+        end
+        drawBody()
+        if a < 0.999 then
+          g.setColor(1, 1, 1, 1)
+        end
+        g.pop()
+      else
+        drawBody()
+      end
+      self.px, self.py = savedPx, savedPy
+    end
+    local scaleX = self.drawScaleX or self.drawScale or 1
+    local scaleY = self.drawScaleY or self.drawScale or 1
+    local trail = self._dodgeTrail
+    if g and trail then
+      for i = 1, #trail do
+        local ghost = trail[i]
+        local fade = 0.18 + 0.12 * (i / #trail)
+        drawBodyAt(ghost.px, ghost.py, scaleX, scaleY, self.drawAngle or 0, fade)
+      end
+    end
+    drawBodyAt(self.px, self.py, scaleX, scaleY, self.drawAngle or 0,
+      self.drawAlpha or 1)
+    if g and self._dodgeBits then
+      for i = 1, #self._dodgeBits do
+        local bit = self._dodgeBits[i]
+        local u = 1 - bit.t / bit.life
+        if u > 0 then
+          local c = bit.color or { 1, 1, 1 }
+          local x = bit.x - (camX or 0)
+          local y = bit.y - (camY or 0)
+          g.setColor(c[1], c[2], c[3], 0.8 * u)
+          if bit.kind == "ripple" then
+            local r = 2.5 + (1 - u) * 9
+            g.setLineWidth(1)
+            g.ellipse("line", x, y, r, r * 0.42)
+          else
+            g.circle("fill", x, y, bit.kind == "crumb" and 1.15 or 1.45)
+          end
+        end
+      end
+      g.setColor(1, 1, 1, 1)
     end
     g = love and love.graphics
     if g and type(g.transformPoint) == "function" then
@@ -702,8 +1037,29 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._emerging = nil
       self.drawScale = (kind == "aloft") and 0.26 or 0.2
       self._vanishKind = (kind == "aloft") and "fly" or "dig"
+    elseif kind == "dodge" then
+      self.drawScale = 1
+      self._dodgeStyle = Sprites.pickDodgeStyle(self)
+      self._dodgeTrail = {}
+      self._dodgeBits = {}
+      self._dodgeFxSpawned = nil
+      self.drawAngle = 0
+      self.drawAlpha = 1
+      self.drawScaleX, self.drawScaleY = nil, nil
+    elseif kind == "counter" then
+      self.drawScale = 1
+      self._dodgeTrail = {}
+      self._dodgeBits = nil
+      self.drawAngle = 0
+      self.drawAlpha = 1
+      self.drawScaleX, self.drawScaleY = nil, nil
     else
       self.drawScale = 1
+      self.drawScaleX, self.drawScaleY = nil, nil
+      self.drawAngle = 0
+      self.drawAlpha = 1
+      self._dodgeTrail = nil
+      self._dodgeBits = nil
     end
   end
 
@@ -760,11 +1116,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.basePx, self.basePy = tpx, tpy
         -- Leave _walkFrame alone so idle / cast can keep animating in place.
       else
-        local step = math.min(dist, (self.stepSpeed or 56) * dt)
+        local gait = self.stepSpeed or 56
+        local step = math.min(dist, gait * dt)
         self.basePx = self.basePx + dx / dist * step
         self.basePy = self.basePy + dy / dist * step
         self.facing = faceFromDelta(dx, dy)
-        self._walkT = (self._walkT or 0) + dt
+        self._walkT = (self._walkT or 0) + dt * (gait / 56)
         self._walkFrame = (math.floor(self._walkT * 8) % 2)
       end
     end
@@ -965,28 +1322,51 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
       end
-    elseif anim == "dodge" then
-      -- Lateral sidestep away from the foe (not a full cover tuck).
+    elseif anim == "counter" then
+      -- Rebound into the foe: overlap a frame, then ease off. Trail reads as speed.
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.38)
-      local pulse = math.sin(t * math.pi)
-      local tx = self.basePx - (towardX or self.basePx)
-      local ty = self.basePy - (towardY or self.basePy)
+      local dur = 0.32
+      local t = math.min(1, self.animT / dur)
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
       local len = math.sqrt(tx * tx + ty * ty)
-      local px, py = -ty, tx
       if len > 0.1 then
-        px, py = -ty / len, tx / len
+        tx, ty = tx / len, ty / len
         self.facing = faceFromDelta(tx, ty)
       else
-        px, py = 1, 0
+        tx, ty = 0, -1
       end
-      ox = ox + px * pulse * 14
-      oy = oy + py * pulse * 14 - pulse * 4
-      self._walkFrame = (t < 0.85) and 1 or 0
-      if self.animT >= 0.38 then
+      local lunge
+      if t < 0.22 then
+        lunge = (t / 0.22)
+      elseif t < 0.42 then
+        lunge = 1
+      else
+        lunge = 1 - (t - 0.42) / 0.58 * 0.35
+      end
+      ox = ox + tx * lunge * 20
+      oy = oy + ty * lunge * 20 - math.sin(math.min(1, t / 0.42) * math.pi) * 6
+      self.drawScale = 1 + lunge * 0.12
+      self._walkFrame = 1
+      if self.px and self.py then
+        local trail = self._dodgeTrail or {}
+        trail[#trail + 1] = { px = self.px, py = self.py }
+        while #trail > 5 do
+          table.remove(trail, 1)
+        end
+        self._dodgeTrail = trail
+      end
+      if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
+        self.drawScale = 1
+        self._dodgeTrail = nil
       end
+    elseif anim == "dodge" then
+      -- Style is picked in play("dodge"): type, speed, round body, or cycle.
+      local dx, dy = tickDodge(self, dt, towardX, towardY)
+      ox = ox + dx
+      oy = oy + dy
     elseif anim == "brace" then
       -- Brief crouch / settle into a guard.
       self.animT = (self.animT or 0) + dt
