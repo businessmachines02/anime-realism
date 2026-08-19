@@ -1,17 +1,34 @@
--- Field battle — map fight with BattleState as a transparent stack host.
+-- Field battle — stealing the normal "go to a battle screen" path.
 --
--- When BATTLE STAGE = FIELD:
---   • no BattleTransition wipe / white episode
---   • BattleState is pushed with isOpaque=false / bgMode=world (map shows under)
---   • push BattleState itself (not a proxy) so gen3_battle_ui sees
---     stack:top() == battle and draws move names / command menu
---   • overworld stays underneath (frozen — not top of stack)
---   • finish pops the battle host only; no white battleReturn fade
+-- Vanilla Pokémon fights wipe the map, push a BattleState, and come back
+-- through a white fade. FIELD fights stay on the overworld. This file is
+-- the trap door: when the game tries to start a normal battle, we catch
+-- that call, stamp flags on the BattleState, push it as a transparent
+-- overlay, and lock the player so they cannot walk away.
 --
--- Flags stamped on the battle: _arAnimeField, _arFieldCombat, _arFieldStandalone.
--- hooks.lua and ui.lua key off those to suppress classic chrome.
-
+-- Look here when a fight still does the white wipe, the player can walk
+-- during combat, flee/win leaves you stuck, or the engine queue runs
+-- (Harden, next turn) while someone is still walking in to punch.
+--
+-- This file does not place mons, pan the camera, or play move FX.
+-- That is lifecycle.lua (the fight on the map) and field/fx/cues.lua.
+--
+-- What Intercept.install wraps:
+--   OverworldState.pushBattle   skip the wipe; push a see-through battle
+--   OverworldState.handleInput  ignore walking while a FIELD fight is up
+--   BattleState.enter           stage the cast once (lifecycle.begin)
+--   BattleState.finish          restore the map, then pop the overlay
+--   BattleState.animationsOn    kill classic wavy-screen / pic FX
+--   BattleState.updateQueue     pause the engine while close-the-gap walks
+--
+-- Flags stamped on the battle (hooks.lua and ui.lua key off these):
+--   _arAnimeField, _arFieldCombat, _arFieldStandalone, _arFieldHost
+--
 local Intercept = {}
+
+-- ---------------------------------------------------------------------------
+-- Stamp the battle as a FIELD fight and freeze the overworld player.
+-- ---------------------------------------------------------------------------
 
 local function armBattle(battle)
   if not battle then
@@ -74,6 +91,10 @@ local function clearOwBattle(battle)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Pop the battle overlay so the overworld is top of the stack again.
+-- Used by finishStandalone after the map has been restored.
+-- ---------------------------------------------------------------------------
 local function popFieldHost(battle)
   local host = battle and battle._arFieldHost or battle
   local game = battle and battle.game
@@ -113,6 +134,9 @@ local function popFieldHost(battle)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Pay Day, restore the map, pop the overlay, unlock the player.
+-- ---------------------------------------------------------------------------
 local function finishStandalone(self, fbv, _mod)
   if self.payDay and self.result == "win" then
     self.game.save.money = self.game.save.money + self.payDay
@@ -215,6 +239,10 @@ local function finishStandalone(self, fbv, _mod)
   return false
 end
 
+-- ---------------------------------------------------------------------------
+-- White-out: the party is already empty when the fight would start.
+-- Skip mounting FIELD; show the blackout text and go home.
+-- ---------------------------------------------------------------------------
 local function handleDeadEnter(self)
   local name = self.game.save.player.name
   self.result = "lose"
@@ -256,6 +284,10 @@ local function handleDeadEnter(self)
       .. Strings("%s blacked\nout!", name), blackedOut))
 end
 
+-- ---------------------------------------------------------------------------
+-- Install the wraps. Safe to call more than once (_arFbv* guards).
+-- Each wrap below is one "instead of vanilla, do this."
+-- ---------------------------------------------------------------------------
 function Intercept.install(FBV, mod)
   Intercept._fbv = FBV
   Intercept._mod = mod
@@ -266,6 +298,9 @@ function Intercept.install(FBV, mod)
     return false
   end
 
+  -- pushBattle: the overworld is about to start a fight.
+  -- If FIELD should own it, skip the wipe, freeze the player, enter once,
+  -- and push the real BattleState as a transparent overlay (map still shows).
   if not OverworldState._arFbvPushBattle then
     local orig = OverworldState.pushBattle
     function OverworldState:pushBattle(battle)
@@ -330,7 +365,8 @@ function Intercept.install(FBV, mod)
     OverworldState._arFbvPushBattle = true
   end
 
-  -- Safety: if OW somehow updates while a field fight is pinned, do not walk.
+  -- handleInput: if the overworld somehow ticks during a FIELD fight,
+  -- do not let the player walk.
   if type(OverworldState.handleInput) == "function" and not OverworldState._arFbvInput then
     local origInput = OverworldState.handleInput
     function OverworldState:handleInput(...)
@@ -344,10 +380,9 @@ function Intercept.install(FBV, mod)
 
     local okBS, BattleState = pcall(require, "src.battle.BattleState")
   if okBS and type(BattleState) == "table" then
-    -- FIELD already paints its own cues. Classic AnimPlayer still starts
-    -- those rows (wavy screen, palettes, pic FX) after ANY damaging move
-    -- and can kill Love with no error screen. Shared path, not per-move.
-    -- Ball/send-out anims still run via BALL_ANIMS.
+    -- animationsOn: FIELD paints its own cues. Classic AnimPlayer still
+    -- starts wavy-screen / palette / pic FX after damaging moves and can
+    -- kill Love with no error screen. Ball / send-out anims still run.
     if type(BattleState.animationsOn) == "function"
         and not BattleState._arFbvAnimOff then
       local origAnimsOn = BattleState.animationsOn
@@ -362,6 +397,9 @@ function Intercept.install(FBV, mod)
       end
       BattleState._arFbvAnimOff = true
     end
+    -- enter: stamp FIELD flags, then after the real enter, call
+    -- lifecycle.begin once to put mons on the map. stack:push may call
+    -- enter again — _arFieldEnterDone stops a second "send out" prompt.
     if type(BattleState.enter) == "function" and not BattleState._arFbvEnterArm then
       local origEnter = BattleState.enter
       function BattleState:enter(...)
@@ -393,6 +431,8 @@ function Intercept.install(FBV, mod)
       BattleState._arFbvEnterArm = true
     end
 
+    -- finish: win / lose / flee. Run our teardown (lifecycle.finish + pop)
+    -- instead of the white battleReturn fade. A second finish is a no-op.
     if type(BattleState.finish) == "function" and not BattleState._arFbvFinish then
       local origFinish = BattleState.finish
       function BattleState:finish(...)
@@ -409,6 +449,12 @@ function Intercept.install(FBV, mod)
       BattleState._arFbvFinish = true
     end
 
+    -- updateQueue: the engine's "next message / next move" clock.
+    -- Two holds:
+    --   1. A menu is on top (REACT, party) — wait, but keep presenting.
+    --   2. Close-the-gap is still walking — do not start Harden / the next
+    --      turn until the punch. Instant-move confirm is allowed through
+    --      once so damage can be stashed.
     if type(BattleState.updateQueue) == "function" and not BattleState._arFbvUQ then
       local origUQ = BattleState.updateQueue
       local function noteUQ(battle, tag, ...)

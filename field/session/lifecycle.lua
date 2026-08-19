@@ -1,24 +1,44 @@
--- Field battle — session owner (Idle → Armed → Staging → Live → Finishing).
+-- Field battle — the fight's life on the map, from start to teardown.
 --
--- One weak-keyed session per BattleState. Lifecycle owns:
---   begin/finish   survey envelope, stage battlers onto the live map, camera
---   tick/tickPresent  bob, steps, projectiles, trainer dodge-aside
---   syncMons / stagePlayerMon / capture / despawn / watchHpFaint
---   onTurnStarted / onTurnEnded / react (cue fan-out)
+-- Intercept.lua steals the "go to a battle screen" call. This file is
+-- what happens after that: put two Pokémon on the grass, keep the camera
+-- on them, bob and walk every frame (even under menus), swap them when
+-- someone faints, then put the overworld back the way it was.
 --
--- States:
---   Idle       no active FIELD session
---   Armed      battle flagged; waiting to stage onto the map
---   Staging    cast entities / grid / arena props being placed
---   Live       combat presentation running on the overworld
---   Finishing  teardown; restore camera / strip FIELD actors
+-- One session per BattleState (weak table: if the battle dies, we go with
+-- it). States, in order:
 --
--- Present clock (tickPresent) advances anims even while BattleState menus
--- own input, so idle bob does not freeze under the move diamond.
+--   Idle        nothing running
+--   Armed       fight flagged; not on the map yet
+--   Staging     placing trainers, mons, cover, camera
+--   Live        the fight you can see
+--   Finishing   tearing down; restore camera / strip FIELD actors
 --
--- Voxel: never replace ow.entities and never insert nil-sprite floor/cover/
--- projectiles into it. Dramatic Shape calls e:pose() then sprite.def; a nil
--- sprite throws inside Voxel3D.beginScene and leaves the 3D pass wedged.
+-- Two clocks, because menus freeze BattleState:update:
+--   Logic     turns, damage, "play this cue"          (engine queue)
+--   Present   bob, walk frames, FX, camera            (every frame)
+-- tickPresent is the present clock. Call it from anywhere; it dedupes
+-- so idle bob does not freeze under the move diamond.
+--
+-- Where to look (scroll to the matching banner):
+--
+--   EXIT RESTORE       put zoom / voxel / camera / entities back
+--   FOLLOWERS          hide the walking buddy so it is not in the fight
+--   WORLD OVERLAY      floor + cover paint (projectiles live in UI)
+--   SESSION            get / active / liveBattle — find the live fight
+--   CAMERA             pan, mouse peek, keep action on screen
+--   BEGIN              survey the pad, spawn the cast, go Live
+--   MONS               send-out, switch, faint when HP hits 0, capture
+--   IDLE / TRAINERS    roam in place; trainers step off the pad
+--   TURNS / CUES       turn start cleanup; fan a beat out to cues.lua
+--   TICK               every-frame present + logic work
+--   FINISH             restore entities, camera, voxel, followers
+--
+-- Voxel warning: never replace overworld.entities and never insert nil-sprite
+-- floor/cover/projectiles into it. Dramatic Shape calls ent:pose() then
+-- sprite.def; a nil sprite crashes Voxel3D.beginScene and wedges 3D.
+--
+-- This file does not decide how a Tackle looks. That is field/fx/cues.lua.
 
 local Coords = require("coords")
 
@@ -49,7 +69,7 @@ Lifecycle.CAMERA_LOOK_MOVE_PX = 3
 Lifecycle.CAMERA_LOOK_ZONE_INSET = 0.22
 
 -- Weak keys: sessions die with their BattleState without explicit cleanup races.
-local byBattle = setmetatable({}, { __mode = "k" })
+local sessionByBattle = setmetatable({}, { __mode = "k" })
 
 Lifecycle.STATE = {
     Idle = "Idle",
@@ -87,11 +107,16 @@ local function now()
     return 0
 end
 
-local function rr(...)
+local function rand(...)
     local random = (love and love.math and love.math.random) or math.random
     return random(...)
 end
 
+-- ---------------------------------------------------------------------------
+-- EXIT RESTORE — zoom, voxel, camera, entity list.
+-- Used at the end of a fight (and if begin() has to abort). Camera eases
+-- back onto the player instead of snapping; voxel must not bounce through OFF.
+-- ---------------------------------------------------------------------------
 local function restoreZoom(session)
     if session.zoomSaved == nil then
         return
@@ -117,8 +142,8 @@ local function restoreVoxel(session)
         return
     end
     if type(Pipelines.level) == "function" then
-        local okL, level = pcall(Pipelines.level, "voxel")
-        if okL and level == saved then
+        local okLevel, level = pcall(Pipelines.level, "voxel")
+        if okLevel and level == saved then
             return
         end
     end
@@ -127,53 +152,53 @@ end
 
 --- Soft-pan the overworld camera back onto the player after FIELD ends.
 --- Uses OverworldState.cameraPan (offset on top of follow) so the next
---- ow update keeps framing continuous while we ease the offset to zero.
-local function restoreCamera(session, battle, ow)
-    if not (ow and ow.camera and ow.player) then
+--- overworld update keeps framing continuous while we ease the offset to zero.
+local function restoreCamera(session, battle, overworld)
+    if not (overworld and overworld.camera and overworld.player) then
         return
     end
-    local vw, vh = 160, 144
+    local viewW, viewH = 160, 144
     local game = battle and battle.game
-    local ren = game and game.renderer
-    if session and session._vw then
-        vw, vh = session._vw, session._vh or vh
-    elseif ren and type(ren.worldViewSize) == "function" then
-        local ok, a, b = pcall(ren.worldViewSize, ren)
-        if ok and type(a) == "number" then
-            vw, vh = a, b or vh
+    local renderer = game and game.renderer
+    if session and session._viewW then
+        viewW, viewH = session._viewW, session._viewH or viewH
+    elseif renderer and type(renderer.worldViewSize) == "function" then
+        local ok, gotW, gotH = pcall(renderer.worldViewSize, renderer)
+        if ok and type(gotW) == "number" then
+            viewW, viewH = gotW, gotH or viewH
         end
     end
-    local cam = ow.camera
-    local beforeX, beforeY = cam.x, cam.y
-    if type(cam.follow) == "function" then
-        pcall(cam.follow, cam, ow.player.px, ow.player.py, vw, vh)
+    local camera = overworld.camera
+    local beforeX, beforeY = camera.x, camera.y
+    if type(camera.follow) == "function" then
+        pcall(camera.follow, camera, overworld.player.px, overworld.player.py, viewW, viewH)
     else
-        cam.x = (ow.player.px or 0) - vw / 2
-        cam.y = (ow.player.py or 0) - vh / 2
+        camera.x = (overworld.player.px or 0) - viewW / 2
+        camera.y = (overworld.player.py or 0) - viewH / 2
     end
-    local ox = (type(beforeX) == "number") and (beforeX - cam.x) or 0
-    local oy = (type(beforeY) == "number") and (beforeY - cam.y) or 0
+    local offsetX = (type(beforeX) == "number") and (beforeX - camera.x) or 0
+    local offsetY = (type(beforeY) == "number") and (beforeY - camera.y) or 0
     local snap = Lifecycle.CAMERA_PAN_SNAP
-    if (ox * ox + oy * oy) <= snap * snap then
-        ow.cameraPan = nil
+    if (offsetX * offsetX + offsetY * offsetY) <= snap * snap then
+        overworld.cameraPan = nil
         return
     end
-    -- Keep the current framing this frame; ow update will follow+offset.
-    cam.x = beforeX
-    cam.y = beforeY
-    ow.cameraPan = {
-        ox = ox,
-        oy = oy,
+    -- Keep the current framing this frame; overworld update will follow+offset.
+    camera.x = beforeX
+    camera.y = beforeY
+    overworld.cameraPan = {
+        ox = offsetX,
+        oy = offsetY,
         arFieldReturn = true,
     }
 end
 
 --- Ease battle-exit cameraPan toward zero at CAMERA_PAN_RATE.
-function Lifecycle.tickReturnCamera(ow, dt)
-    if not ow then
+function Lifecycle.tickReturnCamera(overworld, dt)
+    if not overworld then
         return false
     end
-    local pan = ow.cameraPan
+    local pan = overworld.cameraPan
     if not (pan and pan.arFieldReturn) then
         return false
     end
@@ -181,73 +206,78 @@ function Lifecycle.tickReturnCamera(ow, dt)
     if useDt > 1 / 15 then
         useDt = 1 / 15
     end
-    local ox, oy = pan.ox or 0, pan.oy or 0
+    local offsetX, offsetY = pan.ox or 0, pan.oy or 0
     local snap = Lifecycle.CAMERA_PAN_SNAP
-    if (ox * ox + oy * oy) <= snap * snap then
-        ow.cameraPan = nil
+    if (offsetX * offsetX + offsetY * offsetY) <= snap * snap then
+        overworld.cameraPan = nil
         return false
     end
     local alpha = 1 - math.exp(-useDt * Lifecycle.CAMERA_PAN_RATE)
-    ox = ox + (0 - ox) * alpha
-    oy = oy + (0 - oy) * alpha
-    if (ox * ox + oy * oy) <= snap * snap then
-        ow.cameraPan = nil
+    offsetX = offsetX + (0 - offsetX) * alpha
+    offsetY = offsetY + (0 - offsetY) * alpha
+    if (offsetX * offsetX + offsetY * offsetY) <= snap * snap then
+        overworld.cameraPan = nil
         return false
     end
-    pan.ox, pan.oy = ox, oy
+    pan.ox, pan.oy = offsetX, offsetY
     -- Scripted pans use frames; keep ours outside that linear ramp.
     pan.frames = nil
     pan.onDone = nil
     return true
 end
 
-local function restoreWorldEntities(session, ow)
+local function restoreWorldEntities(session, overworld)
     -- Same table identity the voxel pass already holds. Strip FIELD actors
     -- (mons / leftover cover) so the live map cast is what it was before.
     local saved = session.savedEntities
     if type(saved) ~= "table" then
-        saved = ow.entities
+        saved = overworld.entities
     end
     if type(saved) ~= "table" then
         return
     end
     for i = #saved, 1, -1 do
-        local e = saved[i]
-        if e and (e._fbv or e._arFieldBattler or e._arFieldCover) then
+        local ent = saved[i]
+        if ent and (ent._fbv or ent._arFieldBattler or ent._arFieldCover) then
             table.remove(saved, i)
         end
     end
-    ow.entities = saved
+    overworld.entities = saved
 end
 
-local function isFieldActor(e)
-    return e ~= nil and (e._fbv or e._arFieldBattler or e._arFieldCover)
+local function isFieldActor(ent)
+    return ent ~= nil and (ent._fbv or ent._arFieldBattler or ent._arFieldCover)
 end
 
+-- ---------------------------------------------------------------------------
+-- FOLLOWERS — the Pokémon walking behind you on the overworld.
+-- Dramatic Shape still poses hidden entities, so we take them out of the
+-- live list for the fight and put them back on finish.
+-- ---------------------------------------------------------------------------
 --- Party follower / trailer walking behind the player. Must leave the live
 --- entity list (DS pose() ignores `hidden`) while the FIELD battler is out.
-function Lifecycle.isOverworldFollower(e, player, foe)
-    if not e or e == player or e == foe or isFieldActor(e) then
+function Lifecycle.isOverworldFollower(ent, player, foe)
+    if not ent or ent == player or ent == foe or isFieldActor(ent) then
         return false
     end
-    if e._arFieldParked == true then
+    if ent._arFieldParked == true then
         return true
     end
-    if e.isFollower == true or e.follower == true or e.wildsFollower == true
-        or e.pikachuFollower == true or e.pokepcTrailer == true
-        or e.usingFollowerSprite == true then
+    if ent.isFollower == true or ent.follower == true or ent.wildsFollower == true
+        or ent.pikachuFollower == true or ent.pokepcTrailer == true
+        or ent.usingFollowerSprite == true then
         return true
     end
-    if e.id == "pikachu" or e.id == "follower" then
+    if ent.id == "pikachu" or ent.id == "follower" then
         return true
     end
-    if e._pokepcFollowerSpecies ~= nil or e._wildsFollowerSpecies ~= nil then
+    if ent._pokepcFollowerSpecies ~= nil or ent._wildsFollowerSpecies ~= nil then
         return true
     end
-    local def = e.sprite and e.sprite.def
-    local sid = def and def.id
-    return sid == "SPRITE_PIKACHU" or sid == "SPRITE_POKEPC_MON"
-        or sid == "SPRITE_PLAYER_POKEMON"
+    local def = ent.sprite and ent.sprite.def
+    local spriteId = def and def.id
+    return spriteId == "SPRITE_PIKACHU" or spriteId == "SPRITE_POKEPC_MON"
+        or spriteId == "SPRITE_PLAYER_POKEMON"
 end
 
 local function alreadyParked(session, ent)
@@ -263,78 +293,83 @@ local function alreadyParked(session, ent)
     return false
 end
 
-function Lifecycle.parkOverworldFollowers(session, ow)
-    if not (session and ow and type(ow.entities) == "table") then
+function Lifecycle.parkOverworldFollowers(session, overworld)
+    if not (session and overworld and type(overworld.entities) == "table") then
         return
     end
     session.parkedFollowers = session.parkedFollowers or {}
-    local list = ow.entities
-    local player = ow.player
+    local entities = overworld.entities
+    local player = overworld.player
     local foe = session.foe
-    local lead = nil
-    local okPF, PF = pcall(require, "src.world.PikachuFollower")
-    if okPF and PF and type(PF.current) == "function" then
-        local okC, npc = pcall(PF.current, ow)
-        if okC then
-            lead = npc
+    local leadFollower = nil
+    local okFollowerMod, PikachuFollower = pcall(require, "src.world.PikachuFollower")
+    if okFollowerMod and PikachuFollower and type(PikachuFollower.current) == "function" then
+        local okCurrent, npc = pcall(PikachuFollower.current, overworld)
+        if okCurrent then
+            leadFollower = npc
         end
     end
-    for i = #list, 1, -1 do
-        local e = list[i]
+    for i = #entities, 1, -1 do
+        local ent = entities[i]
         -- Never park the live FIELD cast. PikachuFollower.current() can
         -- return the wild/enemy sprite once our send-out is on the map.
-        if e and e ~= player and e ~= foe
-            and e ~= session.playerMon and e ~= session.enemyMon
-            and not isFieldActor(e)
-            and (e == lead or Lifecycle.isOverworldFollower(e, player, foe)) then
-            e._arFieldParked = true
-            e.hidden = true
-            e.frozen = true
-            e.moving = false
-            if not alreadyParked(session, e) then
-                table.insert(session.parkedFollowers, 1, { ent = e, index = i })
+        if ent and ent ~= player and ent ~= foe
+            and ent ~= session.playerMon and ent ~= session.enemyMon
+            and not isFieldActor(ent)
+            and (ent == leadFollower or Lifecycle.isOverworldFollower(ent, player, foe)) then
+            ent._arFieldParked = true
+            ent.hidden = true
+            ent.frozen = true
+            ent.moving = false
+            if not alreadyParked(session, ent) then
+                table.insert(session.parkedFollowers, 1, { ent = ent, index = i })
             end
-            table.remove(list, i)
+            table.remove(entities, i)
         end
     end
 end
 
-function Lifecycle.restoreOverworldFollowers(session, ow)
+function Lifecycle.restoreOverworldFollowers(session, overworld)
     local parked = session and session.parkedFollowers
-    if type(parked) ~= "table" or not (ow and type(ow.entities) == "table") then
+    if type(parked) ~= "table" or not (overworld and type(overworld.entities) == "table") then
         return
     end
     table.sort(parked, function(a, b)
         return (a.index or 1) < (b.index or 1)
     end)
-    local list = ow.entities
+    local entities = overworld.entities
     for i = 1, #parked do
-        local e = parked[i].ent
-        if e then
-            e._arFieldParked = nil
-            e.hidden = false
-            e.frozen = false
+        local ent = parked[i].ent
+        if ent then
+            ent._arFieldParked = nil
+            ent.hidden = false
+            ent.frozen = false
             local found = false
-            for j = 1, #list do
-                if list[j] == e then
+            for j = 1, #entities do
+                if entities[j] == ent then
                     found = true
                     break
                 end
             end
             if not found then
-                local idx = parked[i].index or (#list + 1)
-                if idx < 1 then
-                    idx = 1
-                elseif idx > #list + 1 then
-                    idx = #list + 1
+                local index = parked[i].index or (#entities + 1)
+                if index < 1 then
+                    index = 1
+                elseif index > #entities + 1 then
+                    index = #entities + 1
                 end
-                table.insert(list, idx, e)
+                table.insert(entities, index, ent)
             end
         end
     end
     session.parkedFollowers = nil
 end
 
+-- ---------------------------------------------------------------------------
+-- WORLD OVERLAY — grass/cover on the map canvas.
+-- Projectiles and HP bars paint from the battle UI overlay, not here,
+-- so they survive 3D/world draw overrides. Also stores bubble anchors.
+-- ---------------------------------------------------------------------------
 --- Floor / cover on the world canvas. Projectiles + HP paint from UI.draw on
 --- the battle overlay (world→UI mapped) so they survive 3D/world overrides.
 --- Also records UI-space anchors on each battler for speech bubbles.
@@ -343,50 +378,50 @@ function Lifecycle.drawWorldOverlay(battle)
     if not (session and session.live) then
         return
     end
-    local ow = battle and battle.game and battle.game.overworld
-    local cam = ow and ow.camera
-    if not cam then
+    local overworld = battle and battle.game and battle.game.overworld
+    local camera = overworld and overworld.camera
+    if not camera then
         return
     end
-    local camX, camY = cam.x or 0, cam.y or 0
+    local cameraX, cameraY = camera.x or 0, camera.y or 0
     if session.floor and type(session.floor.draw) == "function" then
-        session.floor:draw(camX, camY)
+        session.floor:draw(cameraX, cameraY)
     end
     local covers = session.covers
     if type(covers) == "table" then
         for i = 1, #covers do
             local prop = covers[i]
             if prop and not prop.hidden and type(prop.draw) == "function" then
-                prop:draw(camX, camY)
+                prop:draw(cameraX, cameraY)
             end
         end
     end
     -- Stash UI-canvas anchors for speech bubbles (battle overlay is 160×144).
     local deps = session._deps
-    local ren = battle.game and battle.game.renderer
+    local renderer = battle.game and battle.game.renderer
     local Coords = deps and deps.Coords
     local function stampAnchor(ent)
         if not ent or ent.hidden or ent._removed then
             return
         end
         local lift = ent._fieldBarLift or 10
-        local wx = (ent.px or 0) - camX + 8
-        local wy = (ent.py or 0) - camY - lift
-        ent._fieldWorldX, ent._fieldWorldY = wx, wy
+        local worldX = (ent.px or 0) - cameraX + 8
+        local worldY = (ent.py or 0) - cameraY - lift
+        ent._fieldWorldX, ent._fieldWorldY = worldX, worldY
         if Coords and type(Coords.worldViewToUi) == "function" then
-            local ux, uy = Coords.worldViewToUi(wx, wy, ren)
-            ent._fieldScreenX, ent._fieldScreenY = ux, uy
+            local uiX, uiY = Coords.worldViewToUi(worldX, worldY, renderer)
+            ent._fieldScreenX, ent._fieldScreenY = uiX, uiY
         else
-            ent._fieldScreenX, ent._fieldScreenY = wx, wy
+            ent._fieldScreenX, ent._fieldScreenY = worldX, worldY
         end
     end
     stampAnchor(session.playerMon)
     stampAnchor(session.enemyMon)
     stampAnchor(session.foe)
-    -- Battlers that were kept off ow.entities (no voxel-safe sprite.def) still
+    -- Battlers that were kept off overworld.entities (no voxel-safe sprite.def) still
     -- need a 2D stamp so send-out is visible without aborting the 3D pass.
     local function onOwList(ent)
-        local ents = ow and ow.entities
+        local ents = overworld and overworld.entities
         if not (ent and type(ents) == "table") then
             return false
         end
@@ -405,75 +440,84 @@ function Lifecycle.drawWorldOverlay(battle)
             return
         end
         if type(ent.draw) == "function" then
-            ent:draw(camX, camY)
+            ent:draw(cameraX, cameraY)
         end
     end
     drawBattler(session.playerMon)
     drawBattler(session.enemyMon)
     if deps and deps.Spectators and type(deps.Spectators.draw) == "function" then
-        pcall(deps.Spectators.draw, session, camX, camY, ren)
+        pcall(deps.Spectators.draw, session, cameraX, cameraY, renderer)
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- SESSION — find the live fight for this BattleState.
+-- sessionByBattle is weak-keyed: if the battle is garbage-collected, we go too.
+-- ---------------------------------------------------------------------------
 function Lifecycle.get(battle)
-    return battle and byBattle[battle] or nil
+    return battle and sessionByBattle[battle] or nil
 end
 
 function Lifecycle.active(battle)
-    local s = Lifecycle.get(battle)
-    return s ~= nil and s.live == true and s.state == Lifecycle.STATE.Live
+    local session = Lifecycle.get(battle)
+    return session ~= nil and session.live == true and session.state == Lifecycle.STATE.Live
 end
 
+-- ---------------------------------------------------------------------------
+-- CAMERA — keep the fight on screen.
+-- Soft-pan between the two mons, peek when the mouse moves, clamp to the
+-- surveyed envelope, restore onto the player when FIELD ends.
+-- ---------------------------------------------------------------------------
 local function cameraViewSize(session, game)
-    local vw, vh = 160, 144
-    local ren = game and game.renderer
-    if ren and type(ren.worldViewSize) == "function" then
-        local ok, a, b = pcall(ren.worldViewSize, ren)
-        if ok and type(a) == "number" then
-            vw, vh = a, b or vh
+    local viewW, viewH = 160, 144
+    local renderer = game and game.renderer
+    if renderer and type(renderer.worldViewSize) == "function" then
+        local ok, gotW, gotH = pcall(renderer.worldViewSize, renderer)
+        if ok and type(gotW) == "number" then
+            viewW, viewH = gotW, gotH or viewH
         end
-    elseif session and session._vw then
-        vw, vh = session._vw, session._vh or vh
+    elseif session and session._viewW then
+        viewW, viewH = session._viewW, session._viewH or viewH
     end
     if session then
-        session._vw, session._vh = vw, vh
+        session._viewW, session._viewH = viewW, viewH
     end
-    return vw, vh
+    return viewW, viewH
 end
 
 --- Peek distance in world pixels for this view. 56px at 160×144; scales up
 --- so a wide mobile world pass pans the same fraction of the screen.
-function Lifecycle.mouseLookSpan(vw, vh)
+function Lifecycle.mouseLookSpan(viewW, viewH)
     local base = Lifecycle.CAMERA_LOOK_SPAN or 56
-    vw = tonumber(vw) or 160
-    vh = tonumber(vh) or 144
-    if vw < 1 then
-        vw = 160
+    viewW = tonumber(viewW) or 160
+    viewH = tonumber(viewH) or 144
+    if viewW < 1 then
+        viewW = 160
     end
-    if vh < 1 then
-        vh = 144
+    if viewH < 1 then
+        viewH = 144
     end
-    return base * (vw / 160), base * (vh / 144)
+    return base * (viewW / 160), base * (viewH / 144)
 end
 
 --- Invert Camera:follow / fallback top-left so we can seed a pan from the live view.
-local function readCameraFocus(cam, vw, vh)
-    if not cam or type(cam.x) ~= "number" or type(cam.y) ~= "number" then
+local function readCameraFocus(camera, viewW, viewH)
+    if not camera or type(camera.x) ~= "number" or type(camera.y) ~= "number" then
         return nil, nil
     end
-    if type(cam.follow) == "function" then
+    if type(camera.follow) == "function" then
         -- Camera:follow(px, py) uses player-centric offsets (see src/render/Camera.lua).
-        return cam.x + (vw / 2 - 16), cam.y + (vh / 2 - 8)
+        return camera.x + (viewW / 2 - 16), camera.y + (viewH / 2 - 8)
     end
-    return cam.x + vw / 2, cam.y + vh / 2
+    return camera.x + viewW / 2, camera.y + viewH / 2
 end
 
-local function applyCameraFocus(cam, fx, fy, vw, vh)
-    if type(cam.follow) == "function" then
-        cam:follow(fx, fy, vw, vh)
+local function applyCameraFocus(camera, focusX, focusY, viewW, viewH)
+    if type(camera.follow) == "function" then
+        camera:follow(focusX, focusY, viewW, viewH)
     else
-        cam.x = fx - vw / 2
-        cam.y = fy - vh / 2
+        camera.x = focusX - viewW / 2
+        camera.y = focusY - viewH / 2
     end
 end
 
@@ -529,10 +573,10 @@ end
 --- envelope so knockback / cover / wander cannot drag the camera off-map.
 local function liveActionFocus(session)
     local grid = session and session.grid
-    local env = envelopeRectPx(session)
+    local envelopePx = envelopeRectPx(session)
     local function envelopeMid()
-        if env then
-            return env.midX, env.midY
+        if envelopePx then
+            return envelopePx.midX, envelopePx.midY
         end
         return (session.midX or 0) * 16 + 8, (session.midY or 0) * 16 + 8
     end
@@ -543,53 +587,54 @@ local function liveActionFocus(session)
         return envelopeMid()
     end
 
-    local pts = {}
+    local battlerPoints = {}
     local function add(ent)
         local x, y = battlerFocusPx(ent, grid)
         if x then
-            pts[#pts + 1] = { x = x, y = y }
+            battlerPoints[#battlerPoints + 1] = { x = x, y = y }
         end
     end
     add(session.playerMon)
     add(session.enemyMon)
-    if #pts == 0 then
+    if #battlerPoints == 0 then
         return envelopeMid()
     end
-    local sx, sy = 0, 0
-    for i = 1, #pts do
-        sx = sx + pts[i].x
-        sy = sy + pts[i].y
+    local sumX, sumY = 0, 0
+    for i = 1, #battlerPoints do
+        sumX = sumX + battlerPoints[i].x
+        sumY = sumY + battlerPoints[i].y
     end
-    local fx, fy = sx / #pts, sy / #pts
-    if env then
-        fx = clamp(fx, env.minX, env.maxX)
-        fy = clamp(fy, env.minY, env.maxY)
+    local focusX, focusY = sumX / #battlerPoints, sumY / #battlerPoints
+    if envelopePx then
+        focusX = clamp(focusX, envelopePx.minX, envelopePx.maxX)
+        focusY = clamp(focusY, envelopePx.minY, envelopePx.maxY)
     end
-    return fx, fy, pts
+    return focusX, focusY, battlerPoints
 end
 
-local function viewTopLeft(cam, focusX, focusY, vw, vh)
-    if cam and type(cam.x) == "number" and type(cam.y) == "number" then
-        return cam.x, cam.y
+local function viewTopLeft(camera, focusX, focusY, viewW, viewH)
+    if camera and type(camera.x) == "number" and type(camera.y) == "number" then
+        return camera.x, camera.y
     end
-    if cam and type(cam.follow) == "function" then
-        return focusX - (vw / 2 - 16), focusY - (vh / 2 - 8)
+    if camera and type(camera.follow) == "function" then
+        return focusX - (viewW / 2 - 16), focusY - (viewH / 2 - 8)
     end
-    return focusX - vw / 2, focusY - vh / 2
+    return focusX - viewW / 2, focusY - viewH / 2
 end
 
-local function actionLeavesView(pts, cam, focusX, focusY, vw, vh)
-    if not pts or #pts == 0 then
+local function actionLeavesView(battlerPoints, camera, focusX, focusY, viewW, viewH)
+    if not battlerPoints or #battlerPoints == 0 then
         return false
     end
-    local camX, camY = viewTopLeft(cam, focusX, focusY, vw, vh)
-    local mx = Lifecycle.CAMERA_EDGE_MARGIN_X or 22
-    local mt = Lifecycle.CAMERA_EDGE_MARGIN_TOP or 16
-    local mb = Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM or 54
-    for i = 1, #pts do
-        local sx = pts[i].x - camX
-        local sy = pts[i].y - camY
-        if sx < mx or sx > vw - mx or sy < mt or sy > vh - mb then
+    local cameraX, cameraY = viewTopLeft(camera, focusX, focusY, viewW, viewH)
+    local marginX = Lifecycle.CAMERA_EDGE_MARGIN_X or 22
+    local marginTop = Lifecycle.CAMERA_EDGE_MARGIN_TOP or 16
+    local marginBottom = Lifecycle.CAMERA_EDGE_MARGIN_BOTTOM or 54
+    for i = 1, #battlerPoints do
+        local screenX = battlerPoints[i].x - cameraX
+        local screenY = battlerPoints[i].y - cameraY
+        if screenX < marginX or screenX > viewW - marginX
+            or screenY < marginTop or screenY > viewH - marginBottom then
             return true
         end
     end
@@ -617,22 +662,22 @@ local function windowSize()
 end
 
 --- Cursor as a -1..1 offset from the window center (right/down positive).
-function Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
-    sw = tonumber(sw) or 0
-    sh = tonumber(sh) or 0
-    if sw < 1 or sh < 1 then
+function Lifecycle.mouseLookFromWindow(mouseX, mouseY, screenW, screenH)
+    screenW = tonumber(screenW) or 0
+    screenH = tonumber(screenH) or 0
+    if screenW < 1 or screenH < 1 then
         return 0, 0
     end
-    local nx = ((tonumber(mx) or 0) / sw) * 2 - 1
-    local ny = ((tonumber(my) or 0) / sh) * 2 - 1
-    return clamp(nx, -1, 1), clamp(ny, -1, 1)
+    local lookX = ((tonumber(mouseX) or 0) / screenW) * 2 - 1
+    local lookY = ((tonumber(mouseY) or 0) / screenH) * 2 - 1
+    return clamp(lookX, -1, 1), clamp(lookY, -1, 1)
 end
 
 --- Inner viewport used for look-around while the on-screen pad is visible.
-function Lifecycle.mouseLookInZone(mx, my, sw, sh)
-    sw = tonumber(sw) or 0
-    sh = tonumber(sh) or 0
-    if sw < 1 or sh < 1 then
+function Lifecycle.mouseLookInZone(mouseX, mouseY, screenW, screenH)
+    screenW = tonumber(screenW) or 0
+    screenH = tonumber(screenH) or 0
+    if screenW < 1 or screenH < 1 then
         return false
     end
     local inset = Lifecycle.CAMERA_LOOK_ZONE_INSET or 0.22
@@ -641,9 +686,9 @@ function Lifecycle.mouseLookInZone(mx, my, sw, sh)
     elseif inset > 0.45 then
         inset = 0.45
     end
-    local nx = (tonumber(mx) or 0) / sw
-    local ny = (tonumber(my) or 0) / sh
-    return nx >= inset and nx <= (1 - inset) and ny >= inset and ny <= (1 - inset)
+    local fracX = (tonumber(mouseX) or 0) / screenW
+    local fracY = (tonumber(mouseY) or 0) / screenH
+    return fracX >= inset and fracX <= (1 - inset) and fracY >= inset and fracY <= (1 - inset)
 end
 
 local touchControlsCache
@@ -652,54 +697,54 @@ local function getTouchControls()
     if touchControlsCache ~= nil then
         return touchControlsCache ~= false and touchControlsCache or nil
     end
-    local ok, TC = pcall(require, "src.core.TouchControls")
-    if ok and type(TC) == "table" then
-        touchControlsCache = TC
-        return TC
+    local ok, TouchControls = pcall(require, "src.core.TouchControls")
+    if ok and type(TouchControls) == "table" then
+        touchControlsCache = TouchControls
+        return TouchControls
     end
     touchControlsCache = false
     return nil
 end
 
 function Lifecycle.touchOverlayVisible()
-    local TC = getTouchControls()
-    if not (TC and type(TC.visible) == "function") then
+    local TouchControls = getTouchControls()
+    if not (TouchControls and type(TouchControls.visible) == "function") then
         return false
     end
-    local ok, vis = pcall(TC.visible, TC)
+    local ok, vis = pcall(TouchControls.visible, TouchControls)
     return ok and vis == true
 end
 
-function Lifecycle.touchControlAt(mx, my)
-    local TC = getTouchControls()
-    if not TC then
+function Lifecycle.touchControlAt(mouseX, mouseY)
+    local TouchControls = getTouchControls()
+    if not TouchControls then
         return false
     end
-    if type(TC.visible) == "function" then
-        local okVis, vis = pcall(TC.visible, TC)
-        if not (okVis and vis == true) then
+    if type(TouchControls.visible) == "function" then
+        local okVisible, vis = pcall(TouchControls.visible, TouchControls)
+        if not (okVisible and vis == true) then
             return false
         end
     end
     -- A finger already claimed by the overlay must not pan, even if the
     -- sampled point has drifted a few pixels off the glyph.
-    if TC.dpadTouch ~= nil then
+    if TouchControls.dpadTouch ~= nil then
         return true
     end
-    if type(TC.held) == "table" and next(TC.held) ~= nil then
+    if type(TouchControls.held) == "table" and next(TouchControls.held) ~= nil then
         return true
     end
-    if type(TC.hitTest) ~= "function" then
+    if type(TouchControls.hitTest) ~= "function" then
         return false
     end
-    local ok, hit = pcall(TC.hitTest, TC, tonumber(mx) or 0, tonumber(my) or 0)
+    local ok, hit = pcall(TouchControls.hitTest, TouchControls, tonumber(mouseX) or 0, tonumber(mouseY) or 0)
     return ok and hit ~= nil
 end
 
 --- Desktop: any window point. Touch overlay: inner zone, never on a pad hit.
-function Lifecycle.mouseLookAllowed(mx, my, sw, sh, opts)
+function Lifecycle.mouseLookAllowed(mouseX, mouseY, screenW, screenH, opts)
     opts = opts or {}
-    if opts.touchHit == true or Lifecycle.touchControlAt(mx, my) then
+    if opts.touchHit == true or Lifecycle.touchControlAt(mouseX, mouseY) then
         return false
     end
     local constrained = opts.touchConstrained
@@ -709,41 +754,41 @@ function Lifecycle.mouseLookAllowed(mx, my, sw, sh, opts)
     if not constrained then
         return true
     end
-    return Lifecycle.mouseLookInZone(mx, my, sw, sh)
+    return Lifecycle.mouseLookInZone(mouseX, mouseY, screenW, screenH)
 end
 
 --- Tests / input hook: hold a look offset until the idle timer elapses.
-function Lifecycle.noteMouseLook(session, nx, ny, hold)
+function Lifecycle.noteMouseLook(session, lookX, lookY, hold)
     if not session then
         return
     end
-    session.mouseLookNx = clamp(tonumber(nx) or 0, -1, 1)
-    session.mouseLookNy = clamp(tonumber(ny) or 0, -1, 1)
+    session.mouseLookX = clamp(tonumber(lookX) or 0, -1, 1)
+    session.mouseLookY = clamp(tonumber(lookY) or 0, -1, 1)
     session.mouseLookT = hold or Lifecycle.CAMERA_LOOK_HOLD or 0.45
 end
 
 --- Arm look-around from a window-space move. Returns true when a peek starts.
-function Lifecycle.tryMouseLook(session, mx, my, sw, sh, dx, dy, opts)
+function Lifecycle.tryMouseLook(session, mouseX, mouseY, screenW, screenH, dx, dy, opts)
     if not session then
         return false
     end
-    local eps = Lifecycle.CAMERA_LOOK_MOVE_PX or 3
+    local minMovePx = Lifecycle.CAMERA_LOOK_MOVE_PX or 3
     dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
-    if (dx * dx + dy * dy) < (eps * eps) then
+    if (dx * dx + dy * dy) < (minMovePx * minMovePx) then
         return false
     end
-    sw, sh = tonumber(sw) or 0, tonumber(sh) or 0
-    if sw < 1 or sh < 1 then
-        sw, sh = windowSize()
+    screenW, screenH = tonumber(screenW) or 0, tonumber(screenH) or 0
+    if screenW < 1 or screenH < 1 then
+        screenW, screenH = windowSize()
     end
-    if not sw then
+    if not screenW then
         return false
     end
-    if not Lifecycle.mouseLookAllowed(mx, my, sw, sh, opts) then
+    if not Lifecycle.mouseLookAllowed(mouseX, mouseY, screenW, screenH, opts) then
         return false
     end
-    local nx, ny = Lifecycle.mouseLookFromWindow(mx, my, sw, sh)
-    Lifecycle.noteMouseLook(session, nx, ny)
+    local lookX, lookY = Lifecycle.mouseLookFromWindow(mouseX, mouseY, screenW, screenH)
+    Lifecycle.noteMouseLook(session, lookX, lookY)
     return true
 end
 
@@ -765,21 +810,21 @@ local function sampleMouseLook(session, dt)
             return
         end
     end
-    local ok, mx, my = pcall(love.mouse.getPosition)
-    if not (ok and type(mx) == "number") then
+    local ok, mouseX, mouseY = pcall(love.mouse.getPosition)
+    if not (ok and type(mouseX) == "number") then
         return
     end
-    local sw, sh = windowSize()
-    if not sw then
+    local screenW, screenH = windowSize()
+    if not screenW then
         return
     end
     local lastX, lastY = session._mouseWinX, session._mouseWinY
-    session._mouseWinX, session._mouseWinY = mx, my
+    session._mouseWinX, session._mouseWinY = mouseX, mouseY
     if lastX == nil then
         -- First sample: remember pose, do not look (cursor may sit in a corner).
         return
     end
-    Lifecycle.tryMouseLook(session, mx, my, sw, sh, mx - lastX, my - lastY)
+    Lifecycle.tryMouseLook(session, mouseX, mouseY, screenW, screenH, mouseX - lastX, mouseY - lastY)
 end
 
 function Lifecycle.focusCamera(battle, dt)
@@ -788,9 +833,9 @@ function Lifecycle.focusCamera(battle, dt)
         return
     end
     local game = battle and battle.game
-    local ow = game and game.overworld
-    local cam = ow and ow.camera
-    if not cam then
+    local overworld = game and game.overworld
+    local camera = overworld and overworld.camera
+    if not camera then
         return
     end
 
@@ -800,52 +845,52 @@ function Lifecycle.focusCamera(battle, dt)
     end
     sampleMouseLook(session, useDt)
 
-    local fx, fy, pts = liveActionFocus(session)
+    local focusX, focusY, battlerPoints = liveActionFocus(session)
     local looking = (session.mouseLookT or 0) > 0
-    local nudgeT = session.camNudgeT or 0
-    if not looking and nudgeT > 0 and session.camNudgeX and session.camNudgeY then
-        local w = math.min(1, nudgeT / 0.35) * 0.55
-        fx = fx * (1 - w) + session.camNudgeX * w
-        fy = fy * (1 - w) + session.camNudgeY * w
+    local nudgeT = session.cameraNudgeT or 0
+    if not looking and nudgeT > 0 and session.cameraNudgeX and session.cameraNudgeY then
+        local blend = math.min(1, nudgeT / 0.35) * 0.55
+        focusX = focusX * (1 - blend) + session.cameraNudgeX * blend
+        focusY = focusY * (1 - blend) + session.cameraNudgeY * blend
     end
 
-    local vw, vh = cameraViewSize(session, game)
+    local viewW, viewH = cameraViewSize(session, game)
 
     -- Battle menus occupy the lower screen. Aim the camera below the action so
     -- the compact pad appears in the unobstructed upper viewport.
-    local targetX = fx
-    local targetY = fy + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
+    local targetX = focusX
+    local targetY = focusY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
     if looking then
-        local spanX, spanY = Lifecycle.mouseLookSpan(vw, vh)
-        targetX = targetX + (session.mouseLookNx or 0) * spanX
-        targetY = targetY + (session.mouseLookNy or 0) * spanY
+        local spanX, spanY = Lifecycle.mouseLookSpan(viewW, viewH)
+        targetX = targetX + (session.mouseLookX or 0) * spanX
+        targetY = targetY + (session.mouseLookY or 0) * spanY
         -- Envelope clamp must grow with the view or a phone-sized world pass
         -- eats the peek and the 3D camera looks locked while UI chips slide.
         local pad = Lifecycle.CAMERA_LOOK_CLAMP_PAD or 64
-        local env = envelopeRectPx(session, math.max(pad, spanX, spanY))
-        if env then
-            targetX = clamp(targetX, env.minX, env.maxX)
-            targetY = clamp(targetY, env.minY, env.maxY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y))
+        local envelopePx = envelopeRectPx(session, math.max(pad, spanX, spanY))
+        if envelopePx then
+            targetX = clamp(targetX, envelopePx.minX, envelopePx.maxX)
+            targetY = clamp(targetY, envelopePx.minY, envelopePx.maxY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y))
         end
     end
-    session.camTargetX, session.camTargetY = targetX, targetY
-    session.focusX, session.focusY = fx, fy
+    session.cameraTargetX, session.cameraTargetY = targetX, targetY
+    session.focusX, session.focusY = focusX, focusY
 
-    local cx, cy = session.camFocusX, session.camFocusY
-    if cx == nil or cy == nil then
-        cx, cy = readCameraFocus(cam, vw, vh)
-        if cx == nil or cy == nil then
+    local currentX, currentY = session.cameraFocusX, session.cameraFocusY
+    if currentX == nil or currentY == nil then
+        currentX, currentY = readCameraFocus(camera, viewW, viewH)
+        if currentX == nil or currentY == nil then
             -- No live camera pose to ease from (tests / first bind): settle immediately.
-            cx, cy = targetX, targetY
+            currentX, currentY = targetX, targetY
         end
     end
 
-    local dx, dy = targetX - cx, targetY - cy
+    local dx, dy = targetX - currentX, targetY - currentY
     local dist2 = dx * dx + dy * dy
     local snap = Lifecycle.CAMERA_PAN_SNAP
-    local offscreen = actionLeavesView(pts, cam, cx, cy, vw, vh)
+    local offscreen = actionLeavesView(battlerPoints, camera, currentX, currentY, viewW, viewH)
     if dist2 <= snap * snap then
-        cx, cy = targetX, targetY
+        currentX, currentY = targetX, targetY
     else
         local rate = Lifecycle.CAMERA_PAN_RATE
         if looking then
@@ -856,15 +901,15 @@ function Lifecycle.focusCamera(battle, dt)
             rate = Lifecycle.CAMERA_PAN_CATCHUP_RATE
         end
         local alpha = 1 - math.exp(-useDt * rate)
-        cx = cx + dx * alpha
-        cy = cy + dy * alpha
-        if (targetX - cx) * (targetX - cx) + (targetY - cy) * (targetY - cy) <= snap * snap then
-            cx, cy = targetX, targetY
+        currentX = currentX + dx * alpha
+        currentY = currentY + dy * alpha
+        if (targetX - currentX) * (targetX - currentX) + (targetY - currentY) * (targetY - currentY) <= snap * snap then
+            currentX, currentY = targetX, targetY
         end
     end
 
-    applyCameraFocus(cam, cx, cy, vw, vh)
-    session.camFocusX, session.camFocusY = cx, cy
+    applyCameraFocus(camera, currentX, currentY, viewW, viewH)
+    session.cameraFocusX, session.cameraFocusY = currentX, currentY
 end
 
 function Lifecycle.nudgeCamera(battle, side, seconds)
@@ -878,12 +923,12 @@ function Lifecycle.nudgeCamera(battle, side, seconds)
     end
     local grid = session.grid
     if grid and ent.padU ~= nil then
-        session.camNudgeX, session.camNudgeY = Coords.padCenterPx(grid, ent.padU, ent.padV)
+        session.cameraNudgeX, session.cameraNudgeY = Coords.padCenterPx(grid, ent.padU, ent.padV)
     else
-        session.camNudgeX = (ent.basePx or ent.px or session.focusX or 0) + 8
-        session.camNudgeY = (ent.basePy or ent.py or session.focusY or 0) + 8
+        session.cameraNudgeX = (ent.basePx or ent.px or session.focusX or 0) + 8
+        session.cameraNudgeY = (ent.basePy or ent.py or session.focusY or 0) + 8
     end
-    session.camNudgeT = seconds or 0.4
+    session.cameraNudgeT = seconds or 0.4
 end
 
 function Lifecycle.monScreen(battle, side, Anims)
@@ -945,6 +990,11 @@ local function combatReadyForPlayerReveal(battle)
     return false
 end
 
+-- ---------------------------------------------------------------------------
+-- BEGIN — put the fight on the map.
+-- Survey walkable cells, build the pad grid, spawn trainers/mons/cover,
+-- snapshot voxel/zoom, park followers, then go Live.
+-- ---------------------------------------------------------------------------
 function Lifecycle.begin(battle, mod, deps)
     -- Stage a FIELD session onto the live overworld: survey walkable cells,
     -- build grid/cast/arena props, snapshot voxel so free-roam restores cleanly.
@@ -964,32 +1014,32 @@ function Lifecycle.begin(battle, mod, deps)
     Lifecycle.finish(battle, deps)
 
     local game = battle.game
-    local ow = game and game.overworld
-    local player = ow and ow.player
+    local overworld = game and game.overworld
+    local player = overworld and overworld.player
     if not player then
         return false
     end
 
-    local RD = deps and deps.ReactiveDefense
+    local reactiveDefense = deps and deps.ReactiveDefense
 
-    local foe = Layout.findFoeTrainer(ow, battle)
-    local fx, fy
+    local foe = Layout.findFoeTrainer(overworld, battle)
+    local foeCellX, foeCellY
     if foe then
-        fx, fy = foe.cellX or 0, foe.cellY or 0
+        foeCellX, foeCellY = foe.cellX or 0, foe.cellY or 0
     else
-        fx, fy = Layout.wildAnchor(player)
+        foeCellX, foeCellY = Layout.wildAnchor(player)
     end
 
     -- plan out the positional elements of the battle field
-    local px, py = player.cellX or 0, player.cellY or 0
-    local plan = Layout.plan(px, py, fx, fy)
+    local playerCellX, playerCellY = player.cellX or 0, player.cellY or 0
+    local plan = Layout.plan(playerCellX, playerCellY, foeCellX, foeCellY)
     plan.hasFoeTrainer = foe ~= nil
 
     -- survey the positional elements
     local envelope = nil
     if Survey and type(Survey.build) == "function" then
-        local okSurvey, result = pcall(Survey.build, ow.map, plan, {
-            entityPools = { ow.entities or {}, ow.npcs or {}, ow.npcPool or {} },
+        local okSurvey, result = pcall(Survey.build, overworld.map, plan, {
+            entityPools = { overworld.entities or {}, overworld.npcs or {}, overworld.npcPool or {} },
             player = player,
             foe = foe,
         })
@@ -1035,21 +1085,21 @@ function Lifecycle.begin(battle, mod, deps)
         coverSlots = coverSlots,
         coverKind = layout and layout.coverKind or nil,
         coverScene = layout and layout.coverScene or nil,
-        ReactiveDefense = RD,
+        ReactiveDefense = reactiveDefense,
         closeTheGap = true,
     }
     if mod and mod.options and type(mod.options.get) == "function" then
         session.closeTheGap = mod.options:get("close_the_gap") ~= false
     end
-    if RD then
-        battle._arReactiveDefense = RD
+    if reactiveDefense then
+        battle._arReactiveDefense = reactiveDefense
     end
     -- Keep the live draw-list table identity for the whole fight. Dramatic
     -- Shape's voxel pass reads this same table every frame; replacing it, or
     -- stuffing nil-sprite floor/cover into it, throws inside Voxel3D.beginScene
     -- and leaves GL wedged after the battle (hotkey 8 cannot recover).
-    session.savedEntities = ow.entities or {}
-    Lifecycle.parkOverworldFollowers(session, ow)
+    session.savedEntities = overworld.entities or {}
+    Lifecycle.parkOverworldFollowers(session, overworld)
 
     player.frozen = true
     player.inputLocked = true
@@ -1063,22 +1113,22 @@ function Lifecycle.begin(battle, mod, deps)
         ent.wanders = false
         ent.moving = false
         ent._arFieldTrainerId = occId
-        local h = grid.home and grid.home[homeKey]
-        if h then
-            local wx, wy = Coords.padToWorld(grid, h.u, h.v)
-            local px, py = Coords.padToPx(grid, h.u, h.v)
-            ent.cellX, ent.cellY = wx, wy
-            ent.px, ent.py = px, py
-            ent.padU, ent.padV = h.u, h.v
-            Grid.occupy(grid, occId, h.u, h.v)
+        local home = grid.home and grid.home[homeKey]
+        if home then
+            local worldX, worldY = Coords.padToWorld(grid, home.u, home.v)
+            local pixelX, pixelY = Coords.padToPx(grid, home.u, home.v)
+            ent.cellX, ent.cellY = worldX, worldY
+            ent.px, ent.py = pixelX, pixelY
+            ent.padU, ent.padV = home.u, home.v
+            Grid.occupy(grid, occId, home.u, home.v)
         end
         if face then
             ent.facing = face
         end
     end
     parkTrainer(player, "playerTrainer", plan.playerFace, "ar_field_player_trainer")
-    ow.engaging = true
-    ow._arFieldEngaging = true
+    overworld.engaging = true
+    overworld._arFieldEngaging = true
 
     if foe then
         parkTrainer(foe, "enemyTrainer", plan.foeFace, "ar_field_enemy_trainer")
@@ -1097,7 +1147,7 @@ function Lifecycle.begin(battle, mod, deps)
     Cast.stageEnemy(session, battle, mod, Sprites, Grid)
 
     -- Floor / cover are 2D stamps with no sprite. Draw them from
-    -- Lifecycle.drawWorldOverlay — never through ow.entities.
+    -- Lifecycle.drawWorldOverlay — never through overworld.entities.
     session.floor = layout and Arena.floorEntity(layout) or nil
     session.covers = {}
     if layout and type(layout.overlay) == "table" then
@@ -1110,7 +1160,7 @@ function Lifecycle.begin(battle, mod, deps)
     end
 
     session.state = Lifecycle.STATE.Live
-    byBattle[battle] = session
+    sessionByBattle[battle] = session
     fieldJit(false)
     session._arJitOff = true
     if deps and deps.Log and type(deps.Log.note) == "function" then
@@ -1137,6 +1187,11 @@ function Lifecycle.begin(battle, mod, deps)
     return true
 end
 
+-- ---------------------------------------------------------------------------
+-- MONS — send-out, switch, faint, capture.
+-- The player's first mon waits until combat is actually ready (lead picker).
+-- Faint sprites follow the painted HP bar hitting 0, not the "fainted!" line.
+-- ---------------------------------------------------------------------------
 function Lifecycle.stagePlayerMon(battle, mod, deps)
     local session = Lifecycle.get(battle)
     if not (session and session.live) then
@@ -1471,7 +1526,7 @@ local function tickSwitches(session, battle, deps, dt)
     end
 end
 
-function Lifecycle.capture(battle, ev)
+function Lifecycle.capture(battle, event)
     local session = Lifecycle.get(battle)
     if not (session and session.live and session.enemyMon) then
         return false
@@ -1482,7 +1537,7 @@ function Lifecycle.capture(battle, ev)
         if not (enemy and type(enemy.play) == "function") then
             return
         end
-        if ev and ev.caught then
+        if event and event.caught then
             enemy:play("capture")
         else
             enemy:play("hit")
@@ -1491,7 +1546,7 @@ function Lifecycle.capture(battle, ev)
     if Projectiles and type(Projectiles.ball) == "function" then
         session.captureInFlight = true
         Projectiles.ball(session, {
-            shakes = ev and ev.shakes,
+            shakes = event and event.shakes,
             onDone = function()
                 session.captureInFlight = nil
                 resolve()
@@ -1512,6 +1567,10 @@ function Lifecycle.despawnMon(battle, side)
     deps.Cast.despawn(session, battle, deps.Grid, side)
 end
 
+-- ---------------------------------------------------------------------------
+-- IDLE / TRAINERS — between moves, mons may roam a cell; trainers step
+-- aside so they are not standing on the pad.
+-- ---------------------------------------------------------------------------
 local function tickIdleWander(session, Grid, ent, side, dt)
     if not ent or ent._removed or ent.hidden or ent._fainting then
         return
@@ -1525,28 +1584,28 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         return
     end
     -- Still lerping to a cell target.
-    local tpx, tpy = ent.targetPx, ent.targetPy
-    if tpx and tpy then
-        local dx = tpx - (ent.basePx or 0)
-        local dy = tpy - (ent.basePy or 0)
+    local destX, destY = ent.targetPx, ent.targetPy
+    if destX and destY then
+        local dx = destX - (ent.basePx or 0)
+        local dy = destY - (ent.basePy or 0)
         if (dx * dx + dy * dy) > 4 then
             return
         end
     end
-    ent._wanderCD = (ent._wanderCD or (2.5 + rr() * 1.5)) - dt
+    ent._wanderCD = (ent._wanderCD or (2.5 + rand() * 1.5)) - dt
     if ent._wanderCD > 0 then
         return
     end
     -- Often just hold the lane; only sometimes take a step.
-    if rr() > 0.35 then
-        ent._wanderCD = 2.8 + rr() * 2.4
+    if rand() > 0.35 then
+        ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
     local foe = (side == "player") and session.enemyMon or session.playerMon
     if Grid.idleWander(session.grid, ent, side, foe) then
-        ent._wanderCD = 3.2 + rr() * 2.8
+        ent._wanderCD = 3.2 + rand() * 2.8
     else
-        ent._wanderCD = 2.0 + rr() * 1.5
+        ent._wanderCD = 2.0 + rand() * 1.5
     end
 end
 
@@ -1560,34 +1619,34 @@ local TRAINER_STEP_SPEED = 48
 --- consume targetPx/targetPy themselves, so we drive px/py ourselves via
 --- stepTrainerClear below rather than routing through Player:update()/
 --- NPC:update() (built for input-driven, collision-checked taps).
-local function beginTrainerStep(session, Grid, trainer, nu, nv, du, dv)
+local function beginTrainerStep(session, Grid, trainer, nextU, nextV, deltaU, deltaV)
     local occId = trainer._arFieldTrainerId
     if not occId then
         return false
     end
-    Grid.occupy(session.grid, occId, nu, nv)
-    trainer.padU, trainer.padV = nu, nv
-    local tx, ty = Coords.padToPx(session.grid, nu, nv)
-    trainer._stepTX, trainer._stepTY = tx, ty
-    local wx, wy = Coords.padDeltaToWorld(session.grid, du, dv)
-    if math.abs(wx) >= math.abs(wy) then
-        trainer.facing = wx >= 0 and "right" or "left"
+    Grid.occupy(session.grid, occId, nextU, nextV)
+    trainer.padU, trainer.padV = nextU, nextV
+    local pixelX, pixelY = Coords.padToPx(session.grid, nextU, nextV)
+    trainer._stepTX, trainer._stepTY = pixelX, pixelY
+    local worldX, worldY = Coords.padDeltaToWorld(session.grid, deltaU, deltaV)
+    if math.abs(worldX) >= math.abs(worldY) then
+        trainer.facing = worldX >= 0 and "right" or "left"
     else
-        trainer.facing = wy >= 0 and "down" or "up"
+        trainer.facing = worldY >= 0 and "down" or "up"
     end
     trainer.moving = true
     return true
 end
 
 --- Per-frame lerp toward a pending trainer step. Call every tick for any
---- trainer that might have a step in flight (ow.player, session.foe).
+--- trainer that might have a step in flight (overworld.player, session.foe).
 local function stepTrainerClear(session, trainer, dt)
     if not (trainer and trainer._stepTX and trainer._stepTY) then
         return
     end
-    local px, py = trainer.px or 0, trainer.py or 0
-    local dx = trainer._stepTX - px
-    local dy = trainer._stepTY - py
+    local pixelX, pixelY = trainer.px or 0, trainer.py or 0
+    local dx = trainer._stepTX - pixelX
+    local dy = trainer._stepTY - pixelY
     local dist = math.sqrt(dx * dx + dy * dy)
     if dist < 1.5 then
         trainer.px, trainer.py = trainer._stepTX, trainer._stepTY
@@ -1600,8 +1659,8 @@ local function stepTrainerClear(session, trainer, dt)
         return
     end
     local step = math.min(dist, TRAINER_STEP_SPEED * (dt or 1 / 60))
-    trainer.px = px + dx / dist * step
-    trainer.py = py + dy / dist * step
+    trainer.px = pixelX + dx / dist * step
+    trainer.py = pixelY + dy / dist * step
 end
 
 -- When a battler shares / brushes a trainer cell, walk the trainer aside.
@@ -1615,32 +1674,32 @@ local function keepTrainerClear(session, Grid, trainer, mon)
     if trainer._stepTX then
         return
     end
-    local tu, tv = trainer.padU, trainer.padV
-    local mu, mv = mon.padU, mon.padV
-    if tu == nil or mu == nil then
+    local trainerU, trainerV = trainer.padU, trainer.padV
+    local monU, monV = mon.padU, mon.padV
+    if trainerU == nil or monU == nil then
         return
     end
-    local dist = math.abs(tu - mu) + math.abs(tv - mv)
+    local dist = math.abs(trainerU - monU) + math.abs(trainerV - monV)
     if dist > 1 then
         return
     end
     if not trainer._arFieldTrainerId then
         return
     end
-    local awayU, awayV = tu - mu, tv - mv
+    local awayU, awayV = trainerU - monU, trainerV - monV
     local dirs = {
         { awayU, awayV },
         { 1,     0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
         { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 },
     }
     for i = 1, #dirs do
-        local du, dv = dirs[i][1], dirs[i][2]
-        if not (du == 0 and dv == 0) then
-            if math.abs(du) > 1 then du = du > 0 and 1 or -1 end
-            if math.abs(dv) > 1 then dv = dv > 0 and 1 or -1 end
-            local nu, nv = tu + du, tv + dv
-            if Grid.isFree(session.grid, nu, nv, trainer._arFieldTrainerId) then
-                return beginTrainerStep(session, Grid, trainer, nu, nv, du, dv)
+        local deltaU, deltaV = dirs[i][1], dirs[i][2]
+        if not (deltaU == 0 and deltaV == 0) then
+            if math.abs(deltaU) > 1 then deltaU = deltaU > 0 and 1 or -1 end
+            if math.abs(deltaV) > 1 then deltaV = deltaV > 0 and 1 or -1 end
+            local nextU, nextV = trainerU + deltaU, trainerV + deltaV
+            if Grid.isFree(session.grid, nextU, nextV, trainer._arFieldTrainerId) then
+                return beginTrainerStep(session, Grid, trainer, nextU, nextV, deltaU, deltaV)
             end
         end
     end
@@ -1703,6 +1762,10 @@ end
 --   return false
 -- end
 
+-- ---------------------------------------------------------------------------
+-- TURNS / CUES — start-of-turn cleanup (drop leftover close-gap clocks)
+-- and fan a named beat (attack, dodge, faint, …) out to cues.lua.
+-- ---------------------------------------------------------------------------
 function Lifecycle.onTurnEnded(battle)
     local session = Lifecycle.get(battle)
     if not (session and session.live and session.grid) then
@@ -1714,11 +1777,11 @@ function Lifecycle.onTurnEnded(battle)
             return
         end
         -- Occasional trainer check-in; keep rare so the pad doesn't thrash.
-        if rr() <= 0.22 then
-            local h = session.grid.home
+        if rand() <= 0.22 then
+            local home = session.grid.home
                 and ((side == "player") and session.grid.home.playerTrainer
                     or session.grid.home.enemyTrainer)
-            if h and h.u ~= nil and Grid.setPad(session.grid, ent, h.u, h.v) then
+            if home and home.u ~= nil and Grid.setPad(session.grid, ent, home.u, home.v) then
                 ent._returnAt = now() + 0.55
                 ent._returnU = ent.homePadU
                 ent._returnV = ent.homePadV
@@ -1858,9 +1921,9 @@ end
 --- Find the live FIELD session + battle for this game (menus may sit on top).
 function Lifecycle.liveBattle(game)
     local battle = nil
-    for b, s in pairs(byBattle) do
-        if s and s.live then
-            battle = b
+    for battleState, session in pairs(sessionByBattle) do
+        if session and session.live then
+            battle = battleState
             break
         end
     end
@@ -1871,35 +1934,41 @@ function Lifecycle.liveBattle(game)
     local states = stack and stack.states
     if type(states) == "table" then
         for i = #states, 1, -1 do
-            local st = states[i]
-            local s = st and byBattle[st]
-            if s and s.live then
-                battle = st
+            local stackState = states[i]
+            local session = stackState and sessionByBattle[stackState]
+            if session and session.live then
+                battle = stackState
                 break
             end
         end
     end
-    return battle, byBattle[battle]
+    return battle, sessionByBattle[battle]
 end
 
 --- Test hook: bind a live session without going through begin().
 function Lifecycle._testBind(battle, session)
     if battle then
-        byBattle[battle] = session
+        sessionByBattle[battle] = session
     end
 end
 
 function Lifecycle._testUnbind(battle)
     if battle then
-        byBattle[battle] = nil
+        sessionByBattle[battle] = nil
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- TICK — the every-frame clocks.
+-- tickPresent: safe under menus; deduped by wall time so bob never freezes.
+-- tick: wander, trainer clear, switches, lerp, projectiles, anim cache.
+-- Always prefer tickPresent from input / overlay / letterbox hooks.
+-- ---------------------------------------------------------------------------
 --- Present-clock tick. Safe to call from input.step, BattleState:update,
 --- render.letterbox, and battle.overlay — deduped so bob never freezes
 --- under menus. Must NOT early-out on waitingUI / stack top / auto==false.
 function Lifecycle.tickPresent(game, dt, deps)
-    local ow = game and game.overworld
+    local overworld = game and game.overworld
     local battle, session = Lifecycle.liveBattle(game)
 
     local t = wallNow(session)
@@ -1917,14 +1986,14 @@ function Lifecycle.tickPresent(game, dt, deps)
     end
 
     -- Exit pan keeps running after the session is unbound.
-    if ow and ow.cameraPan and ow.cameraPan.arFieldReturn then
+    if overworld and overworld.cameraPan and overworld.cameraPan.arFieldReturn then
         local skip = t and Lifecycle._returnPanAt
             and (t - Lifecycle._returnPanAt) < 0.008
         if not skip then
             if t then
                 Lifecycle._returnPanAt = t
             end
-            Lifecycle.tickReturnCamera(ow, useDt)
+            Lifecycle.tickReturnCamera(overworld, useDt)
         end
     end
 
@@ -1971,9 +2040,9 @@ function Lifecycle.tick(battle, dt, deps)
         end
     end
 
-    local ow = battle.game and battle.game.overworld
-    if ow then
-        Lifecycle.parkOverworldFollowers(session, ow)
+    local overworld = battle.game and battle.game.overworld
+    if overworld then
+        Lifecycle.parkOverworldFollowers(session, overworld)
     end
 
     if session.awaitPlayerMon then
@@ -1981,7 +2050,7 @@ function Lifecycle.tick(battle, dt, deps)
     end
 
     -- Advance cast anims / detach finished recalls before switch staging so
-    -- a hidden mon is off ow.entities before the next pose pass.
+    -- a hidden mon is off overworld.entities before the next pose pass.
     deps.Cast.tick(session, dt)
 
     tickSwitches(session, battle, deps, dt)
@@ -1993,7 +2062,7 @@ function Lifecycle.tick(battle, dt, deps)
     end
     deps.Cues.pumpCurrent(session, battle, deps.Grid, Lifecycle.nudgeCamera)
     if type(deps.Cues.pumpFollowUpAnims) == "function" then
-      deps.Cues.pumpFollowUpAnims(session, battle, deps.Grid, Lifecycle.nudgeCamera)
+        deps.Cues.pumpFollowUpAnims(session, battle, deps.Grid, Lifecycle.nudgeCamera)
     end
     if deps.Callouts and type(deps.Callouts.tick) == "function" then
         deps.Callouts.tick(session, dt, battle)
@@ -2001,35 +2070,35 @@ function Lifecycle.tick(battle, dt, deps)
     Lifecycle.watchHpFaint(battle, deps)
     deps.Cues.tickReturns(session, deps.Grid)
     if type(deps.Cues.flushHeldHit) == "function" then
-      pcall(deps.Cues.flushHeldHit, session, battle)
+        pcall(deps.Cues.flushHeldHit, session, battle)
     end
     if type(deps.Cues.syncSemiInvuln) == "function" then
-      deps.Cues.syncSemiInvuln(session, deps.Grid)
+        deps.Cues.syncSemiInvuln(session, deps.Grid)
     end
 
-    if session.camNudgeT and session.camNudgeT > 0 then
-        session.camNudgeT = math.max(0, session.camNudgeT - dt)
+    if session.cameraNudgeT and session.cameraNudgeT > 0 then
+        session.cameraNudgeT = math.max(0, session.cameraNudgeT - dt)
     end
 
-    local p, e = session.playerMon, session.enemyMon
-    if p and p._faintDone then
+    local playerMon, enemyMon = session.playerMon, session.enemyMon
+    if playerMon and playerMon._faintDone then
         Lifecycle.despawnMon(battle, "player")
-        p = nil
+        playerMon = nil
     end
-    if e and e._faintDone then
+    if enemyMon and enemyMon._faintDone then
         Lifecycle.despawnMon(battle, "enemy")
-        e = nil
+        enemyMon = nil
     end
 
-    tickIdleWander(session, deps.Grid, p, "player", dt)
-    tickIdleWander(session, deps.Grid, e, "enemy", dt)
+    tickIdleWander(session, deps.Grid, playerMon, "player", dt)
+    tickIdleWander(session, deps.Grid, enemyMon, "enemy", dt)
 
-    if ow then
-        keepTrainerClear(session, deps.Grid, ow.player, p)
-        keepTrainerClear(session, deps.Grid, ow.player, e)
-        keepTrainerClear(session, deps.Grid, session.foe, e)
-        keepTrainerClear(session, deps.Grid, session.foe, p)
-        stepTrainerClear(session, ow.player, dt)
+    if overworld then
+        keepTrainerClear(session, deps.Grid, overworld.player, playerMon)
+        keepTrainerClear(session, deps.Grid, overworld.player, enemyMon)
+        keepTrainerClear(session, deps.Grid, session.foe, enemyMon)
+        keepTrainerClear(session, deps.Grid, session.foe, playerMon)
+        stepTrainerClear(session, overworld.player, dt)
         stepTrainerClear(session, session.foe, dt)
     end
 
@@ -2040,14 +2109,14 @@ function Lifecycle.tick(battle, dt, deps)
         pcall(deps.Wildlife.tick, session, dt, deps)
     end
 
-    local moving = (p and p.targetPx and (
-            math.abs((p.basePx or 0) - p.targetPx) > 1
-            or math.abs((p.basePy or 0) - (p.targetPy or 0)) > 1))
-        or (e and e.targetPx and (
-            math.abs((e.basePx or 0) - e.targetPx) > 1
-            or math.abs((e.basePy or 0) - (e.targetPy or 0)) > 1))
-        or (p and p.anim and p.anim ~= "idle")
-        or (e and e.anim and e.anim ~= "idle")
+    local moving = (playerMon and playerMon.targetPx and (
+            math.abs((playerMon.basePx or 0) - playerMon.targetPx) > 1
+            or math.abs((playerMon.basePy or 0) - (playerMon.targetPy or 0)) > 1))
+        or (enemyMon and enemyMon.targetPx and (
+            math.abs((enemyMon.basePx or 0) - enemyMon.targetPx) > 1
+            or math.abs((enemyMon.basePy or 0) - (enemyMon.targetPy or 0)) > 1))
+        or (playerMon and playerMon.anim and playerMon.anim ~= "idle")
+        or (enemyMon and enemyMon.anim and enemyMon.anim ~= "idle")
 
     -- Soft-pan every present tick so intro / nudge easing stays continuous.
     Lifecycle.focusCamera(battle, dt)
@@ -2078,35 +2147,35 @@ function Lifecycle.tick(battle, dt, deps)
                 ent.facing = dy >= 0 and "down" or "up"
             end
         end
-        local function faceCell(ent, wx, wy)
-            if not ent or ent._stepTX or wx == nil then
+        local function faceCell(ent, worldX, worldY)
+            if not ent or ent._stepTX or worldX == nil then
                 return
             end
-            local dx = (wx or 0) - (ent.cellX or 0)
-            local dy = (wy or 0) - (ent.cellY or 0)
+            local dx = (worldX or 0) - (ent.cellX or 0)
+            local dy = (worldY or 0) - (ent.cellY or 0)
             if math.abs(dx) >= math.abs(dy) then
                 ent.facing = dx >= 0 and "right" or "left"
             else
                 ent.facing = dy >= 0 and "down" or "up"
             end
         end
-        if p and e and (not p.anim or p.anim == "idle") then
-            faceToward(p, e)
+        if playerMon and enemyMon and (not playerMon.anim or playerMon.anim == "idle") then
+            faceToward(playerMon, enemyMon)
         end
-        if e and p and (not e.anim or e.anim == "idle") then
-            faceToward(e, p)
+        if enemyMon and playerMon and (not enemyMon.anim or enemyMon.anim == "idle") then
+            faceToward(enemyMon, playerMon)
         end
         -- Engaged trainers watch the duel: prefer facing each other; in wild
         -- fights the player faces the foe mon / fight mid.
-        if ow then
-            local playerTrainer = ow.player
+        if overworld then
+            local playerTrainer = overworld.player
             local foeTrainer = session.foe
             if playerTrainer and foeTrainer then
                 faceToward(playerTrainer, foeTrainer)
                 faceToward(foeTrainer, playerTrainer)
             elseif playerTrainer then
-                if e and not e._removed then
-                    faceToward(playerTrainer, e)
+                if enemyMon and not enemyMon._removed then
+                    faceToward(playerTrainer, enemyMon)
                 else
                     faceCell(playerTrainer, session.midX, session.midY)
                 end
@@ -2128,9 +2197,14 @@ function Lifecycle.tick(battle, dt, deps)
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- FINISH — tear the fight off the map.
+-- Restore poses, camera, voxel, followers, and the entity list. Never
+-- bounce voxel through OFF or the exit gets stuck on 2D tiles.
+-- ---------------------------------------------------------------------------
 function Lifecycle.finish(battle, deps)
     -- Tear down Live cast, restore poses/camera, strip FIELD actors, unwedge voxel.
-    local session = battle and byBattle[battle]
+    local session = battle and sessionByBattle[battle]
     if not session then
         return
     end
@@ -2163,24 +2237,24 @@ function Lifecycle.finish(battle, deps)
     end
 
     local game = battle.game
-    local ow = game and game.overworld
-    if ow then
-        if session.playerPose and ow.player and Layout then
-            Layout.applyPose(ow.player, session.playerPose)
-            ow.player.moving = false
+    local overworld = game and game.overworld
+    if overworld then
+        if session.playerPose and overworld.player and Layout then
+            Layout.applyPose(overworld.player, session.playerPose)
+            overworld.player.moving = false
         end
         if session.foe and session.foePose and Layout then
             Layout.applyPose(session.foe, session.foePose)
             session.foe.moving = false
         end
-        ow.engaging = nil
-        ow._arFieldEngaging = nil
-        if ow.player then
-            ow.player.inputLocked = false
+        overworld.engaging = nil
+        overworld._arFieldEngaging = nil
+        if overworld.player then
+            overworld.player.inputLocked = false
         end
-        restoreWorldEntities(session, ow)
-        Lifecycle.restoreOverworldFollowers(session, ow)
-        restoreCamera(session, battle, ow)
+        restoreWorldEntities(session, overworld)
+        Lifecycle.restoreOverworldFollowers(session, overworld)
+        restoreCamera(session, battle, overworld)
     end
 
     -- FIELD never writes map tiles; no snapshot rewind.
@@ -2203,7 +2277,7 @@ function Lifecycle.finish(battle, deps)
             pcall(deps.Log.note, battle, "jit on")
         end
     end
-    byBattle[battle] = nil
+    sessionByBattle[battle] = nil
 end
 
 return Lifecycle
