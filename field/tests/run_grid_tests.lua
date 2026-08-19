@@ -4112,6 +4112,64 @@ function tests.lifecycle_cleanup_restores_world()
   eq(voxelState.ready, true, "voxel tween is allowed to resume")
 end
 
+function tests.field_jit_does_not_force_on_after_battle()
+  local prev = rawget(_G, "jit")
+  local calls = {}
+  _G.jit = {
+    status = function() return false end,
+    on = function() calls[#calls + 1] = "on" end,
+    off = function() calls[#calls + 1] = "off" end,
+    flush = function() calls[#calls + 1] = "flush" end,
+  }
+  local battle = { game = {} }
+  Lifecycle._testBind(battle, {
+    live = true,
+    state = "Live",
+    _arJitOff = true,
+    _arJitWasOn = false,
+  })
+  local ok, err = pcall(Lifecycle.finish, battle, {})
+  Lifecycle._testUnbind(battle)
+  _G.jit = prev
+  truthy(ok, err or "finish with JIT already off")
+  local sawOn = false
+  for i = 1, #calls do
+    if calls[i] == "on" then
+      sawOn = true
+    end
+  end
+  eq(sawOn, false, "must not jit.on() after battle when Love had the compiler off")
+end
+
+function tests.field_jit_restores_when_it_was_on()
+  local prev = rawget(_G, "jit")
+  local calls = {}
+  _G.jit = {
+    status = function() return true end,
+    on = function() calls[#calls + 1] = "on" end,
+    off = function() calls[#calls + 1] = "off" end,
+    flush = function() calls[#calls + 1] = "flush" end,
+  }
+  local battle = { game = {} }
+  Lifecycle._testBind(battle, {
+    live = true,
+    state = "Live",
+    _arJitOff = true,
+    _arJitWasOn = true,
+  })
+  local ok, err = pcall(Lifecycle.finish, battle, {})
+  Lifecycle._testUnbind(battle)
+  _G.jit = prev
+  truthy(ok, err or "finish with JIT previously on")
+  local sawOn = false
+  for i = 1, #calls do
+    if calls[i] == "on" then
+      sawOn = true
+    end
+  end
+  truthy(sawOn, "desktop JIT comes back after the fight")
+end
+
 function tests.camera_pans_to_player_on_finish()
   local player = { px = 144, py = 144 }
   local camera = { x = 40, y = 20 }

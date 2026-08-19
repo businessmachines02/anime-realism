@@ -80,9 +80,19 @@ Lifecycle.STATE = {
     Finishing = "Finishing",
 }
 
--- Love 11.5 LuaJIT on ARM64 macOS can SIGSEGV inside lj_alloc unlink
--- (NaN-boxed pointer as a free-list fd). FIELD's per-frame pose/walk
--- is a hot JIT path; interpreter-only avoids that class of abort.
+-- Love 11.5 turns the LuaJIT compiler off on ARM64 (Android phones and
+-- Apple Silicon). FIELD's per-frame pose/walk is a hot path, so we also
+-- jit.off() for the fight. We must snapshot jit.status() and only jit.on()
+-- at exit if the compiler was already on — a blind jit.on() after battle
+-- enables the ARM64 JIT Love left off, which SIGSEGVs on Android 64-bit.
+local function jitIsOn()
+    if type(jit) ~= "table" or type(jit.status) ~= "function" then
+        return false
+    end
+    local ok, enabled = pcall(jit.status)
+    return ok == true and enabled == true
+end
+
 local function fieldJit(enable)
     if type(jit) ~= "table" then
         return
@@ -1284,6 +1294,7 @@ function Lifecycle.begin(battle, mod, deps)
 
     session.state = Lifecycle.STATE.Live
     sessionByBattle[battle] = session
+    session._arJitWasOn = jitIsOn()
     fieldJit(false)
     session._arJitOff = true
     if deps and deps.Log and type(deps.Log.note) == "function" then
@@ -2427,11 +2438,16 @@ function Lifecycle.finish(battle, deps)
         battle._arAnimeField = nil
     end
     if session._arJitOff then
-        fieldJit(true)
-        session._arJitOff = nil
-        if deps and deps.Log and type(deps.Log.note) == "function" then
-            pcall(deps.Log.note, battle, "jit on")
+        -- Love ARM64 (Android / macOS) ships with the compiler off. Do not
+        -- force it on just because we turned it off for the fight.
+        if session._arJitWasOn then
+            fieldJit(true)
+            if deps and deps.Log and type(deps.Log.note) == "function" then
+                pcall(deps.Log.note, battle, "jit on")
+            end
         end
+        session._arJitOff = nil
+        session._arJitWasOn = nil
     end
     sessionByBattle[battle] = nil
 end
