@@ -9,6 +9,7 @@
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
+--   miss                           accuracy whiff: slip-past pose + MISS chip
 --   vanish / emerge                Dig underground, Fly into the sky, then return
 --   faint / recall                 HP hit zero: sink, or the red return laser
 --
@@ -397,6 +398,38 @@ return function(Cues)
         end
         H.impactKick(session, { powerful = false })
         H.playAnim(ent, "selfhit")
+        return true
+    end)
+
+    Cues.register("miss", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        if H.isExitPlaying(ent) then
+            return true
+        end
+        opts = opts or {}
+        -- Accuracy miss: no punch, no HP. Convert a close-the-gap walk into
+        -- a slip-past, then walk home.
+        if ent._pendingCloseStrike then
+            H.clearCloseStrike(ent)
+            H.restoreStepSpeed(ent)
+            ent._withdrawAfterStrike = true
+        end
+        if battle then
+            battle._arAccuracyMissSide = nil
+        end
+        local UI = session._deps and session._deps.UI
+        if UI and type(UI.armStatusChip) == "function" and battle then
+            pcall(UI.armStatusChip, battle, side, "MISS")
+        end
+        local Projectiles = session._deps and session._deps.Projectiles
+        if Projectiles and type(Projectiles.miss) == "function" then
+            Projectiles.miss(session, side)
+        end
+        H.playAnim(ent, "miss")
+        ent._returnAt = H.now(session) + 0.44
         return true
     end)
 

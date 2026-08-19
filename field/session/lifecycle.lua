@@ -80,11 +80,11 @@ Lifecycle.STATE = {
     Finishing = "Finishing",
 }
 
--- Love 11.5 turns the LuaJIT compiler off on ARM64 (Android phones and
--- Apple Silicon). FIELD's per-frame pose/walk is a hot path, so we also
--- jit.off() for the fight. We must snapshot jit.status() and only jit.on()
--- at exit if the compiler was already on — a blind jit.on() after battle
--- enables the ARM64 JIT Love left off, which SIGSEGVs on Android 64-bit.
+-- In Love 11.5, the LuaJIT compiler is disabled by default on ARM64 systems (such as Android phones and Apple Silicon Macs). 
+-- Since the FIELD code that handles per-frame pose and walking needs to run quickly, we also disable jit during fights.
+-- We have to save whether jit was enabled before the fight. When the fight ends, we should only turn jit back on if it was 
+-- previously enabled. If we blindly enable jit afterwards, it can cause crashes (SIGSEGV) on Android 64-bit because Love left 
+-- the JIT off for a reason.
 local function jitIsOn()
     if type(jit) ~= "table" or type(jit.status) ~= "function" then
         return false
@@ -1928,6 +1928,10 @@ function Lifecycle.onTurnEnded(battle)
 end
 
 function Lifecycle.onTurnStarted(battle)
+    if battle then
+        battle._arAccuracyPred = nil
+        battle._arAwaitAccuracyCue = nil
+    end
     local session = Lifecycle.get(battle)
     if not (session and session.live and session.grid) then
         return

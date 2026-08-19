@@ -39,10 +39,13 @@ return function(Hooks)
                 local origInterrupt = BattleState.statusInterrupt
                 function BattleState:statusInterrupt(user, ...)
                     local interrupted = origInterrupt(self, user, ...)
-                    if interrupted and isFieldBattle(self) and user
-                        and type(FBV.tagSelfDamage) == "function" then
-                        pcall(FBV.tagSelfDamage, self, "hurt itself",
-                            user.isPlayer and "player" or "enemy")
+                    if interrupted and isFieldBattle(self) then
+                        self._arAccuracyPred = nil
+                        self._arAwaitAccuracyCue = nil
+                        if user and type(FBV.tagSelfDamage) == "function" then
+                            pcall(FBV.tagSelfDamage, self, "hurt itself",
+                                user.isPlayer and "player" or "enemy")
+                        end
                     end
                     return interrupted
                 end
@@ -258,6 +261,21 @@ return function(Hooks)
                     via = ev.presentationOnly and "cam" or "move_used",
                 }
                 local skip = opts.presentationOnly
+                local hit
+                if not skip and type(FBV.predictMoveHit) == "function" then
+                    local target = ev.target
+                    if not target then
+                        target = ev.user.isPlayer and battle.enemy or battle.player
+                    end
+                    local okH, peeked = pcall(FBV.predictMoveHit, battle,
+                        ev.user, target, move)
+                    if okH and type(peeked) == "boolean" then
+                        hit = peeked
+                    end
+                end
+                if hit == false then
+                    kind = "miss"
+                end
                 if not skip and type(FBV.shouldSkipEventReact) == "function" then
                     local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, kind, opts)
                     skip = okS and s
@@ -267,6 +285,13 @@ return function(Hooks)
                         pcall(FBV.Log.note, battle, "move_used skip", side, move.id, kind)
                     end
                 else
+                    if hit == nil then
+                        battle._arAwaitAccuracyCue = {
+                            side = side,
+                            kind = kind,
+                            opts = opts,
+                        }
+                    end
                     if FBV.Log and type(FBV.Log.note) == "function" then
                         pcall(FBV.Log.note, battle, "move_used", side, move.id, kind)
                     end

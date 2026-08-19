@@ -1411,6 +1411,30 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
       end
+    elseif anim == "miss" then
+      -- Lunge at the foe, slip past, recover — the attack never lands.
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.42
+      local t = math.min(1, self.animT / dur)
+      local pulse = math.sin(t * math.pi)
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+        self.facing = faceFromDelta(tx, ty)
+      else
+        tx, ty = 0, -1
+      end
+      local nx, ny = -ty, tx
+      ox = ox + tx * pulse * 9 + nx * math.sin(t * math.pi) * 7
+      oy = oy + ty * pulse * 9 - pulse * 4
+      self._walkFrame = (t < 0.88) and 1 or 0
+      if self.animT >= dur then
+        self.anim = "idle"
+        self.animT = 0
+        self.drawScale = 1
+      end
     elseif anim == "cover" then
       self.animT = (self.animT or 0) + dt
       oy = oy - math.min(6, self.animT * 14)

@@ -270,6 +270,8 @@ function Dialogue.wrapBattleSay(methodName)
             bare, isEnemy = Dialogue.stripEnemyPrefix(mon)
         end
         local reaction, buffs, trackTemp, fieldCue = hostCall("reactionAfterMoveAnnounce", self, text)
+        local wasAccuracyMiss = type(text) == "string"
+            and tostring(text):lower():find("attack missed", 1, true) ~= nil
         local dodgeWhiff, dodgeSide
         text, dodgeWhiff, dodgeSide = hostCall("rewriteDodgeMissText", self, text)
         if dodgeWhiff == nil and type(text) == "table" then
@@ -315,6 +317,16 @@ function Dialogue.wrapBattleSay(methodName)
                 hostCall("tagFieldCue", item,
                     dodgeSide == "enemy" and "enemy" or "player", "dodge")
             end
+        elseif wasAccuracyMiss then
+            local side = self._arAccuracyMissSide == "enemy" and "enemy" or "player"
+            local item = self.queue and self.queue[self.nextInsert]
+            if type(item) == "table" then
+                hostCall("tagFieldCue", item, side, "miss")
+            end
+            if hostCall("fieldFlowsText", self) then
+                hostCall("armFieldChip", self, side, "MISS")
+            end
+            self._arAccuracyMissSide = nil
         end
         if dodgeWhiff then
             hostCall("maybeQueueSameTurnCounter", self)
@@ -413,7 +425,7 @@ function Dialogue.wrapBattleSay(methodName)
             hostCall("enqueueReactWithAttack", self, reaction,
                 strings().CALLOUT_AUTO_DELAY or 55, bubbleSide, fieldCue)
             hostCall("applyCalloutBuffs", self, buffs, trackTemp)
-            local st = peek(self)
+            local st = hostCall("momentumState", self)
             if isEnemy and st and st.temp and trackTemp then
                 if st.temp.cover then
                     if st.temp.hidAway then

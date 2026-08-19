@@ -3978,6 +3978,36 @@ function Projectiles.faint(session, side)
   })
 end
 
+--- Dust whoosh past the foe when an attack misses.
+function Projectiles.miss(session, side)
+  local from = (side == "player") and session.playerMon or session.enemyMon
+  local target = (side == "player") and session.enemyMon or session.playerMon
+  local sx, sy = center(session, from)
+  local ex, ey = center(session, target)
+  if not (session and sx) then
+    return nil
+  end
+  if not ex then
+    ex, ey = sx + 12, sy
+  end
+  local dx, dy = ex - sx, ey - sy
+  local len = math.sqrt(dx * dx + dy * dy)
+  if len < 0.1 then
+    dx, dy, len = 1, 0, 1
+  end
+  dx, dy = dx / len, dy / len
+  local px, py = ex + dx * 14, ey + dy * 10
+  return spawn(session, {
+    kind = "effect",
+    style = "puff",
+    sx = sx, sy = sy,
+    ex = px, ey = py,
+    duration = 0.36,
+    arc = 6,
+    color = { 0.90, 0.90, 0.94 },
+  })
+end
+
 --- Live trainer sprite for this side (player OW sprite / parked foe NPC).
 local function trainerEnt(session, side)
   if not session then

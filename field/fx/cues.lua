@@ -737,11 +737,15 @@ function Cues.skipReason(session, side, kind, opts)
     if (H.now(session) - session._lastCueAt) > 1.25 then
         return nil
     end
+    -- "beat" means that this cue event matches the previous event's kind,
+    -- occurred on the same side, and happened within a short time window (1.25s).
+    -- This typically prevents redundant cues (e.g., attack, vanish, hit, miss, etc)
+    -- within the same animation "beat" or moment.
     if kind == last and (
             kind == "attack" or kind == "vanish" or kind == "emerge"
             or kind == "hit" or kind == "selfhit" or kind == "status"
-            or kind == "counter" or kind == "faint" or Cues.isReactKind(kind)) then
-        return "beat"
+            or kind == "miss" or kind == "counter" or kind == "faint" or Cues.isReactKind(kind)) then
+        return "beat" -- "beat" prevents excessively repeating the same cue for the same side in rapid succession.
     end
     return nil
 end

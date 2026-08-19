@@ -11,7 +11,7 @@
 --
 -- Flip to false for release builds. When true, lib/log.lua prints battle
 -- traces to the Love / stdout console (independent of DEV OVERLAY).
-local DEV = false
+local DEV = true
 
 return function(mod)
     local Hud
@@ -847,6 +847,7 @@ return function(mod)
                 dmg = select(1, Damage.compute(
                     battle.ruleset, user, target, move, { rng = battle.rng }))
             end)
+            print("[ar] estimateMoveDamage: " .. tostring(dmg) .. " " .. tostring(ok) .. " " .. tostring(move.power))
             if ok and type(dmg) == "number" and dmg > 0 then
                 return dmg
             end
@@ -895,6 +896,8 @@ return function(mod)
             resetMomentum(ev and ev.battle)
             local battle = ev and ev.battle
             if battle then
+                battle._arAccuracyPred = nil
+                battle._arAwaitAccuracyCue = nil
                 local st = React.peek(battle)
                 -- Fresh roll each turn for deep-cover lock / same-turn dodge flag.
                 if st and st.temp then
@@ -1064,87 +1067,196 @@ return function(mod)
         -- Dodge cover miss: keep the move anim so the attack still plays.
         -- Counter swings have a light extra miss (~5%); a miss sometimes lets
         -- the foe snap back for half their stashed whiff damage.
-        mod.hooks:wrap("battle.accuracy", function(next, ctx)
-            if not opt("momentum_counter") or not ctx then
-                return next(ctx)
+        --
+        -- FIELD peeks this hook on move_used, stashes the boolean, and the
+        -- engine's later call returns that stash so RNG is spent once.
+        local engineAccuracy = nil
+
+        local function accuracyMoveId(ctx)
+            return ctx and ctx.move and ctx.move.id
+        end
+
+        local function accuracyPredMatches(pred, ctx)
+            if not (pred and ctx and ctx.user and ctx.move) then
+                return false
             end
-            local move = ctx.move
-            if not move or (move.power or 0) <= 0 or move.category == "status" then
-                return next(ctx)
+            if pred.user ~= ctx.user then
+                return false
+            end
+            if ctx.target and pred.target and pred.target ~= ctx.target then
+                return false
+            end
+            return pred.moveId == accuracyMoveId(ctx)
+        end
+
+        local function bookkeepAccuracyMiss(ctx, hit)
+            if hit or not ctx then
+                return
             end
             local user, target, battle = ctx.user, ctx.target, ctx.battle
-            if not battle or not user or not target then
-                return next(ctx)
+            if not (battle and user) then
+                return
+            end
+            battle._arAccuracyMissSide = user.isPlayer and "player" or "enemy"
+            if not opt("momentum_counter") then
+                return
             end
             local state = momentumState(battle)
-            local countering = user.isPlayer and not target.isPlayer
-                and state.mode == "counter" and not state.boosted
-
-            local hit = next(ctx)
-            if hit and countering and rollCounterExtraMiss() then
-                hit = false
+            local function coverName(battler)
+                if battler and battler.mon and type(battler.mon.nickname) == "string"
+                    and battler.mon.nickname ~= "" then
+                    return battler.mon.nickname
+                end
+                return (battler and battler.name) or "POKéMON"
             end
+            local function isDodgeHide(temp)
+                return temp and temp.cover
+                    and ((temp.evasion or 0) > 0 or temp.hidAway or temp.picHidden)
+            end
+            if target and target.isPlayer and isDodgeHide(state.temp) then
+                state.keepDodgeMissAnim = true
+                state.dodgeMissName = coverName(target)
+                state.dodgeMissSide = "player"
+            elseif target and (not target.isPlayer) and isDodgeHide(state.enemyTemp) then
+                state.keepDodgeMissAnim = true
+                state.dodgeMissName = coverName(target)
+                state.dodgeMissSide = "enemy"
+            end
+            local countering = user.isPlayer and target and not target.isPlayer
+                and state.mode == "counter" and not state.boosted
+            if countering then
+                state.counterWhiffed = true
+                state.mode = nil
+                state.boosted = false
+            elseif target and target.isPlayer and not user.isPlayer then
+                state.mode = "counter"
+                state.boosted = false
+                state.foeWhiffDamage = estimateMoveDamage(battle, user, target, ctx.move)
+                if state.temp and state.temp.cover and state.temp.dodgedOk then
+                    state.offerSameTurnCounter = true
+                    if not state.playerActedThisTurn then
+                        state.replaceQueuedPlayerAction = true
+                    end
+                    dev.log(battle, "ARM counter",
+                        string.format("dodge-miss sameTurn=%s replace=%s",
+                            "Y",
+                            state.replaceQueuedPlayerAction and "Y" or "N"))
+                else
+                    dev.log(battle, "ARM counter",
+                        state.temp and state.temp.cover
+                        and "foe-miss (cover, no dodgedOk)"
+                        or "foe-miss (no cover)")
+                end
+            elseif user.isPlayer and target and not target.isPlayer then
+                local kind = battle.kind
+                if kind == "trainer" or kind == "link" then
+                    state.enemyMode = "counter"
+                    state.enemyBoosted = false
+                    dev.log(battle, "ARM foeCounter", "you-missed")
+                end
+            end
+            if countering then
+                dev.log(battle, "COUNTER whiff", "extra-miss/snapback")
+            end
+        end
 
-            if not hit then
-                local function coverName(battler)
-                    if battler and battler.mon and type(battler.mon.nickname) == "string"
-                        and battler.mon.nickname ~= "" then
-                        return battler.mon.nickname
-                    end
-                    return (battler and battler.name) or "POKéMON"
+        local function rollAccuracy(next, ctx)
+            local hit = next(ctx)
+            if not ctx then
+                return hit
+            end
+            local move = ctx.move
+            local user, target, battle = ctx.user, ctx.target, ctx.battle
+            if opt("momentum_counter") and move and (move.power or 0) > 0
+                and move.category ~= "status" and battle and user and target then
+                local state = momentumState(battle)
+                local countering = user.isPlayer and not target.isPlayer
+                    and state.mode == "counter" and not state.boosted
+                if hit and countering and rollCounterExtraMiss() then
+                    hit = false
                 end
-                -- Keep miss anim only for dodge/hide cover — not brace DEF.
-                local function isDodgeHide(temp)
-                    return temp and temp.cover
-                        and ((temp.evasion or 0) > 0 or temp.hidAway or temp.picHidden)
-                end
-                if target.isPlayer and isDodgeHide(state.temp) then
-                    state.keepDodgeMissAnim = true
-                    state.dodgeMissName = coverName(target)
-                    state.dodgeMissSide = "player"
-                elseif (not target.isPlayer) and isDodgeHide(state.enemyTemp) then
-                    state.keepDodgeMissAnim = true
-                    state.dodgeMissName = coverName(target)
-                    state.dodgeMissSide = "enemy"
-                end
-                if countering then
-                    -- Your counter whiffed — may snap-back (rolled in resolve).
-                    state.counterWhiffed = true
-                    state.mode = nil
-                    state.boosted = false
-                elseif target.isPlayer and not user.isPlayer then
-                    state.mode = "counter"
-                    state.boosted = false
-                    state.foeWhiffDamage = estimateMoveDamage(battle, user, target, move)
-                    -- Same-turn COUNTER! only after a successful dodge into a miss.
-                    -- (Menu is queued later — after miss anim + dodge-whiff text.)
-                    if state.temp and state.temp.cover and state.temp.dodgedOk then
-                        state.offerSameTurnCounter = true
-                        -- Going second: replace the move chosen at turn start.
-                        if not state.playerActedThisTurn then
-                            state.replaceQueuedPlayerAction = true
-                        end
-                        dev.log(battle, "ARM counter",
-                            string.format("dodge-miss sameTurn=%s replace=%s",
-                                "Y",
-                                state.replaceQueuedPlayerAction and "Y" or "N"))
-                    else
-                        dev.log(battle, "ARM counter",
-                            state.temp and state.temp.cover
-                            and "foe-miss (cover, no dodgedOk)"
-                            or "foe-miss (no cover)")
-                    end
-                elseif user.isPlayer and not target.isPlayer then
-                    local kind = battle.kind
-                    if kind == "trainer" or kind == "link" then
-                        state.enemyMode = "counter"
-                        state.enemyBoosted = false
-                        dev.log(battle, "ARM foeCounter", "you-missed")
-                    end
-                end
-                if countering then
-                    dev.log(battle, "COUNTER whiff", "extra-miss/snapback")
-                end
+            end
+            bookkeepAccuracyMiss(ctx, hit)
+            return hit
+        end
+
+        local function playPendingMoveCue(battle, hit)
+            local pending = battle and battle._arAwaitAccuracyCue
+            if not pending then
+                return
+            end
+            battle._arAwaitAccuracyCue = nil
+            if not (FieldBattleViewer and type(FieldBattleViewer.react) == "function") then
+                return
+            end
+            local kind = hit and pending.kind or "miss"
+            pcall(FieldBattleViewer.react, battle, pending.side, kind, pending.opts)
+        end
+
+        local function predictMoveHit(battle, user, target, move)
+            if not (battle and user and move) then
+                return nil
+            end
+            local ctx = {
+                battle = battle,
+                user = user,
+                target = target,
+                move = move,
+            }
+            local pred = battle._arAccuracyPred
+            if accuracyPredMatches(pred, ctx) then
+                return pred.hit
+            end
+            if type(engineAccuracy) ~= "function" then
+                return nil
+            end
+            -- Roll vanilla + our extras once. Do not go through hooks:call —
+            -- that re-enters this wrap and was returning nil (move_used await)
+            -- so the toast lunged before the engine's roll.
+            battle._arAccuracyPeeking = true
+            local ok, hit = pcall(rollAccuracy, engineAccuracy, ctx)
+            battle._arAccuracyPeeking = nil
+            if not ok then
+                return nil
+            end
+            battle._arAccuracyPred = {
+                hit = hit and true or false,
+                user = user,
+                target = target,
+                moveId = move.id,
+            }
+            return battle._arAccuracyPred.hit
+        end
+
+        if FieldBattleViewer then
+            FieldBattleViewer.predictMoveHit = predictMoveHit
+        end
+
+        mod.hooks:wrap("battle.accuracy", function(next, ctx)
+            if not ctx then
+                return next(ctx)
+            end
+            local battle = ctx.battle
+            local peeking = battle and battle._arAccuracyPeeking == true
+            if not peeking and type(next) == "function" then
+                engineAccuracy = next
+            end
+            if battle and not peeking
+                and accuracyPredMatches(battle._arAccuracyPred, ctx) then
+                local hit = battle._arAccuracyPred.hit
+                battle._arAccuracyPred = nil
+                return hit
+            end
+            local hit = rollAccuracy(next, ctx)
+            if peeking and battle and ctx.user and ctx.move then
+                battle._arAccuracyPred = {
+                    hit = hit and true or false,
+                    user = ctx.user,
+                    target = ctx.target,
+                    moveId = accuracyMoveId(ctx),
+                }
+            elseif battle and not peeking then
+                playPendingMoveCue(battle, hit)
             end
             return hit
         end)
@@ -1601,6 +1713,7 @@ return function(mod)
             state.dodgeMissName = nil
             state.dodgeMissSide = nil
             state.dodgeWhiffDone = true
+            battle._arAccuracyMissSide = nil
             local line = pickFormatted(S.DODGE_WHIFF_CALLS, name)
                 or ("But " .. name .. "\ndodged aside!")
             -- Signal wrapBattleSay to park COUNTER! after this miss line + anim.

@@ -70,6 +70,15 @@ return function(Cues)
         end
         H.note(session, session and session._battle, "closeStrike", side, mid,
             "dist=" .. dist, H.describeEnt(session, ent, side))
+        local battle = session and session._battle
+        if battle and battle._arAccuracyMissSide == side then
+            battle._arAccuracyMissSide = nil
+            Cues.apply(session, side, "miss", Grid, nil, battle, {
+                via = "close-miss",
+                moveId = mid,
+            })
+            return
+        end
         if mid then
             H.markStruck(ent, mid)
         end
@@ -77,7 +86,6 @@ return function(Cues)
         local deps = session and session._deps
         local Projectiles = deps and deps.Projectiles
         local Audio = deps and deps.Audio
-        local battle = session and session._battle
         if pending and Audio and type(Audio.playMove) == "function" then
             pcall(Audio.playMove, battle, pending.moveId, side == "player")
         end
