@@ -12,7 +12,7 @@
 -- Folders (env.load paths are relative to field/):
 --   pad/      coords, grid, layout, survey, cast
 --   session/  lifecycle, intercept, compat, spectators, wildlife
---   fx/       catalog, projectiles, cues, anims, audio, sprites
+--   fx/       catalog, projectiles, cues (+ cues_*), anims, audio, sprites
 --   stage/    arena, themes, arenas/*.lua kits
 --   chrome/   ui, callouts, debug, hooks*
 --
@@ -73,6 +73,9 @@ return function(env)
     Grid = loadFile("pad/grid.lua")
     Cast = loadFile("pad/cast.lua")
     Cues = loadFile("fx/cues.lua")
+    if Cues and type(Cues.attach) == "function" then
+      Cues.attach(loadFile)
+    end
     Projectiles = loadFile("fx/projectiles.lua")
     Audio = loadFile("fx/audio.lua")
     Anims = loadFile("fx/anims.lua")
@@ -339,6 +342,16 @@ return function(env)
       return true
     end
     return modRef.options:get("status_chips") ~= false
+  end
+
+  function FBV.armStatusChip(battle, side, text)
+    if not FBV.statusChipsEnabled(mod) then
+      return false
+    end
+    if UI and type(UI.armStatusChip) == "function" then
+      return UI.armStatusChip(battle, side, text)
+    end
+    return false
   end
 
   function FBV.drawUI(battle)

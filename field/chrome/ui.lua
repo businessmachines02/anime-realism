@@ -4,7 +4,9 @@
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
 --      Compact bottom box only. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
---   3. REACT         — status chips on the battler (BRACE / DODGE / COVER)
+--   3. REACT         — status chips on the battler after a successful
+--      REACT! pick (DODGE / BRACE / COVER / HOLD). Orders, misses, and
+--      failed reacts stay toasts.
 --
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
@@ -44,11 +46,65 @@ local function clamp01(n)
     return n
 end
 
-local function battlerHP(battler)
+-- Classic HUD is 48 px (GetHPBarLength). Compact FIELD chips map HP/max
+-- straight onto the inner track instead of scaling 48ths twice.
+
+-- Remaining HP for the chip. Prefer live `mon.hp` over the engine drain
+-- numerator (`shownHP`): a parked queue / send-out can leave shownHP at 0
+-- while the mon is still up, which painted an empty bar on a living Pokémon.
+function UI.battlerHP(battler)
     local mon = battler and battler.mon
-    local maxHP = mon and mon.stats and tonumber(mon.stats.hp) or 1
-    local hp = tonumber(battler and battler.shownHP) or tonumber(mon and mon.hp) or 0
-    return clamp01(hp / math.max(1, maxHP))
+    local maxHP = tonumber(mon and mon.stats and mon.stats.hp)
+    if not maxHP or maxHP < 1 then
+        maxHP = 1
+    end
+    local hp = tonumber(mon and mon.hp)
+    if hp == nil then
+        hp = tonumber(battler and battler.shownHP) or 0
+    end
+    if hp < 0 then
+        hp = 0
+    end
+    return clamp01(hp / maxHP), hp, maxHP
+end
+
+-- Inner fill width in pixels. Floor the ratio so a hit that crosses a
+-- compact pixel actually shortens the bar; living HP never paints empty.
+function UI.hpFillWidth(innerW, hp, maxHP)
+    innerW = math.max(0, math.floor(tonumber(innerW) or 0))
+    hp = tonumber(hp) or 0
+    maxHP = tonumber(maxHP) or 0
+    if innerW < 1 or hp <= 0 or maxHP <= 0 then
+        return 0
+    end
+    local fill = math.floor(hp * innerW / maxHP)
+    if fill < 1 then
+        fill = 1
+    end
+    if fill > innerW then
+        fill = innerW
+    end
+    return fill
+end
+
+-- Tick the painted fill one pixel toward the true ratio so damage reads
+-- as a drain, not a snap. Send-out / big heals jump.
+function UI.easeHpFill(cur, target)
+    target = math.floor(tonumber(target) or 0)
+    if target < 0 then
+        target = 0
+    end
+    cur = tonumber(cur)
+    if cur == nil or math.abs(target - cur) > 8 then
+        return target
+    end
+    if cur < target then
+        return cur + 1
+    end
+    if cur > target then
+        return cur - 1
+    end
+    return target
 end
 
 local function fitText(Font, value, maxWidth)
@@ -75,13 +131,19 @@ local function box(g, x, y, w, h)
     end
 end
 
-local function hpBar(g, x, y, w, ratio)
+local function hpBar(g, x, y, w, ratio, fill)
     ratio = clamp01(ratio)
+    fill = math.floor(tonumber(fill) or 0)
     g.setColor(0.12, 0.09, 0.08, 1)
     g.rectangle("fill", x, y, w, 4)
     g.setColor(0.96, 0.92, 0.78, 1)
     g.rectangle("fill", x + 1, y + 1, w - 2, 2)
-    local fill = math.floor((w - 2) * ratio + 0.5)
+    if fill < 1 and ratio > 0 then
+        fill = 1
+    end
+    if fill > w - 2 then
+        fill = math.max(0, w - 2)
+    end
     if fill > 0 then
         if ratio <= 0.2 then
             g.setColor(0.78, 0.18, 0.12, 1)
@@ -124,7 +186,9 @@ end
 
 -- Letter + bar + pointer: keep the chip on the canvas when a mon is
 -- near the top (or side) of the view.
-UI.HP_CHIP_W = 27
+UI.HP_LETTER_W = 6
+UI.HP_BAR_W = 20
+UI.HP_CHIP_W = UI.HP_LETTER_W + 1 + UI.HP_BAR_W
 UI.HP_CHIP_H = 7
 UI.HP_CHIP_TOP = 2
 UI.FOCUS_BAR_H = 3
@@ -231,36 +295,22 @@ end
 UI.CHIP_HOLD = 90
 UI.CHIP_H = 12
 
-local REACT_KIND = {
-    dodge = true, cover = true, hide = true,
-    brace = true, entrench = true, entrench_hold = true,
-}
-
+-- Successful REACT! outcomes only. Orders, misses, and failed reacts stay
+-- toasts / notices — they must not paint a chip.
 local CHIP_PHRASE = {
-    { "WRONG WAY", "WRONG" },
-    { "BRACE YOURSELF", "BRACE" },
-    { "BRACE ON", "BRACE" },
-    { "BRACE UP", "BRACE" },
     { "TOOK IT WELL", "BRACE" },
-    { "BRACED", "BRACE" },
+    { "BRACED RIGHT", "BRACE" },
     { "ENTRENCH", "HOLD" },
-    { "TOO SLOW", "SLOW" },
-    { "COULDN'T MOVE", "SLOW" },
-    { "HIT THROUGH COVER", "HIT" },
-    { "IT FOUND", "HIT" },
-    { "COVER WASN'T", "HIT" },
-    { "STILL GOT HIT", "HIT" },
-    { "DODGED", "DODGE" },
-    { "WHIFFED PAST", "DODGE" },
-    { "SHARP INSTINCTS", "DODGE" },
-    { "PERFECT TIMING", "DODGE" },
-    { "MOVED LIKE", "DODGE" },
-    { "WHAT A READ", "DODGE" },
+    { "THE SHELL", "HOLD" },
+    { "TOOK COVER", "COVER" },
+    { "HOLDING COVER", "COVER" },
     { "SAFE IN COVER", "COVER" },
     { "BEHIND COVER", "COVER" },
-    { "TAKE COVER", "COVER" },
-    { "MELTED INTO", "HIDE" },
-    { "VANISHED", "HIDE" },
+    { "LEAPT CLEAR", "DODGE" },
+    { "SLIPPED PAST", "DODGE" },
+    { "NARROWLY AVOIDED", "DODGE" },
+    { "EVADED SKILLFULLY", "DODGE" },
+    { "DODGED ASIDE", "DODGE" },
 }
 
 local function chipFlat(text)
@@ -268,81 +318,19 @@ local function chipFlat(text)
     return (s:match("^%s*(.-)%s*$") or ""):upper()
 end
 
--- Live dodge / brace / cover / hide / entrench, including overlap on an attack toast.
-function UI.reactEvent(battle)
-    local cur = battle and battle.current
-    local cue = cur and cur.arFieldCue
-    if cue and REACT_KIND[cue.kind] then
-        return {
-            side = cue.side == "enemy" and "enemy" or "player",
-            kind = cue.kind,
-            text = cur.text,
-            ownsToast = true,
-        }
-    end
-    local attached = cur and cur.arOverlapReact
-    if type(attached) == "table" then
-        for i = #attached, 1, -1 do
-            local r = attached[i]
-            if r and REACT_KIND[r.kind] then
-                return {
-                    side = r.side == "enemy" and "enemy" or "player",
-                    kind = r.kind,
-                    text = r.text,
-                    ownsToast = false,
-                }
-            end
-        end
-    end
-    local q = battle and battle.queue
-    if type(q) == "table" then
-        for i = 1, math.min(6, #q) do
-            local row = q[i]
-            local rowCue = row and row.arFieldCue
-            if rowCue and REACT_KIND[rowCue.kind] and row._arOverlapShown then
-                return {
-                    side = rowCue.side == "enemy" and "enemy" or "player",
-                    kind = rowCue.kind,
-                    text = row.text,
-                    ownsToast = false,
-                }
-            end
-        end
-    end
-    return nil
-end
-
--- REACT outcomes only (dodge / brace / cover / hide / entrench).
-function UI.chipAbbrev(text, battle)
-    local ev = battle and UI.reactEvent(battle)
-    local kind = ev and ev.kind
-    local upper = chipFlat((ev and ev.text) or text)
+-- Map a REACT success line to its chip label. Callers must already know this
+-- was a player REACT! pick — toast inference is not a chip.
+function UI.chipAbbrev(text)
+    local upper = chipFlat(text)
     for i = 1, #CHIP_PHRASE do
         if upper:find(CHIP_PHRASE[i][1], 1, true) then
             return CHIP_PHRASE[i][2]
         end
     end
-    if kind == "brace" then
-        return upper:find("WRONG", 1, true) and "WRONG" or "BRACE"
-    elseif kind == "dodge" then
-        return (upper:find("TOO SLOW", 1, true) or upper:find("COULDN'T", 1, true))
-            and "SLOW" or "DODGE"
-    elseif kind == "cover" then
-        return (upper:find("HIT", 1, true) or upper:find("FOUND", 1, true))
-            and "HIT" or "COVER"
-    elseif kind == "hide" then
-        return "HIDE"
-    elseif kind == "entrench" or kind == "entrench_hold" then
-        return "HOLD"
-    end
     return nil
 end
 
 function UI.chipSide(battle, text)
-    local ev = battle and UI.reactEvent(battle)
-    if ev then
-        return ev.side
-    end
     local cue = battle and battle.current and battle.current.arFieldCue
     if cue and (cue.side == "player" or cue.side == "enemy") then
         return cue.side
@@ -354,32 +342,28 @@ function UI.chipSide(battle, text)
     return "player"
 end
 
-function UI.syncStatusChips(battle)
-    if not battle then
-        return
+function UI.armStatusChip(battle, side, text)
+    if not (battle and text and tostring(text) ~= "") then
+        return false
     end
-    battle._arFieldChipDialogue = nil
-    local ev = UI.reactEvent(battle)
-    local raw = (ev and ev.text)
-        or (battle.current and battle.current.text ~= "" and battle.current.text)
-        or battle._arLastBubbleText
-    local abbrev = UI.chipAbbrev(raw, battle)
-    if not abbrev then
-        return
-    end
-    local side = UI.chipSide(battle, raw)
-    -- Overlap REACT rides the attack toast; keep that toast. Steal it only
-    -- when the current line itself is the REACT status.
-    if not ev or ev.ownsToast then
-        battle._arFieldChipDialogue = true
-    end
+    side = side == "enemy" and "enemy" or "player"
     local chips = battle._arStatusChips
     if type(chips) ~= "table" then
         chips = {}
         battle._arStatusChips = chips
     end
     local frame = tonumber(battle.frame) or 0
-    chips[side] = { text = abbrev, untilFrame = frame + UI.CHIP_HOLD }
+    chips[side] = { text = tostring(text), untilFrame = frame + UI.CHIP_HOLD }
+    return true
+end
+
+-- Chips are armed from a successful REACT! pick (armStatusChip), not from
+-- live toasts. Keep this hook so overlay still has a place to expire state.
+function UI.syncStatusChips(battle)
+    if not battle then
+        return
+    end
+    battle._arFieldChipDialogue = nil
 end
 
 local function statusChip(battle, side)
@@ -483,8 +467,8 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 ent._fieldScreenX, ent._fieldScreenY = x, y
             end
             local initial = barInitial(battler)
-            local barW = 20
-            local letterW = 6
+            local barW = UI.HP_BAR_W
+            local letterW = UI.HP_LETTER_W
             local totalW = letterW + 1 + barW
             local left = x - math.floor(totalW / 2)
             if Font and type(Font.draw) == "function" then
@@ -511,7 +495,15 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                     focusBar(g, left + letterW + 1, y - extraTop, barW, shown[key])
                 end
             end
-            hpBar(g, left + letterW + 1, y, barW, battlerHP(battler))
+            local ratio, hp, maxHP = UI.battlerHP(battler)
+            local fills = battle._arHpBarFill
+            if type(fills) ~= "table" then
+                fills = {}
+                battle._arHpBarFill = fills
+            end
+            local target = UI.hpFillWidth(barW - 2, hp, maxHP)
+            fills[item.side] = UI.easeHpFill(fills[item.side], target)
+            hpBar(g, left + letterW + 1, y, barW, ratio, fills[item.side])
             g.setColor(0.12, 0.09, 0.08, 1)
             g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
             if chip then

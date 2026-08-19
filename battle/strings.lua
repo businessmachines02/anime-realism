@@ -115,16 +115,12 @@ S.BRACE_STYLE = {
         "%s! Get ready!",
         "%s! Brace yourself!",
         "Hold on, %s!",
-        "%s! We can counter!",
     },
     BOLD = {
         "%s! Take it head-on!",
         "Stand firm, %s!",
-        "%s! Don't flinch!",
-        "%s! Eat that hit!",
     },
     TRICKY = {
-        "%s! Roll with it!",
         "Wait for it, %s!",
         "%s! Let 'em commit!",
         "%s! Then we hit!",
@@ -1422,6 +1418,7 @@ S.BANTER_CAMEO_IN = 14
 S.BANTER_CAMEO_OUT = 12
 S.BUBBLE_AUTO_DELAY = 75 -- kept for non-bubble fallbacks / legacy callers
 S.BUBBLE_CHAR_DELAY = 7
-S.FIELD_TOAST_DELAY = 90
+-- Hold after a FIELD toast types out, if the player does not mash A.
+S.FIELD_TOAST_DELAY = 36
 
 return S
