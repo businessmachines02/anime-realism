@@ -3408,10 +3408,42 @@ function tests.world_space_projectiles()
   eq(razor.style, "razor", "razor leaf uses spinning blade animation")
   eq(razor.glitz, "blade", "razor leaf uses blade glitz")
   truthy(razor.sx < razor.ex, "razor leaf travels toward the foe")
-  truthy((razor.duration or 0) >= 0.5, "razor leaf holds a longer volley")
+  truthy((razor.duration or 0) >= 0.62, "razor leaf holds a longer volley")
   truthy(Projectiles.isTravelFx({
     moveType = "GRASS", moveId = "RAZOR_LEAF",
   }), "razor leaf is a travel FX")
+  local hyperBeam = Projectiles.move(session, "player", {
+    moveType = "NORMAL", moveId = "HYPER_BEAM",
+  })
+  eq(hyperBeam.style, "beam", "hyper beam is a beam")
+  eq(hyperBeam.glitz, "hyper", "hyper beam uses a charged thick beam")
+  truthy((hyperBeam.duration or 0) >= 0.65, "hyper beam holds the charge and fire")
+  truthy(Projectiles.isTravelFx({
+    moveType = "NORMAL", moveId = "HYPER_BEAM",
+  }), "hyper beam is a travel FX")
+  local psybeam = Projectiles.move(session, "player", {
+    moveType = "PSYCHIC", moveId = "PSYBEAM",
+  })
+  eq(psybeam.style, "beam", "psybeam is a beam")
+  eq(psybeam.glitz, "psy", "psybeam uses corkscrew psy glitz")
+  truthy((psybeam.duration or 0) >= 0.48, "psybeam holds the helix")
+  truthy(Projectiles.isTravelFx({
+    moveType = "PSYCHIC", moveId = "PSYBEAM",
+  }), "psybeam is a travel FX")
+  local clones = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "DOUBLE_TEAM",
+  })
+  eq(clones.style, "clones", "double team fans afterimages around the user")
+  eq(clones.glitz, "afterimage", "double team uses afterimage glitz")
+  eq(clones.sx, clones.ex, "double team stays on the user")
+  eq(clones.followSide, "player", "double team follows the caster")
+  truthy((clones.duration or 0) >= 0.75, "double team holds the clone burst")
+  truthy(Projectiles.isTravelFx({
+    moveType = "NORMAL", moveId = "DOUBLE_TEAM",
+  }), "double team is a travel FX")
+  truthy(not Cues.isMeleeAttack({
+    category = "status", moveId = "DOUBLE_TEAM", moveType = "NORMAL",
+  }, Projectiles), "double team does not close the gap")
   local swift = Projectiles.move(session, "player", {
     moveType = "NORMAL", moveId = "SWIFT",
   })
@@ -3504,6 +3536,32 @@ function tests.world_space_projectiles()
   eq(bite.glitz, "bite", "bite contact uses jaw glitz")
   truthy(Projectiles.isContactFx({ moveId = "BITE" }), "bite is contact FX")
   truthy(Projectiles.isContactFx({ moveId = "FIRE_PUNCH" }), "fire punch is contact FX")
+  local firePunch = Projectiles.contact(session, "player", {
+    moveType = "FIRE", moveId = "FIRE_PUNCH",
+  })
+  eq(firePunch.glitz, "firepunch", "fire punch uses a flaming fist")
+  truthy((firePunch.duration or 0) >= 0.38, "fire punch holds the flame burst")
+  local icePunch = Projectiles.contact(session, "player", {
+    moveType = "ICE", moveId = "ICE_PUNCH",
+  })
+  eq(icePunch.glitz, "icepunch", "ice punch uses a freezing fist")
+  local thunderPunch = Projectiles.contact(session, "player", {
+    moveType = "ELECTRIC", moveId = "THUNDERPUNCH",
+  })
+  eq(thunderPunch.glitz, "thunderpunch", "thunderpunch uses a shocking fist")
+  local thunderPunchAlias = Projectiles.contact(session, "player", {
+    moveType = "ELECTRIC", moveId = "THUNDER_PUNCH",
+  })
+  eq(thunderPunchAlias.glitz, "thunderpunch", "THUNDER_PUNCH aliases thunderpunch")
+  local seismic = Projectiles.contact(session, "player", {
+    moveType = "FIGHTING", moveId = "SEISMIC_TOSS",
+  })
+  eq(seismic.glitz, "toss", "seismic toss lifts and slams the foe")
+  truthy((seismic.duration or 0) >= 0.65, "seismic toss holds the throw")
+  truthy(Projectiles.isContactFx({ moveId = "SEISMIC_TOSS" }), "seismic toss is contact FX")
+  truthy(Cues.isMeleeAttack({
+    category = "physical", moveId = "SEISMIC_TOSS", moveType = "FIGHTING",
+  }, Projectiles), "seismic toss still closes the gap")
   truthy(not Projectiles.isTravelFx({ moveId = "BITE" }), "bite is not travel FX")
   truthy(Cues.isMeleeAttack({
     category = "special", moveId = "BITE", moveType = "DARK",
@@ -3700,6 +3758,73 @@ function tests.fire_tongues_and_gust_paint()
   blast.age = 0.50
   blast:draw(0, 0)
   truthy(calls.polygon > 0, "fire blast paints a star of flame tongues")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local razorPaint = Projectiles.move(session, "player", {
+    moveType = "GRASS", moveId = "RAZOR_LEAF",
+  })
+  razorPaint.age = 0.36
+  razorPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "razor leaf paints a cyclone of leaf blades")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local hyperPaint = Projectiles.move(session, "player", {
+    moveType = "NORMAL", moveId = "HYPER_BEAM",
+  })
+  hyperPaint.age = 0.28
+  hyperPaint:draw(0, 0)
+  truthy(calls.circle > 0, "hyper beam paints a charge orb")
+  truthy(calls.line > 0, "hyper beam paints the fired beam")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local psyPaint = Projectiles.move(session, "player", {
+    moveType = "PSYCHIC", moveId = "PSYBEAM",
+  })
+  psyPaint.age = 0.22
+  psyPaint:draw(0, 0)
+  truthy(calls.circle > 0, "psybeam paints corkscrew motes")
+  truthy(calls.line > 0, "psybeam paints helix strands")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local icePunchPaint = Projectiles.contact(session, "player", {
+    moveType = "ICE", moveId = "ICE_PUNCH",
+  })
+  icePunchPaint.age = 0.14
+  icePunchPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "ice punch paints ice crystals")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local firePunchPaint = Projectiles.contact(session, "player", {
+    moveType = "FIRE", moveId = "FIRE_PUNCH",
+  })
+  firePunchPaint.age = 0.14
+  firePunchPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "fire punch paints flame tongues")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local thunderPunchPaint = Projectiles.contact(session, "player", {
+    moveType = "ELECTRIC", moveId = "THUNDERPUNCH",
+  })
+  thunderPunchPaint.age = 0.14
+  thunderPunchPaint:draw(0, 0)
+  truthy(calls.line > 0, "thunderpunch paints lightning forks")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local tossPaint = Projectiles.contact(session, "player", {
+    moveType = "FIGHTING", moveId = "SEISMIC_TOSS",
+  })
+  tossPaint.age = 0.40
+  tossPaint:draw(0, 0)
+  truthy(calls.ellipse > 0 or calls.circle > 0, "seismic toss paints a tossed silhouette")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local clonePaint = Projectiles.status(session, "player", {
+    moveType = "NORMAL", moveId = "DOUBLE_TEAM",
+  })
+  clonePaint.age = 0.28
+  clonePaint:draw(0, 0)
+  truthy(calls.ellipse > 0, "double team paints afterimage silhouettes")
+  truthy(calls.circle > 0, "double team paints clone heads")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local gust = Projectiles.move(session, "player", {

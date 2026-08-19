@@ -502,6 +502,7 @@ local TRAVEL_STYLES = {
   blast = true,
   gust = true,
   sand = true,
+  clones = true,
 }
 
 function Projectiles.isTravelFx(opts)
@@ -1222,7 +1223,7 @@ local function drawLeafBlade(g, px, py, rot, scale, c, alpha)
   g.circle("fill", hx, hy, 0.7 * scale)
 end
 
---- Razor Leaf: cyclone gather → staggered spinning blades → cutting slash.
+--- Razor Leaf: wide cyclone of blades that spirals into the foe.
 local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
   local dx, dy = x - ox, y - oy
   local len = math.sqrt(dx * dx + dy * dy)
@@ -1231,20 +1232,20 @@ local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
     nx, ny = -dy / len, dx / len
   end
   local fade = 1
-  if t > 0.82 then
-    fade = 1 - (t - 0.82) / 0.18
+  if t > 0.84 then
+    fade = 1 - (t - 0.84) / 0.16
   end
-  local spinUp = math.min(1, t / 0.22)
-  local launch = math.max(0, (t - 0.16) / 0.84)
+  local spinUp = math.min(1, t / 0.20)
+  local launch = math.max(0, (t - 0.12) / 0.88)
 
   -- Gather cyclone at the caster.
-  if spinUp > 0.02 and t < 0.55 then
-    local ringFade = (1 - math.max(0, (t - 0.32) / 0.23)) * fade
+  if spinUp > 0.02 and t < 0.52 then
+    local ringFade = (1 - math.max(0, (t - 0.28) / 0.24)) * fade
     g.setColor(c[1], c[2], c[3], 0.18 * ringFade)
-    g.ellipse("fill", ox, oy + 2, 7 + spinUp * 4, 3)
-    for i = 1, 6 do
-      local a = (age or 0) * 14 + i * (math.pi * 2 / 6)
-      local r = 5 + spinUp * 3
+    g.ellipse("fill", ox, oy + 2, 8 + spinUp * 5, 3.4)
+    for i = 1, 8 do
+      local a = (age or 0) * 16 + i * (math.pi * 2 / 8)
+      local r = 6 + spinUp * 4
       local px = ox + math.cos(a) * r
       local py = oy + math.sin(a) * r * 0.42 - 1
       drawLeafBlade(g, px, py, a + math.pi * 0.5, 0.55 + spinUp * 0.2, c,
@@ -1252,27 +1253,41 @@ local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
     end
   end
 
-  -- Staggered flying blades with a weaving scatter.
-  local n = 7
-  for i = 1, n do
-    local delay = (i - 1) * 0.09
-    local u = (launch - delay) / math.max(0.35, 1 - delay)
-    if u > 0 and u < 1.15 then
-      local along = math.min(1, u)
-      local side = ((i % 2) * 2 - 1)
-      local weave = math.sin(along * math.pi * 1.6 + i) * (4.5 + (i % 3))
-      local px = ox + dx * along + nx * weave * side * 0.55
-      local py = oy + dy * along + ny * weave * side * 0.35
-          - math.sin(along * math.pi) * 3
-      local rot = (age or 0) * (16 + i * 1.4) + i * 0.9
-      local aLeaf = fade * (u < 1 and 0.95 or (1.15 - u) / 0.15)
-      drawLeafBlade(g, px, py, rot, 0.85 + (i % 3) * 0.12, c, aLeaf)
-      if along > 0.08 and along < 0.95 then
-        g.setColor(c[1], c[2], c[3], 0.35 * aLeaf)
-        g.setLineWidth(1.4)
-        g.line(px - dx * 0.08, py - dy * 0.08, px, py)
+  -- Extra orbiting leaves filling the travel corridor.
+  if launch > 0.04 and t < 0.78 then
+    for i = 1, 6 do
+      local u = math.min(1, launch * 0.92 - (i - 1) * 0.07)
+      if u > 0.04 then
+        local spin = (age or 0) * 12 + i * 1.1
+        local amp = 6.5 * (1 - u * 0.35)
+        local px = ox + dx * u + nx * math.cos(spin) * amp
+        local py = oy + dy * u + ny * math.sin(spin) * amp * 0.48
+            - math.sin(u * math.pi) * 2
+        drawLeafBlade(g, px, py, spin + math.pi * 0.5, 0.58, c, 0.55 * fade)
       end
-      -- Cutting flashes as blades reach the foe.
+    end
+  end
+
+  -- Staggered flying blades on a tightening helix into the foe.
+  local n = 13
+  for i = 1, n do
+    local delay = (i - 1) * 0.042
+    local u = (launch - delay) / math.max(0.32, 1 - delay)
+    if u > 0 and u < 1.18 then
+      local along = math.min(1, u)
+      local spread = (1 - along * 0.72) * (8.5 + (i % 5) * 1.5)
+      local spin = along * math.pi * 4.4 + i * 0.85 + (age or 0) * 11
+      local px = ox + dx * along + nx * math.cos(spin) * spread
+      local py = oy + dy * along + ny * math.sin(spin) * spread * 0.5
+          - math.sin(along * math.pi) * 2.4
+      local rot = (age or 0) * (18 + i * 1.2) + spin
+      local aLeaf = fade * (u < 1 and 0.95 or (1.18 - u) / 0.18)
+      drawLeafBlade(g, px, py, rot, 0.82 + (i % 4) * 0.1, c, aLeaf)
+      if along > 0.08 and along < 0.95 then
+        g.setColor(c[1], c[2], c[3], 0.3 * aLeaf)
+        g.setLineWidth(1.3)
+        g.line(px - dx * 0.07, py - dy * 0.07, px, py)
+      end
       if along > 0.78 and along < 1.05 then
         local slash = (along - 0.78) / 0.27
         local reach = 3 + slash * 7
@@ -1288,12 +1303,28 @@ local function drawRazorVolley(g, x, y, ox, oy, t, age, c)
     end
   end
 
+  -- Cyclone tightening onto the foe.
+  if t > 0.34 then
+    local tight = math.min(1, (t - 0.34) / 0.48)
+    local ring = 13 * (1 - tight * 0.72)
+    local inward = (age or 0) * 14
+    for i = 1, 8 do
+      local a = inward + i * (math.pi * 2 / 8)
+      local px = x + math.cos(a) * ring
+      local py = y + math.sin(a) * ring * 0.48 - 1
+      drawLeafBlade(g, px, py, a + math.pi * 0.5 + tight * 2,
+        0.62 + (i % 3) * 0.08, c, (0.82 - tight * 0.35) * fade)
+    end
+    g.setColor(c[1], c[2], c[3], 0.16 * fade * (1 - tight * 0.4))
+    g.ellipse("fill", x, y + 2, 6 + ring * 0.35, 2.6)
+  end
+
   -- Impact leaf burst past the target.
   if t > 0.72 then
     local burst = (t - 0.72) / 0.28
-    for i = 1, 5 do
-      local a = i * 1.256 + (age or 0) * 2
-      local dist = burst * (6 + i)
+    for i = 1, 7 do
+      local a = i * 0.9 + (age or 0) * 2
+      local dist = burst * (7 + i)
       drawLeafBlade(g,
         x + math.cos(a) * dist,
         y + math.sin(a) * dist * 0.55 - burst * 2,
@@ -1934,46 +1965,286 @@ local function drawFireBlast(g, x, y, ox, oy, t, age, c, radius)
   if t > 0.86 then
     fade = 1 - (t - 0.86) / 0.14
   end
-  local travelT = math.min(1, t / 0.48)
-  local bloomT = math.max(0, (t - 0.42) / 0.58)
+  local travelT = math.min(1, t / 0.46)
+  local bloomT = math.max(0, (t - 0.40) / 0.60)
   if travelT < 0.98 then
     local tipX = ox + dx * travelT
     local tipY = oy + dy * travelT
-    for i = 1, 4 do
-      local u = travelT - (i - 1) * 0.06
+    for i = 1, 6 do
+      local u = travelT - (i - 1) * 0.055
       if u > 0.02 then
         local px = ox + dx * u
         local py = oy + dy * u
-        drawFlameTongue(g, px, py, heading, 1.05 - i * 0.14,
-          (0.85 - i * 0.12) * fade)
+        drawFlameTongue(g, px, py, heading, 1.18 - i * 0.12,
+          (0.9 - i * 0.1) * fade)
       end
     end
-    g.setColor(1.00, 0.42, 0.06, 0.32 * fade)
-    g.circle("fill", tipX, tipY, 7)
-    drawFlameTongue(g, tipX, tipY, heading, 1.35, fade)
+    g.setColor(1.00, 0.42, 0.06, 0.38 * fade)
+    g.circle("fill", tipX, tipY, 9)
+    g.setColor(1.00, 0.88, 0.28, 0.55 * fade)
+    g.circle("fill", tipX, tipY, 4.2)
+    drawFlameTongue(g, tipX, tipY, heading, 1.55, fade)
+    drawFlameTongue(g, tipX, tipY, heading + 0.55, 0.95, 0.7 * fade)
+    drawFlameTongue(g, tipX, tipY, heading - 0.55, 0.95, 0.7 * fade)
   end
   if bloomT > 0 then
-    local R = (radius or 22) * (0.35 + bloomT * 0.75)
-    g.setColor(1.00, 0.28, 0.04, 0.22 * fade * (1 - bloomT * 0.4))
+    local R = (radius or 26) * (0.40 + bloomT * 0.82)
+    g.setColor(1.00, 0.28, 0.04, 0.26 * fade * (1 - bloomT * 0.4))
     g.circle("fill", x, y, R)
+    -- Horizontal bar of 大.
+    g.setColor(1.00, 0.42, 0.08, 0.42 * fade * (1 - bloomT * 0.35))
+    g.ellipse("fill", x, y, R * 0.92, 3.4 + bloomT * 1.2)
+    drawFlameTongue(g, x - R * 0.55, y, -math.pi * 0.5, 1.15 + bloomT * 0.25,
+      (0.95 - bloomT * 0.3) * fade)
+    drawFlameTongue(g, x + R * 0.55, y, math.pi * 0.5, 1.15 + bloomT * 0.25,
+      (0.95 - bloomT * 0.3) * fade)
+    -- Five-point 大 star of tongues.
+    local tips = {}
     for i = 1, 5 do
-      local a = i * (math.pi * 2 / 5) - math.pi * 0.5 + bloomT * 0.4
-      local dist = R * 0.42
-      drawFlameTongue(g,
-        x + math.cos(a) * dist,
-        y + math.sin(a) * dist * 0.72,
-        a + math.pi * 0.5, 1.15 + bloomT * 0.35,
-        (0.95 - bloomT * 0.35) * fade)
+      local a = i * (math.pi * 2 / 5) - math.pi * 0.5 + bloomT * 0.25
+      local dist = R * 0.52
+      local tx = x + math.cos(a) * dist
+      local ty = y + math.sin(a) * dist * 0.72
+      tips[i] = { tx, ty }
+      drawFlameTongue(g, tx, ty, a + math.pi * 0.5, 1.35 + bloomT * 0.42,
+        (0.98 - bloomT * 0.32) * fade)
     end
-    drawFlameTongue(g, x, y - 1, 0, 1.05, 0.9 * fade)
-    for i = 1, 7 do
-      local a = i * 0.9 + (age or 0) * 5
-      local dist = bloomT * (6 + (i % 3) * 3)
+    -- Pentagram spokes between every second tip.
+    if g.line and #tips == 5 then
+      g.setColor(1.00, 0.72, 0.18, 0.45 * fade * (1 - bloomT * 0.5))
+      g.setLineWidth(1.6)
+      for i = 1, 5 do
+        local a = tips[i]
+        local b = tips[((i + 1) % 5) + 1]
+        g.line(a[1], a[2], b[1], b[2])
+      end
+    end
+    drawFlameTongue(g, x, y - 1, 0, 1.22, 0.95 * fade)
+    for i = 1, 9 do
+      local a = i * 0.7 + (age or 0) * 5
+      local dist = bloomT * (7 + (i % 3) * 3.5)
       g.setColor(1, 0.78, 0.22, (0.7 - bloomT * 0.4) * fade)
       g.circle("fill",
         x + math.cos(a) * dist,
         y + math.sin(a) * dist * 0.55 - bloomT * 2,
+        1.4)
+    end
+  end
+end
+
+--- Hyper Beam: charge orb at the caster, then a fat gold beam with traveling rings.
+local function drawHyperBeam(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local fade = 1
+  if t > 0.86 then
+    fade = 1 - (t - 0.86) / 0.14
+  end
+  local chargeT = math.min(1, t / 0.26)
+  local fireT = math.max(0, (t - 0.18) / 0.82)
+  -- Charge bloom at the caster.
+  if t < 0.48 then
+    local pulse = 0.7 + 0.3 * math.abs(math.sin((age or 0) * 16))
+    local r = 2.4 + chargeT * 9 * pulse
+    g.setColor(1.00, 0.42, 0.08, 0.28 * fade * (1 - t * 0.4))
+    g.circle("fill", ox, oy, r + 4)
+    g.setColor(1.00, 0.72, 0.18, 0.55 * fade)
+    g.circle("fill", ox, oy, r)
+    g.setColor(1, 1, 0.92, 0.92 * fade)
+    g.circle("fill", ox, oy, r * 0.42)
+    for i = 1, 6 do
+      local a = (age or 0) * 10 + i * (math.pi * 2 / 6)
+      local dist = r + 2
+      g.setColor(1.00, 0.78, 0.28, 0.7 * fade * (1 - t * 0.5))
+      g.circle("fill", ox + math.cos(a) * dist, oy + math.sin(a) * dist * 0.55, 1.4)
+    end
+  end
+  if fireT > 0.02 then
+    local reach = math.min(1, fireT / 0.16)
+    local tx = ox + dx * reach
+    local ty = oy + dy * reach
+    g.setColor(1.00, 0.34, 0.06, 0.28 * fade)
+    g.setLineWidth(16)
+    g.line(ox, oy, tx, ty)
+    g.setColor(c[1], c[2], c[3], 0.45 * fade)
+    g.setLineWidth(11)
+    g.line(ox, oy, tx, ty)
+    g.setColor(1.00, 0.72, 0.18, 0.85 * fade)
+    g.setLineWidth(6)
+    g.line(ox, oy, tx, ty)
+    g.setColor(1, 1, 0.94, 0.95 * fade)
+    g.setLineWidth(2.4)
+    g.line(ox, oy, tx, ty)
+    -- Traveling rings along the beam.
+    local n = 5
+    for i = 1, n do
+      local u = ((fireT * 1.4 + i / n) % 1) * reach
+      if u > 0.04 and u < 0.98 then
+        local px = ox + dx * u
+        local py = oy + dy * u
+        local a = 0.55 * fade * (1 - math.abs(u - 0.5) * 0.6)
+        g.setColor(1.00, 0.82, 0.32, a)
+        g.setLineWidth(1.6)
+        g.ellipse("line", px, py, 7 + math.sin((age or 0) * 8 + i) * 1.4, 3.2)
+        g.setColor(1, 1, 0.9, a * 0.7)
+        g.ellipse("line", px, py, 4.2, 1.8)
+      end
+    end
+    -- Side motes.
+    for i = 1, 7 do
+      local u = (i / 8) * reach
+      local wobble = math.sin((age or 0) * 14 + i * 1.7) * 3.4
+      g.setColor(1.00, 0.62, 0.14, 0.45 * fade)
+      g.circle("fill",
+        ox + dx * u + nx * wobble,
+        oy + dy * u + ny * wobble * 0.45,
         1.3)
+    end
+    -- Impact bloom.
+    if reach > 0.82 then
+      local slam = (reach - 0.82) / 0.18
+      g.setColor(1.00, 0.48, 0.08, 0.32 * fade * (1 - slam * 0.4))
+      g.circle("fill", tx, ty, 8 + slam * 10)
+      g.setColor(1, 1, 0.9, 0.7 * fade)
+      g.circle("fill", tx, ty, 3.4)
+      for i = 1, 6 do
+        local a = i * (math.pi * 2 / 6) + (age or 0) * 4
+        local dist = 5 + slam * 8
+        g.setColor(1.00, 0.78, 0.22, (0.8 - slam * 0.4) * fade)
+        g.setLineWidth(1.8)
+        g.line(tx, ty, tx + math.cos(a) * dist, ty + math.sin(a) * dist * 0.55)
+      end
+    end
+  end
+end
+
+--- Psybeam: pastel corkscrew helix caster → foe.
+local function drawPsybeam(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    nx, ny = -dy / len, dx / len
+  end
+  local fade = 1
+  if t > 0.84 then
+    fade = 1 - (t - 0.84) / 0.16
+  end
+  local travel = math.min(1, t / 0.22)
+  local hues = {
+    { 0.96, 0.38, 0.88 },
+    { 1.00, 0.62, 0.92 },
+    { 0.55, 0.82, 1.00 },
+    { 0.92, 0.52, 1.00 },
+  }
+  -- Soft core beam.
+  g.setColor(c[1], c[2], c[3], 0.22 * fade)
+  g.setLineWidth(5)
+  g.line(ox, oy, ox + dx * travel, oy + dy * travel)
+  g.setColor(1, 0.88, 1, 0.55 * fade)
+  g.setLineWidth(1.6)
+  g.line(ox, oy, ox + dx * travel, oy + dy * travel)
+  local segs = 18
+  for strand = 1, 2 do
+    local phase = strand * math.pi
+    local prevX, prevY
+    for i = 0, segs do
+      local u = (i / segs) * travel
+      local spin = u * math.pi * 6.2 + (age or 0) * 9 + phase
+      local amp = 3.4 + math.sin(u * math.pi) * 1.6
+      local px = ox + dx * u + nx * math.cos(spin) * amp
+      local py = oy + dy * u + ny * math.cos(spin) * amp * 0.48
+          + math.sin(spin) * 0.8
+      local col = hues[(i % #hues) + 1]
+      local a = (0.45 + 0.5 * u) * fade
+      if prevX then
+        g.setColor(col[1], col[2], col[3], a * 0.55)
+        g.setLineWidth(1.8)
+        g.line(prevX, prevY, px, py)
+      end
+      g.setColor(col[1], col[2], col[3], a)
+      g.circle("fill", px, py, 1.55 + (i % 2) * 0.35)
+      g.setColor(1, 1, 1, a * 0.7)
+      g.circle("fill", px - 0.35, py - 0.4, 0.55)
+      prevX, prevY = px, py
+    end
+  end
+  -- Sparkle motes along the corkscrew.
+  for i = 1, 8 do
+    local u = ((i / 8) + (age or 0) * 0.35) % 1 * travel
+    if u > 0.04 then
+      local spin = u * math.pi * 6.2 + (age or 0) * 9
+      local px = ox + dx * u + nx * math.sin(spin) * 4.2
+      local py = oy + dy * u + ny * math.sin(spin) * 4.2 * 0.45
+      g.setColor(1, 0.86, 1, 0.55 * fade)
+      g.circle("fill", px, py, 0.9)
+    end
+  end
+  if travel > 0.72 then
+    local slam = (travel - 0.72) / 0.28
+    g.setColor(c[1], c[2], c[3], 0.28 * fade)
+    g.circle("fill", x, y, 5 + slam * 6)
+    for i = 1, 5 do
+      local a = i * 1.256 + (age or 0) * 6
+      g.setColor(1, 0.78, 1, (0.7 - slam * 0.4) * fade)
+      g.circle("fill",
+        x + math.cos(a) * (4 + slam * 5),
+        y + math.sin(a) * (4 + slam * 5) * 0.5,
+        1.3)
+    end
+  end
+end
+
+--- Double Team: afterimages fan out in every direction around the user.
+local function drawMonSilhouette(g, px, py, scale, c, alpha)
+  scale = scale or 1
+  alpha = alpha or 1
+  g.setColor(c[1], c[2], c[3], alpha * 0.55)
+  g.ellipse("fill", px, py + 2.2 * scale, 5.6 * scale, 3.4 * scale)
+  g.circle("fill", px, py - 3.1 * scale, 3.5 * scale)
+  g.setColor(1, 1, 1, alpha * 0.28)
+  g.circle("fill", px - 0.9 * scale, py - 3.7 * scale, 1.15 * scale)
+end
+
+local function drawDoubleTeam(g, x, y, t, age, c)
+  local fade = 1
+  if t > 0.78 then
+    fade = 1 - (t - 0.78) / 0.22
+  end
+  local pop = math.min(1, t / 0.16)
+  -- Origin flicker.
+  g.setColor(c[1], c[2], c[3], 0.22 * fade * (0.6 + 0.4 * math.sin((age or 0) * 18)))
+  g.ellipse("fill", x, y + 2, 7 + pop * 3, 3.2)
+  drawMonSilhouette(g, x, y, 1.0, c, 0.35 * fade * (1 - t * 0.4))
+  local n = 12
+  for i = 1, n do
+    local delay = (i - 1) * 0.028
+    local u = math.max(0, (t - delay) / 0.72)
+    if u > 0.02 and u < 1.12 then
+      local a = i * (math.pi * 2 / n) + t * 0.55
+      local dist = (5 + math.min(1, u) * 20) * (1 + (i % 3) * 0.16)
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.52 - math.sin(u * math.pi) * 2.4
+      local aClone = fade * (u < 0.85 and 0.85 or (1.12 - u) / 0.27)
+      drawMonSilhouette(g, px, py, 0.82 + (i % 3) * 0.08, c, aClone)
+    end
+  end
+  -- Extra clones that dash farther out.
+  for i = 1, 6 do
+    local delay = 0.08 + (i - 1) * 0.05
+    local u = math.max(0, (t - delay) / 0.62)
+    if u > 0.02 and u < 1.05 then
+      local a = i * 1.047 + 0.4
+      local dist = 10 + math.min(1, u) * 26
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.48 - u * 3
+      drawMonSilhouette(g, px, py, 0.7, c, 0.55 * fade * (1 - u * 0.55))
     end
   end
 end
@@ -2286,6 +2557,40 @@ local function drawMove(g, p, x, y)
   g.circle("fill", x, y, 2)
 end
 
+local function drawIceCrystal(g, px, py, rot, scale, c, alpha)
+  scale = scale or 1
+  alpha = alpha or 1
+  local ca, sa = math.cos(rot), math.sin(rot)
+  local function pt(lx, ly)
+    return px + (lx * ca - ly * sa) * scale,
+      py + (lx * sa + ly * ca) * scale
+  end
+  local ax, ay = pt(0, -2.6)
+  local bx, by = pt(1.05, 0)
+  local cx, cy = pt(0, 2.6)
+  local dx, dy = pt(-1.05, 0)
+  g.setColor(c[1], c[2], c[3], 0.9 * alpha)
+  g.polygon("fill", ax, ay, bx, by, cx, cy, dx, dy)
+  local hx, hy = pt(0, -1.15)
+  local ix, iy = pt(0.38, 0)
+  local jx, jy = pt(0, 0.55)
+  local kx, ky = pt(-0.22, -0.12)
+  g.setColor(1, 1, 1, 0.75 * alpha)
+  g.polygon("fill", hx, hy, ix, iy, jx, jy, kx, ky)
+end
+
+local function drawPunchBurst(g, x, y, t, fade, c)
+  local r = 3 + t * 7
+  g.setColor(c[1], c[2], c[3], 0.7 * fade)
+  g.setLineWidth(2)
+  g.circle("line", x, y, r)
+  g.setColor(1, 1, 1, 0.9 * fade)
+  g.circle("fill", x - 1, y - 1, 2.4)
+  g.setColor(c[1], c[2], c[3], fade)
+  g.setLineWidth(2)
+  g.line(x - 6, y + 4, x + 2, y - 5)
+end
+
 local function drawContact(g, p, x, y, t)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local glitz = p.glitz or "slash"
@@ -2347,14 +2652,118 @@ local function drawContact(g, p, x, y, t)
   end
 
   if glitz == "punch" then
-    local r = 3 + t * 6
-    g.setColor(c[1], c[2], c[3], 0.7 * fade)
-    g.circle("line", x, y, r)
-    g.setColor(1, 1, 1, 0.9 * fade)
-    g.circle("fill", x - 1, y - 1, 2.2)
-    g.setColor(c[1], c[2], c[3], fade)
-    g.setLineWidth(2)
-    g.line(x - 6, y + 4, x + 2, y - 5)
+    drawPunchBurst(g, x, y, t, fade, c)
+    return
+  end
+
+  if glitz == "icepunch" then
+    drawPunchBurst(g, x, y, t, fade, c)
+    for i = 1, 6 do
+      local a = i * 1.047 + t * 2.4
+      local dist = 4 + t * 8
+      drawIceCrystal(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.6 - t * 2,
+        a + t * 3, 0.85 + (i % 2) * 0.2, c, fade)
+    end
+    g.setColor(0.78, 0.96, 1.00, 0.35 * fade)
+    g.circle("fill", x, y, 5 + t * 4)
+    return
+  end
+
+  if glitz == "firepunch" then
+    drawPunchBurst(g, x, y, t, fade, c)
+    for i = 1, 6 do
+      local a = i * 1.047 + t * 3
+      local dist = 3 + t * 7
+      drawFlameTongue(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.6 - t * 2,
+        a + math.pi * 0.5, 0.78 + (i % 2) * 0.12, fade)
+    end
+    drawFlameTongue(g, x, y - 2, 0, 1.15, fade)
+    return
+  end
+
+  if glitz == "thunderpunch" then
+    drawPunchBurst(g, x, y, t, fade, c)
+    local age = p.age or t
+    for i = 1, 3 do
+      local a = i * (math.pi * 2 / 3) + t * 4
+      local dist = 6 + t * 8
+      drawLightningBolt(g, x, y,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.55,
+        age + i * 0.2, c, {
+          fade = fade,
+          segs = 4,
+          amp = 3.2,
+          glow = 3.4,
+          mid = 1.8,
+          core = 1.05,
+          forkLen = 3.2,
+          coreColor = { 1, 1, 0.92 },
+        })
+    end
+    g.setColor(1, 1, 0.7, 0.45 * fade)
+    g.circle("fill", x, y, 3.5)
+    return
+  end
+
+  if glitz == "toss" then
+    local lift = 0
+    if t < 0.18 then
+      lift = 0
+      g.setColor(c[1], c[2], c[3], fade)
+      g.setLineWidth(2)
+      g.circle("line", x, y, 4 + t * 8)
+      for i = 1, 4 do
+        local a = i * 1.57 + t * 6
+        g.setColor(1, 1, 1, 0.7 * fade)
+        g.circle("fill", x + math.cos(a) * 5, y + math.sin(a) * 3, 1.2)
+      end
+    elseif t < 0.52 then
+      local u = (t - 0.18) / 0.34
+      lift = u * u * (3 - 2 * u) * 32
+    elseif t < 0.60 then
+      lift = 32 + math.sin((t - 0.52) * 40) * 1.2
+    else
+      local u = math.min(1, (t - 0.60) / 0.18)
+      lift = (1 - u * u) * 32
+    end
+    local hold = 1
+    if t > 0.88 then
+      hold = 1 - (t - 0.88) / 0.12
+    end
+    if t < 0.78 then
+      drawMonSilhouette(g, x, y - lift, 1.05, c, hold)
+      g.setColor(c[1], c[2], c[3], 0.22 * hold)
+      g.ellipse("fill", x, y + 4, 6 + (1 - lift / 32) * 3, 2.2)
+    end
+    if t > 0.70 then
+      local slam = math.min(1, (t - 0.70) / 0.30)
+      g.setColor(c[1], c[2], c[3], 0.4 * (1 - slam * 0.5) * hold)
+      g.ellipse("fill", x, y + 3, 8 + slam * 10, 3.4 + slam * 2)
+      g.setColor(1, 1, 1, 0.7 * (1 - slam) * hold)
+      g.circle("fill", x, y, 2.6)
+      for i = 1, 6 do
+        local a = i * (math.pi * 2 / 6)
+        local dist = 4 + slam * 10
+        g.setColor(c[1], c[2], c[3], (0.85 - slam * 0.5) * hold)
+        g.setLineWidth(1.8)
+        g.line(x, y,
+          x + math.cos(a) * dist,
+          y + math.sin(a) * dist * 0.45)
+      end
+      for i = 1, 5 do
+        local a = i * 1.256 + slam * 2
+        g.setColor(0.72, 0.58, 0.32, (0.6 - slam * 0.4) * hold)
+        g.circle("fill",
+          x + math.cos(a) * (5 + slam * 6),
+          y + 3 + math.sin(a) * 2,
+          1.4)
+      end
+    end
     return
   end
 
@@ -2485,6 +2894,14 @@ function Projectiles.registerStyle(name, fn)
 end
 
 Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
+    if glitz == "hyper" then
+      drawHyperBeam(g, x, y, ox, oy, t, p.age, c)
+      return
+    end
+    if glitz == "psy" then
+      drawPsybeam(g, x, y, ox, oy, t, p.age, c)
+      return
+    end
     local thick = (glitz == "thick") and 7 or 5
     if glitz == "bolt" or glitz == "icebolt" then
       local ice = glitz == "icebolt"
@@ -2554,7 +2971,7 @@ Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
       g.setColor(1, 1, 1, 0.9)
       g.setLineWidth(2)
       g.line(ox, oy, x, y)
-      if glitz == "frost" or glitz == "psy" or glitz == "ghost" then
+      if glitz == "frost" or glitz == "ghost" then
         for i = 1, 3 do
           local u = i / 4
           local px = ox + (x - ox) * u
@@ -2696,6 +3113,9 @@ Projectiles.registerStyle("gust", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("sand", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSandSpray(g, x, y, ox, oy, t, p.age, c)
+end)
+Projectiles.registerStyle("clones", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawDoubleTeam(g, x, y, t, p.age, c)
 end)
 Projectiles.registerStyle("spiral", function(g, p, x, y, ox, oy, t, c, glitz)
     if glitz == "psy" then
@@ -3512,6 +3932,22 @@ function Projectiles.move(session, side, opts)
     return Projectiles.heal(session, side)
   end
 
+  if fx.style == "clones" then
+    return spawn(session, {
+      kind = "effect",
+      style = "clones",
+      glitz = fx.glitz or "afterimage",
+      sx = sx, sy = sy, ex = sx, ey = sy,
+      duration = fx.duration or 0.82,
+      arc = 0,
+      color = fx.color or TYPE_COLORS.NORMAL,
+      pinTip = true,
+      followPin = true,
+      followSide = side,
+      onDone = opts.onDone,
+    })
+  end
+
   -- Status-styled damaging/status moves (e.g. Toxic) orbit the foe.
   if fx.style == "status" then
     return spawn(session, {
@@ -3793,14 +4229,17 @@ function Projectiles.contact(session, side, opts)
   if not glitz or fx.style ~= "contact" then
     glitz = TYPE_CONTACT[fx.moveType] or "slash"
   end
+  local toss = glitz == "toss"
   return spawn(session, {
     kind = "effect",
     style = "contact",
     glitz = glitz,
     sx = x, sy = y, ex = x, ey = y,
-    duration = 0.26,
+    duration = fx.duration or 0.26,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType],
+    pinTip = toss or nil,
+    followSide = toss and ((side == "player") and "enemy" or "player") or nil,
   })
 end
 
@@ -3838,6 +4277,22 @@ function Projectiles.status(session, side, opts)
   local fromEnt = (side == "player") and session.playerMon or session.enemyMon
   local ex, ey = center(session, targetEnt)
   if not ex then return nil end
+
+  if fx.style == "clones" then
+    return spawn(session, {
+      kind = "effect",
+      style = "clones",
+      glitz = fx.glitz or "afterimage",
+      sx = ex, sy = ey, ex = ex, ey = ey,
+      duration = fx.duration or 0.82,
+      arc = 0,
+      color = fx.color or TYPE_COLORS.NORMAL,
+      pinTip = true,
+      followPin = true,
+      followSide = side,
+      onDone = opts.onDone,
+    })
+  end
 
   if fx.style == "seed" or fx.style == "sonic" or fx.style == "ray"
       or fx.style == "sand" then
