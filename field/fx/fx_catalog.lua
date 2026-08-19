@@ -111,7 +111,7 @@ Catalog.MOVE_FX = {
   },
   EARTHQUAKE = { style = "area", glitz = "quake", radius = 22, duration = 0.62 },
   FISSURE = { style = "area", glitz = "quake", radius = 18 },
-  ROCK_SLIDE = { style = "area", glitz = "rock", radius = 20 },
+  ROCK_SLIDE = { style = "slide", glitz = "rock", duration = 0.72, radius = 16 },
   ROCK_THROW = { style = "rock", glitz = "rock", duration = 0.58, arc = 22 },
   EXPLOSION = { style = "area", glitz = "burst", radius = 28, duration = 0.55 },
   SELFDESTRUCT = { style = "area", glitz = "burst", radius = 26, duration = 0.52 },

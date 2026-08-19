@@ -3308,6 +3308,20 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "ROCK", moveId = "ROCK_THROW",
   }), "rock throw is a travel FX")
+  local rockSlide = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  })
+  eq(rockSlide.style, "slide", "rock slide rains stones onto the foe")
+  eq(rockSlide.glitz, "rock", "rock slide paints rock glitz")
+  eq(rockSlide.sx, rockSlide.ex, "rock slide falls on the target")
+  eq(rockSlide.sy, rockSlide.ey, "rock slide does not lob across the pad")
+  truthy((rockSlide.duration or 0) >= 0.65, "rock slide holds the cascade")
+  truthy(Projectiles.isTravelFx({
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  }), "rock slide is a travel FX")
+  truthy(not Cues.isMeleeAttack({
+    category = "physical", moveId = "ROCK_SLIDE", moveType = "ROCK",
+  }, Projectiles), "rock slide does not close the gap")
   local fireBlast = Projectiles.move(session, "player", {
     moveType = "FIRE", moveId = "FIRE_BLAST",
   })
@@ -3661,6 +3675,15 @@ function tests.fire_tongues_and_gust_paint()
   rockThrow.age = 0.32
   rockThrow:draw(0, 0)
   truthy(calls.polygon > 0, "rock throw paints tumbling rock shards")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local rockSlide = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  })
+  rockSlide.age = 0.36
+  rockSlide:draw(0, 0)
+  truthy(calls.polygon > 0, "rock slide paints falling rock shards")
+  truthy(calls.ellipse > 0, "rock slide paints ground dust")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local flamethrower = Projectiles.move(session, "player", {

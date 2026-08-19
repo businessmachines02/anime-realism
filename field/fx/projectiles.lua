@@ -498,6 +498,7 @@ local TRAVEL_STYLES = {
   ray = true,
   ember = true,
   rock = true,
+  slide = true,
   blast = true,
   gust = true,
   sand = true,
@@ -1591,6 +1592,96 @@ local function drawRockThrow(g, x, y, ox, oy, t, age, c)
   end
 end
 
+-- Staggered stones that rain onto the target (classic Rock Slide).
+local ROCK_SLIDE_FALLS = {
+  { delay = 0.00, ox = -7, drop = 30, scale = 1.18, shape = 1, spin = 11 },
+  { delay = 0.08, ox =  6, drop = 34, scale = 0.92, shape = 2, spin = -13 },
+  { delay = 0.16, ox = -1, drop = 26, scale = 1.32, shape = 3, spin = 9 },
+  { delay = 0.24, ox =  9, drop = 32, scale = 0.78, shape = 4, spin = -16 },
+  { delay = 0.32, ox = -9, drop = 28, scale = 1.04, shape = 1, spin = 14 },
+  { delay = 0.40, ox =  2, drop = 36, scale = 1.12, shape = 2, spin = -10 },
+}
+
+--- Rock Slide: stones peel off above the foe and pile onto them.
+local function drawRockSlide(g, x, y, _ox, _oy, t, age, c, radius)
+  if type(x) ~= "number" or type(y) ~= "number" then
+    return
+  end
+  local cr, cg, cb = c[1] or 0.66, c[2] or 0.56, c[3] or 0.34
+  local fade = 1
+  if t > 0.82 then
+    fade = 1 - (t - 0.82) / 0.18
+  end
+  local spread = (radius or 16) * 0.55
+  local rumble = 0.55 + 0.45 * math.abs(math.sin((age or 0) * 18))
+
+  -- Ground haze / rumble under the cascade.
+  if g.ellipse then
+    g.setColor(cr * 0.55, cg * 0.48, cb * 0.38, 0.22 * fade * rumble)
+    g.ellipse("fill", x, y + 5, 7 + t * 9, 2.4 + t * 1.6)
+  end
+  g.setColor(0.78, 0.68, 0.48, 0.28 * fade)
+  for i = 1, 7 do
+    local a = (age or 0) * 6 + i * 0.95
+    g.circle("fill",
+      x + math.cos(a) * (3 + t * 6),
+      y + 4 + math.sin(a * 1.4) * 1.2 - t * 1.5,
+      0.7 + (i % 3) * 0.25)
+  end
+
+  for i = 1, #ROCK_SLIDE_FALLS do
+    local spec = ROCK_SLIDE_FALLS[i]
+    local localT = (t - spec.delay) / 0.38
+    if localT > 0 then
+      local fall = math.min(1, localT)
+      local grav = fall * fall
+      local landed = fall >= 1
+      local px = x + spec.ox * (spread / 8) + grav * 1.2
+      local py = y - spec.drop * (1 - grav)
+      if landed then
+        py = y + (i % 3) * 0.6
+        px = x + spec.ox * 0.72
+      end
+      local bodyA = fade
+      if landed then
+        bodyA = fade * math.max(0, 1 - (localT - 1) * 1.6)
+      end
+      if bodyA > 0.04 then
+        if not landed and g.ellipse then
+          local shadow = 0.35 + grav * 0.65
+          g.setColor(0.16, 0.11, 0.07, 0.22 * fade * shadow)
+          g.ellipse("fill", px, y + 5, 2.2 * spec.scale * shadow,
+            0.85 * spec.scale * shadow)
+        end
+        local rot = (age or 0) * spec.spin + spec.delay * 4
+        if landed then
+          rot = spec.spin * 0.35 + i
+        end
+        drawRockChunk(g, px, py, rot, spec.scale * (landed and 0.92 or 1),
+          c, bodyA, spec.shape)
+      end
+      if landed then
+        local burst = math.min(1, localT - 1)
+        local dustA = (0.7 - burst * 0.9) * fade
+        if dustA > 0.04 then
+          if g.ellipse then
+            g.setColor(cr, cg, cb, 0.28 * dustA)
+            g.ellipse("fill", px, y + 4, 3.5 + burst * 6, 1.5 + burst * 1.4)
+          end
+          for s = 1, 4 do
+            local a = s * 1.7 + i + burst * 5
+            drawRockChunk(g,
+              px + math.cos(a) * burst * (3 + s),
+              y + math.sin(a) * burst * 1.8 - burst * 2.4,
+              a + burst * 6, 0.32 + (s % 2) * 0.08, c,
+              dustA * 0.9, s)
+          end
+        end
+      end
+    end
+  end
+end
+
 local EMBER_VARIANTS = { "volley", "hop", "spray", "corkscrew", "pop" }
 
 local function emberFade(t)
@@ -2593,6 +2684,9 @@ Projectiles.registerStyle("ember", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("rock", function(g, p, x, y, ox, oy, t, c, glitz)
     drawRockThrow(g, x, y, ox, oy, t, p.age, c)
+end)
+Projectiles.registerStyle("slide", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawRockSlide(g, x, y, ox, oy, t, p.age, c, p.radius)
 end)
 Projectiles.registerStyle("blast", function(g, p, x, y, ox, oy, t, c, glitz)
     drawFireBlast(g, x, y, ox, oy, t, p.age, c, p.radius)
@@ -3601,6 +3695,22 @@ function Projectiles.move(session, side, opts)
       duration = fx.duration or 0.58,
       arc = fx.arc or 22,
       color = fx.color or TYPE_COLORS.ROCK,
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "slide" then
+    return spawn(session, {
+      kind = "effect",
+      style = "slide",
+      glitz = fx.glitz or "rock",
+      sx = ex, sy = ey, ex = ex, ey = ey,
+      duration = fx.duration or 0.72,
+      arc = 0,
+      radius = fx.radius or 16,
+      color = fx.color or TYPE_COLORS.ROCK,
+      pinTip = true,
+      followSide = (side == "player") and "enemy" or "player",
       onDone = opts.onDone,
     })
   end
