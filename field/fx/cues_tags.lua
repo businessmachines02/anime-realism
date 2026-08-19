@@ -90,6 +90,44 @@ return function(Cues)
         return true
     end
 
+    function Cues.isMissText(text)
+        local lower = H.flattenText(text)
+        return lower:find("attack missed", 1, true) ~= nil
+    end
+
+    --- Stamp the miss line so FIELD plays a whiff pose + MISS chip on the attacker.
+    -- `sideHint` is who used the move (from battle.accuracy). Dodge-whiff
+    -- rewrites never reach here.
+    function Cues.tagMiss(battle, text, sideHint)
+        if type(battle) ~= "table" or not Cues.isMissText(text) then
+            return false
+        end
+        local q = battle.queue
+        if type(q) ~= "table" then
+            return false
+        end
+        local item = q[battle.nextInsert]
+        if not (item and type(item.text) == "string" and Cues.isMissText(item.text)) then
+            item = nil
+            local start = tonumber(battle.nextInsert) or #q
+            for i = start, math.max(1, start - 4), -1 do
+                if q[i] and type(q[i].text) == "string" and Cues.isMissText(q[i].text) then
+                    item = q[i]
+                    break
+                end
+            end
+        end
+        if not item then
+            return false
+        end
+        local side = sideHint or battle._arAccuracyMissSide
+        if side ~= "player" and side ~= "enemy" then
+            side = "player"
+        end
+        item.arFieldCue = { side = side, kind = "miss" }
+        return true
+    end
+
     --- Tag the latest queue row when a mon faints.
     -- Kept for tests / callers; FIELD does not play exit FX from this tag.
     -- Recall / faint sprites fire when the HP bar (`shownHP`) reaches 0.

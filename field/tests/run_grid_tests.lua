@@ -551,6 +551,8 @@ function tests.status_chip_abbreviations()
   UI.armStatusChip(battle, "player", "DODGE")
   eq(battle._arStatusChips.player.text, "DODGE", "successful REACT! pick arms the chip")
   eq(battle._arStatusChips.player.untilFrame, 12 + UI.CHIP_HOLD, "chip holds a beat")
+  UI.armStatusChip(battle, "enemy", "MISS")
+  eq(battle._arStatusChips.enemy.text, "MISS", "accuracy miss arms a MISS chip")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -1934,6 +1936,13 @@ function tests.cues_and_dedupe()
   truthy(not Cues.shouldSkipEvent(session, "player", "hit"),
     "self-hit does not swallow a later hit")
 
+  session._now = 14.05
+  session._lastCueAt = nil
+  player.lastAnim = nil
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, nil), "miss cue")
+  eq(player.lastAnim, "miss", "accuracy miss plays a slip-past")
+  truthy(Cues.shouldSkipEvent(session, "player", "miss"), "dedupe miss")
+
   session._now = 14.2
   session._lastCueAt = nil
   enemy.lastAnim = nil
@@ -2328,6 +2337,199 @@ function tests.awaiting_react_holds_close_strike()
   Cues.tickReturns(session, Grid)
   truthy(not enemy._pendingCloseStrike, "dodge miss cancels the punch")
   eq(enemy.lastAnim, nil, "whiff does not play attack")
+end
+
+function tests.accuracy_miss_plays_whiff_and_chip()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { frame = 20, _arAccuracyMissSide = "player" }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 70,
+    _deps = { Projectiles = Projectiles, UI = UI },
+    _battle = battle,
+  }
+  local tagged = {
+    nextInsert = 1,
+    queue = { { text = "The attack missed!" } },
+    _arAccuracyMissSide = "enemy",
+  }
+  truthy(Cues.isMissText("The attack\nmissed!"), "vanilla miss line is a miss")
+  truthy(Cues.tagMiss(tagged, tagged.queue[1].text), "tags the miss line")
+  eq(tagged.queue[1].arFieldCue.kind, "miss", "miss cue kind")
+  eq(tagged.queue[1].arFieldCue.side, "enemy", "miss cue is the attacker")
+
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, battle, {
+    category = "physical", moveId = "TACKLE", moveType = "NORMAL",
+  }), "walk starts before the miss")
+  truthy(player._pendingCloseStrike, "close-gap is armed")
+  battle._arAccuracyMissSide = "player"
+  Cues.tickReturns(session, Grid)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "miss", "melee arrival plays a miss, not a punch")
+  truthy(not player._pendingCloseStrike, "miss consumes the pending strike")
+  eq(battle._arStatusChips.player.text, "MISS", "MISS chip sits on the attacker")
+  eq(Projectiles.miss(session, "player").style, "puff",
+    "miss paints a whoosh past the foe")
+end
+
+local function installMoveUsedListener(predict)
+  local reacted = {}
+  local fbv = {
+    vanishKind = function() return nil end,
+    shouldSkipEventReact = function() return false end,
+    predictMoveHit = predict,
+    react = function(_, side, kind, opts)
+      reacted[#reacted + 1] = { side = side, kind = kind, opts = opts }
+    end,
+  }
+  local listeners = {}
+  local mod = {
+    events = {
+      on = function(_, name, fn)
+        listeners[name] = fn
+      end,
+    },
+  }
+  Hooks.installEvents(fbv, mod, {
+    isFieldBattle = function() return true end,
+  })
+  return listeners["battle.move_used"], reacted
+end
+
+function tests.predict_move_hit_reads_accuracy_stash()
+  local user = { isPlayer = true }
+  local move = { id = "TACKLE" }
+  local battle = {
+    _arAccuracyPred = { hit = false, user = user, moveId = "TACKLE" },
+  }
+  eq(FieldBattle.predictMoveHit(battle, user, nil, move), false,
+    "stash miss is a miss")
+  eq(FieldBattle.predictMoveHit(battle, user, nil, { id = "SCRATCH" }), nil,
+    "other moves do not reuse the stash")
+end
+
+function tests.move_used_plays_miss_from_accuracy_stash()
+  local user = { isPlayer = true }
+  local target = { isPlayer = false }
+  local emit, reacted = installMoveUsedListener(function(battle)
+    return battle._arAccuracyPred and battle._arAccuracyPred.hit
+  end)
+  local battle = {
+    player = user,
+    enemy = target,
+    _arAccuracyPred = { hit = false, user = user, target = target, moveId = "TACKLE" },
+  }
+  emit({
+    battle = battle,
+    user = user,
+    target = target,
+    move = { id = "TACKLE", type = "NORMAL", category = "physical", power = 40 },
+  })
+  eq(#reacted, 1, "reacted once")
+  eq(reacted[1].kind, "miss", "early miss skips the attack lunge")
+  eq(reacted[1].side, "player", "miss cue is the attacker")
+  eq(battle._arAwaitAccuracyCue, nil, "stash path does not defer")
+end
+
+function tests.move_used_plays_attack_from_accuracy_stash()
+  local user = { isPlayer = true }
+  local target = { isPlayer = false }
+  local emit, reacted = installMoveUsedListener(function()
+    return true
+  end)
+  emit({
+    battle = { player = user, enemy = target },
+    user = user,
+    target = target,
+    move = { id = "TACKLE", type = "NORMAL", category = "physical", power = 40 },
+  })
+  eq(#reacted, 1, "reacted once")
+  eq(reacted[1].kind, "attack", "early hit keeps the attack cue")
+end
+
+function tests.move_used_plays_attack_when_accuracy_unseen()
+  local user = { isPlayer = true }
+  local target = { isPlayer = false }
+  local emit, reacted = installMoveUsedListener(function()
+    return nil
+  end)
+  local battle = { player = user, enemy = target }
+  emit({
+    battle = battle,
+    user = user,
+    target = target,
+    move = { id = "TACKLE", type = "NORMAL", category = "physical", power = 40 },
+  })
+  eq(#reacted, 1, "unseen roll still plays the swing")
+  eq(reacted[1].kind, "attack", "defaults to attack until accuracy says miss")
+  truthy(battle._arAwaitAccuracyCue, "accuracy wrap can still flip a later miss")
+end
+
+function tests.pump_does_not_lunge_while_accuracy_awaiting()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {
+    _arAwaitAccuracyCue = { side = "player", kind = "attack", opts = {} },
+    current = {
+      arFieldCue = {
+        side = "player", kind = "attack",
+        category = "physical", moveId = "KARATE_CHOP", moveType = "FIGHTING",
+      },
+    },
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 80,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
+    "awaiting accuracy does not pump the lunge")
+  eq(player.lastAnim, nil, "no punch before the roll")
+  eq(player._pendingCloseStrike, nil, "close-gap is not armed")
+  eq(battle.current._arFieldCueDone, true, "toast is consumed so it cannot double")
+end
+
+function tests.turn_start_clears_accuracy_preview()
+  local battle = {
+    _arAccuracyPred = { hit = false },
+    _arAwaitAccuracyCue = { kind = "attack" },
+  }
+  Lifecycle.onTurnStarted(battle)
+  eq(battle._arAccuracyPred, nil, "turn start drops the stash")
+  eq(battle._arAwaitAccuracyCue, nil, "turn start drops a deferred cue")
 end
 
 function tests.counter_does_not_forget_prior_strike()
@@ -3045,16 +3247,29 @@ function tests.world_space_projectiles()
     enemyTrainer = { u = grid.home.enemy.u + 1, v = grid.home.enemy.v },
   }
   session.grid.home = home
+  overworld.player = { px = 40, py = 56 }
   session.foe = { px = 90, py = 32 }
   session._battle = { kind = "trainer", game = { overworld = overworld } }
   player.px, player.py = 16, 32
+  player.basePx, player.basePy = 16, 32
   enemy.px, enemy.py = 80, 32
+  enemy.basePx, enemy.basePy = 80, 32
   local beam = Projectiles.recallBeam(session, "player")
   truthy(beam and beam.style == "recall", "player recall fires red laser")
-  truthy(beam.pinTip, "recall tip stays on the mon")
-  eq(beam.followEnt, player, "recall laser is pinned to the recalled mon")
-  eq(Projectiles.recallBeam(session, "enemy").style, "recall",
-    "trainer foe recall fires red laser")
+  eq(beam.sx, 48, "recall origin is the live player trainer sprite")
+  eq(beam.sy, 57, "recall origin uses trainer torso, not the home pad")
+  eq(beam.ex, 24, "recall tip is the mon's map pose")
+  eq(beam.ey, 36, "recall tip uses the faint/recall tile, not home")
+  truthy(beam.pinTip and beam.pinFrozen, "recall bolt spans trainer → faint pose")
+  eq(beam.followEnt, player, "recall laser remembers the recalled mon")
+  player.px, player.py = 16, 8
+  Projectiles.tick(session, 0.16)
+  eq(beam.ex, 24, "tip does not chase the recall shrink offset")
+  eq(beam.sx, 48, "origin stays on the trainer snapshot")
+  local foeBeam = Projectiles.recallBeam(session, "enemy")
+  eq(foeBeam.style, "recall", "trainer foe recall fires red laser")
+  eq(foeBeam.sx, 98, "foe recall origin is the live trainer sprite")
+  eq(foeBeam.ex, 88, "foe recall tip is the foe mon map pose")
   player._arFieldSide = "player"
   eq(Projectiles.recallBeam(session, "enemy", { target = player }), nil,
     "enemy recall cannot target the player send-out")
@@ -3093,6 +3308,20 @@ function tests.world_space_projectiles()
   truthy(Projectiles.isTravelFx({
     moveType = "ROCK", moveId = "ROCK_THROW",
   }), "rock throw is a travel FX")
+  local rockSlide = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  })
+  eq(rockSlide.style, "slide", "rock slide rains stones onto the foe")
+  eq(rockSlide.glitz, "rock", "rock slide paints rock glitz")
+  eq(rockSlide.sx, rockSlide.ex, "rock slide falls on the target")
+  eq(rockSlide.sy, rockSlide.ey, "rock slide does not lob across the pad")
+  truthy((rockSlide.duration or 0) >= 0.65, "rock slide holds the cascade")
+  truthy(Projectiles.isTravelFx({
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  }), "rock slide is a travel FX")
+  truthy(not Cues.isMeleeAttack({
+    category = "physical", moveId = "ROCK_SLIDE", moveType = "ROCK",
+  }, Projectiles), "rock slide does not close the gap")
   local fireBlast = Projectiles.move(session, "player", {
     moveType = "FIRE", moveId = "FIRE_BLAST",
   })
@@ -3446,6 +3675,15 @@ function tests.fire_tongues_and_gust_paint()
   rockThrow.age = 0.32
   rockThrow:draw(0, 0)
   truthy(calls.polygon > 0, "rock throw paints tumbling rock shards")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local rockSlide = Projectiles.move(session, "player", {
+    moveType = "ROCK", moveId = "ROCK_SLIDE",
+  })
+  rockSlide.age = 0.36
+  rockSlide:draw(0, 0)
+  truthy(calls.polygon > 0, "rock slide paints falling rock shards")
+  truthy(calls.ellipse > 0, "rock slide paints ground dust")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local flamethrower = Projectiles.move(session, "player", {

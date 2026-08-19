@@ -4,9 +4,9 @@
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
 --      Compact bottom box only. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
---   3. REACT         — status chips on the battler after a successful
---      REACT! pick (DODGE / BRACE / COVER / HOLD). Orders, misses, and
---      failed reacts stay toasts.
+--   3. REACT / miss  — status chips on the battler after a successful
+--      REACT! pick (DODGE / BRACE / COVER / HOLD) or an accuracy MISS.
+--      Orders and failed reacts stay toasts.
 --
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
@@ -295,8 +295,8 @@ end
 UI.CHIP_HOLD = 90
 UI.CHIP_H = 12
 
--- Successful REACT! outcomes only. Orders, misses, and failed reacts stay
--- toasts / notices — they must not paint a chip.
+-- Successful REACT! outcomes, plus accuracy MISS on the attacker.
+-- Orders and failed reacts stay toasts / notices — they must not paint a chip.
 local CHIP_PHRASE = {
     { "TOOK IT WELL", "BRACE" },
     { "BRACED RIGHT", "BRACE" },

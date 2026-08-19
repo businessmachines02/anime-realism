@@ -229,6 +229,12 @@ return function(env)
     end
   end
 
+  function FBV.tagMiss(battle, text, side)
+    if Cues and type(Cues.tagMiss) == "function" then
+      return Cues.tagMiss(battle, text, side)
+    end
+  end
+
   function FBV.tagChargeVanish(battle, text)
     if Cues and type(Cues.tagChargeVanish) == "function" then
       return Cues.tagChargeVanish(battle, text)
@@ -407,6 +413,22 @@ return function(env)
 
   function FBV.react(battle, side, kind, opts)
     return loggedCall(battle, "react", false, Lifecycle.react, battle, side, kind, opts)
+  end
+
+  -- Read a stashed battle.accuracy result. main.lua overwrites this with a
+  -- peek that front-runs the real hook; tests use this reader.
+  function FBV.predictMoveHit(battle, user, target, move)
+    local pred = battle and battle._arAccuracyPred
+    if not (pred and user and move) then
+      return nil
+    end
+    if pred.user ~= user or pred.moveId ~= move.id then
+      return nil
+    end
+    if target and pred.target and pred.target ~= target then
+      return nil
+    end
+    return pred.hit
   end
 
   function FBV.shouldSkipEventReact(battle, side, kind, opts)

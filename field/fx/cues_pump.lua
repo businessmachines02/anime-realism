@@ -119,6 +119,14 @@ return function(Cues)
         local cue = cur and cur.arFieldCue
         local applied = false
         local called = false
+        local awaiting = battle and battle._arAwaitAccuracyCue
+        local kind = cue and tostring(cue.kind or "") or ""
+        -- move_used peeked nil, so the accuracy wrap still owns this swing.
+        -- Pumping the announce toast here lunged (and punched) before the
+        -- roll; a later miss then looked like a connected hit that failed.
+        local holdForAccuracy = awaiting and cue
+            and awaiting.side == cue.side
+            and (kind == "attack" or kind == "status")
         -- Open the foe order first so the gray box is up a beat before the FX.
         if cur and cur.arNpcCallout and not cur._arNpcCalloutDone then
             cur._arNpcCalloutDone = true
@@ -127,23 +135,24 @@ return function(Cues)
         end
         if cur and cue and not cur._arFieldCueDone then
             cur._arFieldCueDone = true
-            local kind = tostring(cue.kind or "")
-            local pumpOpts = {
-                category = cue.category,
-                moveType = cue.moveType,
-                moveId = cue.moveId,
-                vanish = cue.vanish,
-                again = cue.again,
-                isCalled = cue.isCalled,
-                clash = cue.clash == true,
-                releaseStrike = cue.releaseStrike,
-                followUp = cue.followUp,
-                via = "pump",
-            }
-            if kind ~= "faint" and kind ~= "recall"
-                and not Cues.shouldSkipEvent(session, cue.side, kind, pumpOpts) then
-                applied = Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, pumpOpts)
-                    and true or false
+            if not holdForAccuracy then
+                local pumpOpts = {
+                    category = cue.category,
+                    moveType = cue.moveType,
+                    moveId = cue.moveId,
+                    vanish = cue.vanish,
+                    again = cue.again,
+                    isCalled = cue.isCalled,
+                    clash = cue.clash == true,
+                    releaseStrike = cue.releaseStrike,
+                    followUp = cue.followUp,
+                    via = "pump",
+                }
+                if kind ~= "faint" and kind ~= "recall"
+                    and not Cues.shouldSkipEvent(session, cue.side, kind, pumpOpts) then
+                    applied = Cues.apply(session, cue.side, cue.kind, Grid, nudgeCamera, battle, pumpOpts)
+                        and true or false
+                end
             end
         end
         -- Overlap dodge/brace onto the live swing (including a close-gap walk, and
@@ -156,7 +165,7 @@ return function(Cues)
         end
         local punched = H.hasStruckThisTurn(attackEnt)
             and not (attackEnt and attackEnt._pendingCloseStrike)
-        if not punched then
+        if not punched and not holdForAccuracy then
             overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
         end
         return applied or overlapped or called
