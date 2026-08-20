@@ -340,6 +340,42 @@ function Fx.listFireNowMoves(battle, battler)
     return out
 end
 
+-- Damaging follow-up for a special Again! Prefer a different known move.
+function Fx.pickAgainCallMove(battle, battler, usedMove)
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
+    local usedId = canonMoveId(usedMove and (usedMove.id or usedMove.moveId or usedMove.name))
+    local moves = battlerMoveList(battler)
+    if type(moves) ~= "table" then
+        return nil
+    end
+    local alts, same = {}, nil
+    for i = 1, #moves do
+        local mv = moves[i]
+        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+            local def, id = lookupMoveDef(battle, mv)
+            if not id then
+                id = canonMoveId(mv.id or mv.name)
+            end
+            local power = tonumber(def and def.power) or tonumber(mv.power) or 0
+            local category = tostring((def and def.category) or mv.category or ""):lower()
+            if id and power > 0 and category ~= "status" then
+                if id == usedId then
+                    same = mv
+                else
+                    alts[#alts + 1] = mv
+                end
+            end
+        end
+    end
+    if #alts > 0 then
+        local r = (love and love.math and love.math.random) or math.random
+        return alts[r(#alts)]
+    end
+    return same
+end
+
 -- Counter clip for the battler that is actually striking (you or the foe).
 -- Flavor lists only rank moves they already know — never a dex punch
 -- like MEGA_PUNCH / HEADBUTT that nobody on the field has.

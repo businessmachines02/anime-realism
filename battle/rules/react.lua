@@ -181,6 +181,8 @@ local function resetMomentum(battle)
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
     battle._arAwaitingReact = nil
+    battle._arAwaitAgain = nil
+    battle._arAwaitAgainSide = nil
     battle._arWhiffCloseStrike = nil
     battle._arGuaranteedHit = nil
 end

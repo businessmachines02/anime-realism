@@ -378,6 +378,7 @@ return function(Cues)
             battle._arPendingBraceCounter.fireAt = H.now(session) + 0.34
         end
         local finishing = opts.finishing == true
+        print("[ar] finishing: ", finishing)
         if finishing then
             local atkSide = (side == "player") and "enemy" or "player"
             H.finishingFocus(session, atkSide, opts)

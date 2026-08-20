@@ -62,6 +62,11 @@ function Hooks.installInput(FBV, mod, ctx)
                             self.moveSwapIndex = nil
                         end
                     elseif foeDown then
+                        if self._arAwaitAgain then
+                            self._arAwaitCallout = nil
+                            self._arAwaitAgain = nil
+                            self._arAwaitAgainSide = nil
+                        end
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
                         if self.phase == "moveSelect" or self.phase == "mimicSelect" then

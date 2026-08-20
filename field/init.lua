@@ -332,6 +332,26 @@ return function(env)
     end
   end
 
+  function FBV.beginAgainHold(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.beginAgainHold) == "function" then
+      return Cues.beginAgainHold(session, battle)
+    end
+  end
+
+  function FBV.releaseAgainHold(battle, outcome)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.releaseAgainHold) == "function" then
+      return Cues.releaseAgainHold(session, outcome)
+    end
+  end
+
+  function FBV.againOffersCall(opts)
+    if Cues and type(Cues.againOffersCall) == "function" then
+      return Cues.againOffersCall(opts, Projectiles)
+    end
+  end
+
   function FBV.playBeamClash(battle, result, ctx)
     local session = Lifecycle.get(battle)
     if session and Cues and type(Cues.playBeamClash) == "function" then

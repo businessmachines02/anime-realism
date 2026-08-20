@@ -916,6 +916,8 @@ return function(mod)
                     st.fireNowMove = nil
                 end
                 battle._arAwaitCallout = nil
+                battle._arAwaitAgain = nil
+                battle._arAwaitAgainSide = nil
                 battle._arFireNowHit = nil
                 battle._arFireCarryThrough = nil
                 dev.log(battle, "TURN start",
@@ -2640,6 +2642,7 @@ return function(mod)
         end
 
         -- True second strike after a counter (separate anim + damage roll).
+        -- Melee: extra swing of the same move. Special: a new CALL from the pool.
         -- Stripped record: never miss, single hit, no recoil/secondary re-fire.
         local function tryAgainStrike(battle, ctx, monName, foeSide)
             if not opt("momentum_counter") or not battle or not ctx then
@@ -2670,7 +2673,82 @@ return function(mod)
                 return false
             end
 
+            local offerCall = fieldFlowsText(battle)
+            if offerCall then
+                if FieldBattleViewer and type(FieldBattleViewer.againOffersCall) == "function" then
+                    offerCall = FieldBattleViewer.againOffersCall({
+                        category = move.category,
+                        moveId = move.id or move.moveId,
+                        moveType = move.type or move.moveType,
+                    }) == true
+                else
+                    offerCall = tostring(move.category or ""):lower() == "special"
+                end
+            end
+            local hasPool = false
+            do
+                local moves = user.curMoves
+                if type(moves) == "table" then
+                    for i = 1, #moves do
+                        local mv = moves[i]
+                        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+                            hasPool = true
+                            break
+                        end
+                    end
+                end
+            end
+
             state.againInProgress = true
+            if offerCall and not foeSide and hasPool then
+                dev.log(battle, "AGAIN!", "you call")
+                battle._arAwaitAgain = true
+                battle._arAwaitAgainSide = "player"
+                if FieldBattleViewer and type(FieldBattleViewer.beginAgainHold) == "function" then
+                    FieldBattleViewer.beginAgainHold(battle)
+                end
+                local callLine = pickFormatted(S.AGAIN_CALLS, monName or playerMonName(battle))
+                    or ((monName or "POKéMON") .. "!\nAgain!")
+                enqueueAutoAfter(battle, callLine, S.CALLOUT_AUTO_DELAY, "player")
+                battle.nextInsert = (battle.nextInsert or 0) + 1
+                table.insert(battle.queue, battle.nextInsert, {
+                    arFx = true,
+                    fn = function()
+                        if not battle._arAwaitAgain then
+                            return
+                        end
+                        battle._arAwaitCallout = true
+                        battle.phase = "moveSelect"
+                        battle._arFieldPreferMoves = true
+                        battle._arFieldCommandHold = nil
+                        local moves = battle.player and battle.player.curMoves
+                        local n = moves and #moves or 1
+                        battle.moveIndex = math.min(battle.moveIndex or 1, n)
+                        battle.moveSwapIndex = nil
+                        dev.log(battle, "AGAIN call", "special attacker picks the follow-up")
+                    end,
+                })
+                return true
+            end
+
+            local followInst = nil
+            if offerCall and foeSide and Fx and type(Fx.pickAgainCallMove) == "function" then
+                followInst = Fx.pickAgainCallMove(battle, user, move)
+            end
+            if followInst and type(followInst) == "table"
+                and tostring(followInst.id or ""):upper() ~= mid
+                and type(battle.performMove) == "function" then
+                dev.log(battle, "AGAIN!", "foe call")
+                local line = pickFoeTrainerLine(
+                    battle, S.TRAINER_FOE_AGAIN_CALLS, S.FOE_AGAIN_CALLS, monName or enemyMonName(battle))
+                enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, "foe")
+                battle._arAgainCalled = true
+                local ok = pcall(battle.performMove, battle, user, target, followInst, true)
+                battle._arAgainCalled = nil
+                state.againInProgress = false
+                return ok and true or false
+            end
+
             dev.log(battle, "AGAIN!", foeSide and "foe" or "you")
             local line
             if foeSide then
@@ -4493,7 +4571,23 @@ return function(mod)
                             self.phase = "moveSelect"
                             return true
                         end
+                        local again = self._arAwaitAgain == true
                         self._arAwaitCallout = nil
+                        self._arAwaitAgain = nil
+                        self._arAwaitAgainSide = nil
+                        if again then
+                            self._arAgainCalled = true
+                            local state = React.peek(self)
+                            if state then
+                                state.againInProgress = false
+                            end
+                            if FieldBattleViewer
+                                and type(FieldBattleViewer.releaseAgainHold) == "function" then
+                                FieldBattleViewer.releaseAgainHold(self, "call")
+                            end
+                            dev.log(self, "AGAIN pick",
+                                tostring(move.id or move.name or index))
+                        end
                         self.playerMoveListIndex = index
                         self.phase = "messages"
                         self.nextInsert = 0
@@ -4692,10 +4786,12 @@ return function(mod)
                             move = def
                         end
                     end
+                    local called = isCalled == true or self._arAgainCalled == true
                     signalAttackPresentation(self, user, target, move or moveInst, {
-                        isCalled = isCalled == true,
+                        isCalled = called,
                     })
-                    return origPerformMove(self, user, target, moveInst, isCalled)
+                    self._arAgainCalled = nil
+                    return origPerformMove(self, user, target, moveInst, called)
                 end
             end
         end

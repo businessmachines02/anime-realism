@@ -226,8 +226,8 @@ return function(Cues)
         return settled
     end
 
-    --- Drop leftover close-gap punch clocks at turn start. Keep melee home /
-    --- `_meleeAnchor` so idle roam does not bounce back to the opening cell.
+    --- Drop leftover close-gap punch clocks at turn start. Opening home
+    --- stays the idle roam so the next CALL decides whether they close.
     function Cues.resetTurnSide(session, side, keep, _)
         local ent = H.sideEnt(session, side)
         if not ent or keep then
@@ -239,6 +239,7 @@ return function(Cues)
         H.restoreStepSpeed(ent)
         ent._returnAt = nil
         ent._withdrawAfterStrike = nil
+        ent._meleeAnchor = nil
         return true
     end
 

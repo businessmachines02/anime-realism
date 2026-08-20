@@ -1771,8 +1771,14 @@ local function tickIdleWander(session, Grid, ent, side, dt)
     if ent._wanderCD > 0 then
         return
     end
-    -- Awake mons often hold the lane. Sleepwalkers take the step.
-    if not asleep and rand() > 0.35 then
+    local Cues = session._deps and session._deps.Cues
+    if Cues and type(Cues.keepAwayBias) == "function" then
+        ent._keepAway = Cues.keepAwayBias(ent, session._battle, side)
+    end
+    local keep = tonumber(ent._keepAway) or 0
+    -- Awake mons often hold the lane. Hurt / glass cannons step away more.
+    -- Sleepwalkers take the step.
+    if not asleep and rand() > (0.35 + 0.45 * keep) then
         ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
@@ -2088,6 +2094,8 @@ function Lifecycle.onTurnStarted(battle)
         battle._arCloseGapApply = nil
         battle._arCloseGapResuming = nil
         battle._arAwaitingReact = nil
+        battle._arAwaitAgain = nil
+        battle._arAwaitAgainSide = nil
         battle._arWhiffCloseStrike = nil
         battle._arWhiffCloseAfter = nil
         session._reactHold = nil
@@ -2111,6 +2119,7 @@ function Lifecycle.onTurnStarted(battle)
             ent._struckMoves = nil
             ent._returnAt = nil
             ent._withdrawAfterStrike = nil
+            ent._meleeAnchor = nil
         end
         clearPending(session.playerMon, keepPlayer)
         clearPending(session.enemyMon, keepEnemy)

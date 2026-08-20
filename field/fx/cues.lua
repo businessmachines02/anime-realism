@@ -481,27 +481,69 @@ local function closeGapStatTable(ent, battle, side)
     return nil
 end
 
+--- Same band as the red HP chip / WK row (and the default low-HP warn).
+Cues.LOW_HP_RATIO = 0.20
+--- Hurt mons want the FIRE ring even if they are melee brawlers.
+Cues.LOW_HP_KEEP = 0.85
+
+function Cues.hpRatio(ent, battle, side)
+    if ent and ent._hpRatio ~= nil then
+        return tonumber(ent._hpRatio)
+    end
+    local battler = ent and ent._battleBattler
+    if not battler and battle then
+        if side == "player" then
+            battler = battle.player
+        elseif side == "enemy" then
+            battler = battle.enemy
+        end
+    end
+    local mon = battler and battler.mon
+    local hp = tonumber(mon and mon.hp)
+    if hp == nil then
+        hp = tonumber(battler and battler.shownHP)
+    end
+    local maxHp = mon and mon.stats and tonumber(mon.stats.hp)
+    if not hp or not maxHp or maxHp <= 0 then
+        return nil
+    end
+    if hp < 0 then
+        hp = 0
+    end
+    return math.max(0, math.min(1, hp / maxHp))
+end
+
 --- 0 = melee brawler, 1 = glass cannon that wants space.
+--- Red HP (≤20%) also wants space, even on a tank.
 function Cues.keepAwayBias(ent, battle, side)
+    local bias = 0
     local stats = closeGapStatTable(ent, battle, side)
-    if type(stats) ~= "table" then
-        return tonumber(ent and ent._keepAway) or 0
+    if type(stats) == "table" then
+        local spa = tonumber(stats.special or stats.spa or stats.spAtk
+            or stats.spatk or stats.spAttack) or 70
+        local defn = tonumber(stats.defense or stats.def) or 70
+        if spa > 140 or defn > 160 then
+            spa = spa * 0.45
+            defn = defn * 0.45
+        end
+        local d = spa - defn
+        if d >= 80 then
+            bias = 1
+        elseif d > 10 then
+            bias = (d - 10) / 70
+        end
+    else
+        bias = tonumber(ent and ent._keepAway) or 0
     end
-    local spa = tonumber(stats.special or stats.spa or stats.spAtk
-        or stats.spatk or stats.spAttack) or 70
-    local defn = tonumber(stats.defense or stats.def) or 70
-    if spa > 140 or defn > 160 then
-        spa = spa * 0.45
-        defn = defn * 0.45
+    local ratio = Cues.hpRatio(ent, battle, side)
+    local low = Cues.LOW_HP_RATIO or 0.20
+    if ratio and ratio > 0 and ratio <= low then
+        local floor = Cues.LOW_HP_KEEP or 0.85
+        if bias < floor then
+            bias = floor
+        end
     end
-    local d = spa - defn
-    if d <= 10 then
-        return 0
-    end
-    if d >= 80 then
-        return 1
-    end
-    return (d - 10) / 70
+    return bias
 end
 
 --- Damaging ranged special this battler can still fire (PP left).
@@ -857,6 +899,20 @@ function Cues.awaitingCallout(battle)
     return battle and battle._arAwaitCallout == true
 end
 
+--- True while Again! parked a special attacker on a second CALL.
+function Cues.awaitingAgain(battle)
+    return battle and battle._arAwaitAgain == true
+end
+
+--- Melee Again! is an extra swing. A special / travel shot is a new call.
+function Cues.againOffersCall(opts, Projectiles)
+    opts = opts or {}
+    if opts.forceMeleeAgain == true then
+        return false
+    end
+    return not Cues.isMeleeAttack(opts, Projectiles)
+end
+
 --- Brace/entrench counter: clash after the incoming hit, not on the pick.
 function Cues.tickBraceCounter(session, Grid)
     local battle = session and session._battle
@@ -1000,6 +1056,30 @@ function Cues.beginReactHold(session, battle)
     return true
 end
 
+--- Hold slow-mo on the special attacker while Again! waits for a CALL.
+function Cues.beginAgainHold(session, battle)
+    if not session then
+        return false
+    end
+    if session._reactHold then
+        return true
+    end
+    session._reactHold = true
+    session._reactReleaseT = nil
+    session._reactReleaseDur = nil
+    local side = (battle and battle._arAwaitAgainSide) or "player"
+    if side ~= "enemy" then
+        side = "player"
+    end
+    H.punchIn(session, side, {
+        mode = "react",
+        focus = "user",
+        hold = 8,
+        lift = 8,
+    })
+    return true
+end
+
 --- Snap out of the REACT hold: speed up, then juice matches the pick.
 function Cues.releaseReactHold(session, outcome)
     if not session then
@@ -1013,7 +1093,7 @@ function Cues.releaseReactHold(session, outcome)
         session._reactReleaseDur = nil
         return held
     end
-    local shot = outcome == "dodge_shot"
+    local shot = outcome == "dodge_shot" or outcome == "call"
     session._reactReleaseT = shot and 0.24 or 0.16
     session._reactReleaseDur = session._reactReleaseT
     H.impactKick(session, {
@@ -1023,12 +1103,19 @@ function Cues.releaseReactHold(session, outcome)
     return true
 end
 
+function Cues.releaseAgainHold(session, outcome)
+    return Cues.releaseReactHold(session, outcome or "call")
+end
+
 function Cues.syncReactHold(session, battle)
     if not session then
         return false
     end
     if Cues.awaitingReact(battle) then
         return Cues.beginReactHold(session, battle)
+    end
+    if Cues.awaitingAgain(battle) then
+        return Cues.beginAgainHold(session, battle)
     end
     if session._reactHold then
         return Cues.releaseReactHold(session, "commit")
@@ -1048,7 +1135,8 @@ function Cues.deferCancelCloseStrike(session, side, delay)
 end
 
 function H.fieldMenuOpen(battle)
-    if Cues.awaitingReact(battle) then
+    if Cues.awaitingReact(battle) or Cues.awaitingAgain(battle)
+        or Cues.awaitingCallout(battle) then
         return true
     end
     local stack = battle and battle.game and battle.game.stack

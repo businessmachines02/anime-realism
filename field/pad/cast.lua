@@ -124,27 +124,58 @@ function Cast.idleStepSpeed(ent)
     return px
 end
 
+Cast.LOW_HP_RATIO = 0.20
+Cast.LOW_HP_KEEP = 0.85
+
+local function liveHpRatio(ent)
+    if ent and ent._hpRatio ~= nil then
+        return tonumber(ent._hpRatio)
+    end
+    local battler = ent and ent._battleBattler
+    local mon = battler and battler.mon
+    local hp = tonumber(mon and mon.hp)
+    if hp == nil then
+        hp = tonumber(battler and battler.shownHP)
+    end
+    local maxHp = mon and mon.stats and tonumber(mon.stats.hp)
+    if not hp or not maxHp or maxHp <= 0 then
+        return nil
+    end
+    if hp < 0 then
+        hp = 0
+    end
+    return math.max(0, math.min(1, hp / maxHp))
+end
+
 --- 0 = stay in the foe's face, 1 = glass cannon that wants space.
+--- Red HP (≤20%) also wants space, even on a tank.
 function Cast.keepAwayBias(ent)
+    local bias = 0
     local stats = gaitStats(ent)
-    if type(stats) ~= "table" then
-        return 0
+    if type(stats) == "table" then
+        local spa = tonumber(stats.special or stats.spa or stats.spAtk
+            or stats.spatk or stats.spAttack) or 70
+        local def = tonumber(stats.defense or stats.def) or 70
+        if spa > 140 or def > 160 then
+            spa = spa * 0.45
+            def = def * 0.45
+        end
+        local d = spa - def
+        if d >= 80 then
+            bias = 1
+        elseif d > 10 then
+            bias = (d - 10) / 70
+        end
     end
-    local spa = tonumber(stats.special or stats.spa or stats.spAtk
-        or stats.spatk or stats.spAttack) or 70
-    local def = tonumber(stats.defense or stats.def) or 70
-    if spa > 140 or def > 160 then
-        spa = spa * 0.45
-        def = def * 0.45
+    local ratio = liveHpRatio(ent)
+    local low = Cast.LOW_HP_RATIO or 0.20
+    if ratio and ratio > 0 and ratio <= low then
+        local floor = Cast.LOW_HP_KEEP or 0.85
+        if bias < floor then
+            bias = floor
+        end
     end
-    local d = spa - def
-    if d <= 10 then
-        return 0
-    end
-    if d >= 80 then
-        return 1
-    end
-    return (d - 10) / 70
+    return bias
 end
 
 local function worldBlockKeys(session, ignoreEnt)

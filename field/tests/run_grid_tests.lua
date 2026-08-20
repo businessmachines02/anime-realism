@@ -2243,16 +2243,19 @@ function tests.occupancy_and_movement()
   -- Close-the-gap: from farther than one tile, occupy a cell adjacent to the foe.
   truthy(Grid.padDistance(grid, p, e) > 1, "foe is more than a tile away")
   local originU, originV = p.padU, p.padV
+  p.homePadU, p.homePadV = originU, originV
   truthy(Grid.closeGap(grid, p, e), "close gap toward the foe")
   eq(Grid.padDistance(grid, p, e), 1, "lands adjacent, not on the foe")
   eq(p._returnU, nil, "close-gap does not stash the opening cell")
   truthy(Grid.withdrawFromFoe(grid, p, e), "withdraw after close-gap")
   local after = Grid.padDistance(grid, p, e)
-  truthy(after >= 1 and after <= 2, "withdraw stays one to two tiles from the foe")
-  eq(p._meleeAnchor, true, "withdraw re-anchors idle roam to the foe")
-  eq(p.homePadU, p.padU, "new home is the withdraw cell")
+  truthy(after >= 2, "withdraw leaves the foe's face")
+  truthy(after <= 3, "withdraw stops on the FIRE ring, not off the pad")
+  eq(p._meleeAnchor, nil, "withdraw does not park idle roam on the foe")
+  eq(p.homePadU, originU, "opening home stays the trainer lane")
+  eq(p.homePadV, originV, "opening home v stays")
   truthy(p.padU ~= originU or p.padV ~= originV or after == 2,
-    "does not snap back to the far opening cell")
+    "does not snap back to the far opening cell in one jump")
   p._meleeAnchor = nil
   truthy(Grid.setPad(grid, p, eHome.u - 1, eHome.v), "stand next to the foe")
   truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "foe on home")
@@ -2623,6 +2626,19 @@ function tests.close_the_gap_physicals()
   local glass = Cues.keepAwayBias({ _closeGapStats = { special = 135, defense = 50 } })
   truthy(brawler < 0.15, "high def low spa stays in the foe's face")
   truthy(glass > 0.7, "high spa low def prefers space")
+  local red = Cues.keepAwayBias({
+    _closeGapStats = { special = 40, defense = 110 },
+    _battleBattler = { mon = { hp = 12, stats = { hp = 80 } } },
+  })
+  truthy(red >= 0.85, "red HP wants space even on a brawler")
+  local yellow = Cues.keepAwayBias({
+    _closeGapStats = { special = 40, defense = 110 },
+    _battleBattler = { mon = { hp = 40, stats = { hp = 80 } } },
+  })
+  truthy(yellow < 0.15, "yellow HP does not force keep-away")
+  eq(Cues.hpRatio({ _hpRatio = 0.19 }), 0.19, "hurt ratio hook")
+  truthy(Cues.keepAwayBias({ _hpRatio = 0.19 }) >= 0.85,
+    "explicit red HP ratio wants space")
   local cruise = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 90 } })
   local charger = { _closeGapStats = { speed = 80, attack = 90, special = 40, defense = 80 } }
   local foe = { basePx = 80, basePy = 0 }
@@ -2720,18 +2736,39 @@ function tests.close_the_gap_physicals()
   session._now = player._returnAt
   Cues.tickReturns(session, Grid)
   local after = Grid.padDistance(grid, player, enemy)
-  truthy(after >= 1 and after <= 2, "post-strike roam stays 1–2 tiles from the foe")
-  eq(player.padU == 1, false, "does not walk back to the opening cell")
-  eq(player._meleeAnchor, true, "idle roam follows the foe after the strike")
+  truthy(after >= 2, "post-strike recover leaves the foe's face")
+  truthy(after <= 3, "post-strike recover stays on the FIRE ring")
+  eq(player.padU == 1, false, "does not snap back to the opening cell")
+  eq(player._meleeAnchor, nil, "idle roam does not follow the foe after the strike")
   eq(player._withdrawAfterStrike, nil, "withdraw flag clears")
 
-  Grid.setPad(grid, player, 1, 0)
-  player._meleeAnchor = true
-  local far = Grid.padDistance(grid, player, enemy)
+  Grid.setPad(grid, player, 6, 0)
+  player.homePadU, player.homePadV = 1, 0
+  local stuck = Grid.padDistance(grid, player, enemy)
+  eq(stuck, 1, "healthy physical starts adjacent")
   truthy(Grid.idleWander(grid, player, "player", enemy),
-    "melee wander steps when farther than two tiles")
-  truthy(Grid.padDistance(grid, player, enemy) < far,
-    "melee wander closes back toward the 1–2 ring")
+    "idle roam steps when off the opening lane")
+  truthy(Grid.padDistance(grid, player, enemy) > stuck,
+    "healthy physical walks back toward the trainer lane, not the foe")
+
+  Grid.setPad(grid, player, 6, 0)
+  player.homePadU, player.homePadV = 1, 0
+  player._keepAway = 0.85
+  local near = Grid.padDistance(grid, player, enemy)
+  eq(near, 1, "hurt test starts adjacent")
+  truthy(Grid.idleWander(grid, player, "player", enemy),
+    "red HP roam still steps")
+  truthy(Grid.padDistance(grid, player, enemy) > near,
+    "red HP steps out of the foe's face")
+  Grid.setPad(grid, player, 1, 0)
+  player.homePadU, player.homePadV = 1, 0
+  player._keepAway = 0.85
+  local hurtFar = Grid.padDistance(grid, player, enemy)
+  Grid.idleWander(grid, player, "player", enemy)
+  truthy(Grid.padDistance(grid, player, enemy) >= 2,
+    "red HP does not close from the lane into melee")
+  truthy(Grid.padDistance(grid, player, enemy) <= hurtFar,
+    "red HP stays on the trainer's side of the pad")
 
   -- Adjacent + option on: announce still must not punch; the strike is the
   -- arrival beat, not HUD confirm.
@@ -3417,6 +3454,64 @@ function tests.react_hold_slows_then_speeds_up_on_shot()
   truthy(not enemy._pendingCloseStrike, "walk cancels after the shot")
 end
 
+function tests.again_hold_slows_for_special_call()
+  truthy(Cues.againOffersCall({
+    category = "special", moveId = "PSYCHIC", moveType = "PSYCHIC",
+  }, Projectiles), "psychic Again! is a second CALL")
+  truthy(Cues.againOffersCall({
+    category = "physical", moveId = "NIGHT_SHADE", moveType = "GHOST",
+  }, Projectiles), "travel Again! is a second CALL")
+  truthy(not Cues.againOffersCall({
+    category = "physical", moveId = "TACKLE", moveType = "NORMAL",
+  }, Projectiles), "melee Again! stays an extra swing")
+  truthy(not Cues.againOffersCall({
+    category = "special", moveId = "FIRE_PUNCH", moveType = "FIRE",
+  }, Projectiles), "contact specials stay melee Again!")
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { _arAwaitAgain = true, _arAwaitAgainSide = "player" }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 80,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  truthy(Cues.awaitingAgain(battle), "Again! call flag is live")
+  truthy(Cues.beginAgainHold(session, battle), "Again! hold starts")
+  truthy(session._reactHold, "present clock slows for the call")
+  truthy(not session._clashPunch, "call hold is not a counter clash")
+  truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
+    "camera punches in on the special attacker")
+  Cues.syncReactHold(session, battle)
+  truthy(session._reactHold, "hold stays while the diamond is open")
+
+  battle._arAwaitCallout = true
+  truthy(Cues.shouldParkEngineQueue(session), "engine waits for the follow-up CALL")
+
+  Cues.releaseAgainHold(session, "call")
+  eq(session._reactHold, nil, "pick drops the hold")
+  truthy((session._reactReleaseT or 0) > 0, "call speeds the present clock back up")
+  battle._arAwaitAgain = nil
+  battle._arAwaitCallout = nil
+  Cues.syncReactHold(session, battle)
+  eq(session._reactHold, nil, "sync does not re-arm after the pick")
+end
+
 function tests.ranged_counter_skips_contact_punches()
   truthy(Cues.isRangedCounter({
     moveId = "THUNDERBOLT", category = "special", moveType = "ELECTRIC",
@@ -3458,8 +3553,8 @@ function tests.turn_start_clears_close_gap_drift()
   Lifecycle.onTurnStarted(battle)
   eq(player._returnAt, nil, "turn start drops withdraw clock")
   eq(player._withdrawAfterStrike, nil, "turn start drops withdraw flag")
-  eq(player._meleeAnchor, true, "melee roam anchor is kept")
-  eq(player.homePadU, pHome.u + 1, "withdraw home is not snapped back")
+  eq(player._meleeAnchor, nil, "turn start does not keep a foe-face roam")
+  eq(player.homePadU, pHome.u + 1, "home pad is unchanged")
   eq(player._struckMoves, nil, "struck-move latch cleared")
   Lifecycle._testUnbind(battle)
 end
@@ -6807,6 +6902,23 @@ do
     shots = BattleFx.listFireNowMoves(battle, battle.player)
     eq(#shots, 1, "Water Gun is a fireable special")
     eq(shots[1].moveId, "WATER_GUN", "Nidorina can FIRE NOW with Water Gun")
+
+    battle.player.curMoves = {
+      { id = "PSYCHIC", pp = 10 },
+      { id = "THUNDERBOLT", pp = 15 },
+      { id = "GROWL", pp = 40 },
+    }
+    battle.data.moves.PSYCHIC = {
+      id = "PSYCHIC", power = 90, category = "special", type = "PSYCHIC",
+    }
+    battle.data.moves.THUNDERBOLT = {
+      id = "THUNDERBOLT", power = 95, category = "special", type = "ELECTRIC",
+    }
+    local follow = BattleFx.pickAgainCallMove(battle, battle.player, { id = "PSYCHIC" })
+    eq(follow and follow.id, "THUNDERBOLT", "Again! call prefers a different known move")
+    battle.player.curMoves = { { id = "PSYCHIC", pp = 10 } }
+    follow = BattleFx.pickAgainCallMove(battle, battle.player, { id = "PSYCHIC" })
+    eq(follow and follow.id, "PSYCHIC", "same move is used when the pool has no alt")
   end
 end
 
