@@ -2690,11 +2690,16 @@ local function drawContact(g, p, x, y, t)
   end
 
   if glitz == "dash" then
+    local dx = p.dirX or 1
+    local dy = p.dirY or 0
+    g.setColor(1, 1, 1, 0.55 * fade)
+    g.circle("fill", x, y, 2.4 + t * 2)
     g.setColor(c[1], c[2], c[3], fade)
-    g.setLineWidth(3)
-    g.line(x - 10 + t * 4, y - 2, x + 6, y + 1)
-    g.setLineWidth(1)
-    g.line(x - 8 + t * 4, y + 3, x + 4, y + 4)
+    g.setLineWidth(2.6)
+    g.line(x - dx * 12, y - dy * 12, x + dx * 7, y + dy * 7)
+    g.setLineWidth(1.3)
+    g.line(x - dx * 9 + dy * 3, y - dy * 9 - dx * 2, x + dx * 5, y + dy * 5)
+    g.line(x - dx * 8 - dy * 3, y - dy * 8 + dx * 2, x + dx * 4, y + dy * 4)
     return
   end
 
@@ -2958,7 +2963,136 @@ local function polyUnpack(pts)
   return unpackFn(pts)
 end
 
---- Comic-book crit starburst (jagged yellow/orange with a thick red rim).
+--- Comic-book crit starburst. Same jagged silhouette; fill/accents follow type.
+local CRIT_PALETTES = {
+  NORMAL = {
+    rim = { 0.82, 0.08, 0.06 },
+    mid = { 1.00, 0.46, 0.08 },
+    core = { 1.00, 0.92, 0.22 },
+    shard = { 1.00, 0.38, 0.08 },
+    accent = "comic",
+  },
+  FIRE = {
+    rim = { 0.86, 0.10, 0.04 },
+    mid = { 1.00, 0.42, 0.08 },
+    core = { 1.00, 0.90, 0.28 },
+    shard = { 1.00, 0.34, 0.08 },
+    accent = "flame",
+  },
+  ICE = {
+    rim = { 0.22, 0.52, 0.92 },
+    mid = { 0.55, 0.88, 1.00 },
+    core = { 0.96, 0.99, 1.00 },
+    shard = { 0.78, 0.94, 1.00 },
+    accent = "ice",
+  },
+  ELECTRIC = {
+    rim = { 0.90, 0.58, 0.04 },
+    mid = { 1.00, 0.88, 0.18 },
+    core = { 1.00, 1.00, 0.92 },
+    shard = { 1.00, 0.92, 0.35 },
+    accent = "bolt",
+  },
+  PSYCHIC = {
+    rim = { 0.70, 0.10, 0.58 },
+    mid = { 0.96, 0.40, 0.86 },
+    core = { 1.00, 0.86, 1.00 },
+    shard = { 0.94, 0.55, 0.92 },
+    accent = "psy",
+  },
+  DARK = {
+    rim = { 0.10, 0.04, 0.08 },
+    mid = { 0.28, 0.10, 0.24 },
+    core = { 0.58, 0.36, 0.70 },
+    shard = { 0.22, 0.08, 0.20 },
+    accent = "ink",
+  },
+  GHOST = {
+    rim = { 0.28, 0.12, 0.46 },
+    mid = { 0.52, 0.32, 0.72 },
+    core = { 0.86, 0.78, 1.00 },
+    shard = { 0.42, 0.22, 0.62 },
+    accent = "ink",
+  },
+  WATER = {
+    rim = { 0.08, 0.32, 0.78 },
+    mid = { 0.22, 0.62, 1.00 },
+    core = { 0.82, 0.94, 1.00 },
+    shard = { 0.40, 0.72, 1.00 },
+    accent = "comic",
+  },
+  GRASS = {
+    rim = { 0.12, 0.48, 0.14 },
+    mid = { 0.38, 0.82, 0.28 },
+    core = { 0.82, 1.00, 0.45 },
+    shard = { 0.42, 0.78, 0.22 },
+    accent = "comic",
+  },
+  POISON = {
+    rim = { 0.42, 0.08, 0.58 },
+    mid = { 0.72, 0.28, 0.82 },
+    core = { 0.94, 0.72, 1.00 },
+    shard = { 0.62, 0.22, 0.78 },
+    accent = "ink",
+  },
+  FIGHTING = {
+    rim = { 0.62, 0.10, 0.10 },
+    mid = { 0.88, 0.28, 0.16 },
+    core = { 1.00, 0.78, 0.42 },
+    shard = { 0.82, 0.22, 0.12 },
+    accent = "comic",
+  },
+  GROUND = {
+    rim = { 0.48, 0.28, 0.10 },
+    mid = { 0.78, 0.56, 0.28 },
+    core = { 0.96, 0.86, 0.52 },
+    shard = { 0.68, 0.48, 0.24 },
+    accent = "comic",
+  },
+  ROCK = {
+    rim = { 0.42, 0.34, 0.22 },
+    mid = { 0.70, 0.60, 0.38 },
+    core = { 0.92, 0.86, 0.62 },
+    shard = { 0.62, 0.52, 0.32 },
+    accent = "comic",
+  },
+  FLYING = {
+    rim = { 0.32, 0.48, 0.82 },
+    mid = { 0.62, 0.74, 0.96 },
+    core = { 0.94, 0.96, 1.00 },
+    shard = { 0.70, 0.82, 1.00 },
+    accent = "comic",
+  },
+  BUG = {
+    rim = { 0.38, 0.48, 0.08 },
+    mid = { 0.66, 0.78, 0.18 },
+    core = { 0.92, 1.00, 0.45 },
+    shard = { 0.58, 0.72, 0.16 },
+    accent = "comic",
+  },
+  DRAGON = {
+    rim = { 0.22, 0.12, 0.62 },
+    mid = { 0.48, 0.36, 0.90 },
+    core = { 0.86, 0.78, 1.00 },
+    shard = { 0.40, 0.28, 0.82 },
+    accent = "psy",
+  },
+  STEEL = {
+    rim = { 0.38, 0.42, 0.48 },
+    mid = { 0.72, 0.76, 0.82 },
+    core = { 0.96, 0.97, 1.00 },
+    shard = { 0.62, 0.66, 0.72 },
+    accent = "comic",
+  },
+  FAIRY = {
+    rim = { 0.78, 0.28, 0.52 },
+    mid = { 0.96, 0.58, 0.78 },
+    core = { 1.00, 0.90, 0.96 },
+    shard = { 0.94, 0.62, 0.80 },
+    accent = "psy",
+  },
+}
+
 local function drawCritBurst(g, p, x, y, t)
   local fade = 1
   if t > 0.62 then
@@ -2971,6 +3105,8 @@ local function drawCritBurst(g, p, x, y, t)
   else
     pop = 1.27 - math.min(0.22, (t - 0.16) * 0.55)
   end
+  local pal = CRIT_PALETTES[tostring(p.glitz or "NORMAL"):upper()]
+      or CRIT_PALETTES.NORMAL
   local rot = (p.seed or 0.4) + t * 0.35
   local n = 10
   local function star(scale, rLong, rShort)
@@ -2984,10 +3120,11 @@ local function drawCritBurst(g, p, x, y, t)
     end
     return pts
   end
+  local rim, mid, core, shard = pal.rim, pal.mid, pal.core, pal.shard
   if not g.polygon then
-    g.setColor(1.00, 0.42, 0.08, 0.7 * fade)
+    g.setColor(mid[1], mid[2], mid[3], 0.7 * fade)
     g.circle("fill", x, y, 10 * pop)
-    g.setColor(1.00, 0.92, 0.22, 0.9 * fade)
+    g.setColor(core[1], core[2], core[3], 0.9 * fade)
     g.circle("fill", x, y, 4.5 * pop)
     return
   end
@@ -2998,32 +3135,138 @@ local function drawCritBurst(g, p, x, y, t)
   end
   g.setColor(0.12, 0.10, 0.10, 0.28 * fade)
   g.polygon("fill", polyUnpack(shadow))
-  g.setColor(0.82, 0.08, 0.06, 0.96 * fade)
+  g.setColor(rim[1], rim[2], rim[3], 0.96 * fade)
   g.polygon("fill", polyUnpack(star(pop, 16.8, 7.6)))
-  g.setColor(1.00, 0.46, 0.08, 0.96 * fade)
+  g.setColor(mid[1], mid[2], mid[3], 0.96 * fade)
   g.polygon("fill", polyUnpack(star(pop * 0.78, 16.8, 7.6)))
-  g.setColor(1.00, 0.92, 0.22, 0.98 * fade)
+  g.setColor(core[1], core[2], core[3], 0.98 * fade)
   g.polygon("fill", polyUnpack(star(pop * 0.46, 16.8, 7.6)))
-  g.setColor(1, 1, 0.88, 0.9 * fade)
+  g.setColor(1, 1, 0.92, 0.82 * fade)
   g.circle("fill", x - 0.6, y - 0.8, 2.6 * pop)
-  -- Tiny flying shards.
-  for i = 1, 6 do
-    local a = rot + i * 1.05
-    local dist = (8 + i) * pop + t * 6
-    local px = x + math.cos(a) * dist
-    local py = y + math.sin(a) * dist * 0.72
-    g.setColor(1.00, 0.38, 0.08, (0.7 - t * 0.4) * fade)
-    if g.polygon then
+
+  local accent = pal.accent or "comic"
+  local age = p.age or t
+  if accent == "ice" then
+    for i = 1, 6 do
+      local a = rot + i * 1.05
+      local dist = (7 + i) * pop + t * 5
+      drawIceCrystal(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.72,
+        a + t * 4, 0.7 + (i % 2) * 0.18, shard, (0.85 - t * 0.35) * fade)
+    end
+  elseif accent == "bolt" then
+    for i = 1, 4 do
+      local a = rot + i * (math.pi * 0.5)
+      local dist = 12 * pop + t * 4
+      drawLightningBolt(g, x, y,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.7,
+        age + i * 0.15, mid, {
+          fade = fade,
+          segs = 4,
+          amp = 2.8,
+          glow = 3.2,
+          mid = 1.6,
+          core = 1.0,
+          forkLen = 3.4,
+          coreColor = core,
+        })
+    end
+  elseif accent == "psy" then
+    for i = 1, 3 do
+      local u = i / 3
+      g.setColor(mid[1], mid[2], mid[3], (0.55 - u * 0.15) * fade)
+      g.setLineWidth(1.6)
+      g.ellipse("line", x, y - 1, (6 + u * 8) * pop, (3.2 + u * 4) * pop)
+    end
+    for i = 1, 5 do
+      local a = rot * 2 + i * 1.256
+      g.setColor(core[1], core[2], core[3], 0.7 * fade)
+      g.circle("fill",
+        x + math.cos(a) * (5 + t * 6) * pop,
+        y + math.sin(a) * (5 + t * 6) * pop * 0.55,
+        1.2)
+    end
+  elseif accent == "ink" then
+    g.setColor(rim[1], rim[2], rim[3], 0.42 * fade)
+    g.ellipse("fill", x + 1, y + 2, 9 * pop, 6 * pop)
+    for i = 1, 5 do
+      local a = rot + i * 1.2
+      local dist = 4 + t * (6 + i)
+      g.setColor(mid[1], mid[2], mid[3], (0.65 - t * 0.3) * fade)
+      g.circle("fill",
+        x + math.cos(a) * dist * 0.7,
+        y + math.sin(a) * dist * 0.45 + t * 3,
+        1.8 + (i % 2) * 0.6)
+    end
+  elseif accent == "flame" then
+    for i = 1, 5 do
+      local a = rot + i * 1.256
+      drawFlameTongue(g,
+        x + math.cos(a) * 6 * pop,
+        y + math.sin(a) * 4.5 * pop,
+        a + math.pi * 0.5, 0.7, fade)
+    end
+  else
+    for i = 1, 6 do
+      local a = rot + i * 1.05
+      local dist = (8 + i) * pop + t * 6
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.72
+      g.setColor(shard[1], shard[2], shard[3], (0.7 - t * 0.4) * fade)
       local s = 1.6 + (i % 2) * 0.5
       g.polygon("fill",
         px, py - s,
         px + s * 0.55, py,
         px, py + s * 0.45,
         px - s * 0.55, py)
-    else
-      g.circle("fill", px, py, 1.2)
     end
   end
+end
+
+--- Speed-line smear caster → foe (Quick Attack / Extreme Speed).
+local function drawDashSmear(g, x, y, ox, oy, t, age, c, glitz)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local fade = 1
+  if t > 0.68 then
+    fade = 1 - (t - 0.68) / 0.32
+  end
+  local extreme = glitz == "extreme"
+  g.setColor(1, 1, 1, 0.28 * fade)
+  g.setLineWidth(extreme and 5.5 or 4.2)
+  g.line(ox, oy, x, y)
+  g.setColor(c[1], c[2], c[3], 0.8 * fade)
+  g.setLineWidth(extreme and 2.2 or 1.6)
+  g.line(ox, oy, x, y)
+  local n = extreme and 7 or 5
+  for i = 1, n do
+    local along = 0.12 + (i - 1) * (0.72 / n)
+    local px = ox + dx * along
+    local py = oy + dy * along
+    local side = ((i % 2) * 2 - 1) * (2.0 + i * 0.4)
+    local lx = px + nx * side - fx * 7
+    local ly = py + ny * side * 0.45 - fy * 7
+    local reach = 7 + i * 1.2
+    g.setColor(1, 1, 1, (0.58 - i * 0.05) * fade)
+    g.setLineWidth(1.3)
+    g.line(lx, ly, lx + fx * reach, ly + fy * reach)
+  end
+  for i = 1, 3 do
+    local u = (i / 4) * math.min(1, t * 1.35 + 0.08)
+    local px = ox + dx * u - fx * (i * 2)
+    local py = oy + dy * u
+    drawMonSilhouette(g, px, py, 0.78 - i * 0.1, c, 0.32 * fade * (1 - u * 0.35))
+  end
+  g.setColor(1, 1, 1, 0.55 * fade)
+  g.circle("fill", x - fx * 2, y - fy * 2, extreme and 2.4 or 1.8)
 end
 
 --- Kick-up debris from the tile under the struck mon (grass / snow / water / …).
@@ -3491,6 +3734,9 @@ Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("crit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawCritBurst(g, p, x, y, t)
+end)
+Projectiles.registerStyle("dash_smear", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawDashSmear(g, x, y, ox, oy, t, p.age, c, glitz)
 end)
 Projectiles.registerStyle("ground_kick", function(g, p, x, y, ox, oy, t, c, glitz)
     drawGroundKick(g, p, x, y, t, c, glitz)
@@ -4490,17 +4736,36 @@ function Projectiles.contact(session, side, opts)
     glitz = TYPE_CONTACT[fx.moveType] or "slash"
   end
   local toss = glitz == "toss"
-  return spawn(session, {
+  local dash = glitz == "dash"
+  local from = (side == "player") and session.playerMon or session.enemyMon
+  local ox, oy = center(session, from)
+  local dirX, dirY = 1, 0
+  if ox then
+    local dx, dy = x - ox, y - oy
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len > 0.1 then
+      dirX, dirY = dx / len, dy / len
+    end
+  end
+  local hit = spawn(session, {
     kind = "effect",
     style = "contact",
     glitz = glitz,
     sx = x, sy = y, ex = x, ey = y,
-    duration = fx.duration or 0.26,
+    duration = fx.duration or (dash and 0.32 or 0.26),
+    delay = dash and 0.10 or nil,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType],
     pinTip = toss or nil,
     followSide = toss and ((side == "player") and "enemy" or "player") or nil,
   })
+  if hit then
+    hit.dirX, hit.dirY = dirX, dirY
+  end
+  if dash then
+    Projectiles.dashSmear(session, side, opts)
+  end
+  return hit
 end
 
 function Projectiles.lightHit(session, side, opts)
@@ -4545,20 +4810,47 @@ function Projectiles.critBurst(session, side, opts)
     return nil
   end
   local roll = (love and love.math and love.math.random) or math.random
+  local moveType = tostring(opts.moveType or "NORMAL"):upper()
+  if moveType == "" then
+    moveType = "NORMAL"
+  end
   return spawn(session, {
     kind = "effect",
     style = "crit",
+    glitz = moveType,
     sx = x, sy = y, ex = x, ey = y,
     duration = 0.42,
     arc = 0,
     seed = roll() * math.pi * 2,
-    color = TYPE_COLORS.FIRE,
+    color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
     pinTip = true,
     followSide = side,
   })
 end
 
---- Kick up the tile under the struck mon (grass, snow, water, dirt, …).
+--- Speed-line smear on the attacker for Quick Attack / Extreme Speed.
+function Projectiles.dashSmear(session, side, opts)
+  opts = opts or {}
+  local from = (side == "player") and session.playerMon or session.enemyMon
+  local target = (side == "player") and session.enemyMon or session.playerMon
+  local sx, sy = center(session, from)
+  local ex, ey = center(session, target)
+  if not (sx and ex) then
+    return nil
+  end
+  local moveId = tostring(opts.moveId or ""):upper():gsub("%s+", "_")
+  local extreme = moveId == "EXTREMESPEED" or moveId == "EXTREME_SPEED"
+  return spawn(session, {
+    kind = "effect",
+    style = "dash_smear",
+    glitz = extreme and "extreme" or "dash",
+    sx = sx, sy = sy, ex = ex, ey = ey,
+    duration = extreme and 0.42 or 0.34,
+    arc = 0,
+    color = { 0.92, 0.94, 1.00 },
+  })
+end
+
 function Projectiles.groundKick(session, side, opts)
   opts = opts or {}
   local target = (side == "player") and session.playerMon or session.enemyMon

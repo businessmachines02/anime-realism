@@ -526,25 +526,37 @@ function Grid.closeGap(grid, ent, foeEnt)
   return Grid.setPad(grid, ent, bestU, bestV)
 end
 
---- Randomly re-anchor to a free pad in the 3x3 area adjacent to the foe, or stay put if not possible.
+--- Attempt to move the entity to a random free pad within 1-2 tiles from the foe, preferring to move away;
+--- if no suitable pad is found, the entity remains in its current position.
 function Grid.withdrawFromFoe(grid, ent, foeEnt)
   if not (grid and ent and foeEnt) then
     return false
   end
   local u, v = padOf(grid, ent)
   local foeU, foeV = padOf(grid, foeEnt)
-  local area3x3 = {}
-  for deltaU = -1, 1 do
-    for deltaV = -1, 1 do
-      local nextU, nextV = foeU + deltaU, foeV + deltaV
-      if Grid.isFree(grid, nextU, nextV, ent.id, ent) then
-        if not (nextU == u and nextV == v) then
-          area3x3[#area3x3 + 1] = { u = nextU, v = nextV }
+  local candidatePads = {}
+  -- Consider pads 1 and 2 tiles away from the foe
+  for dist = 1, 2 do
+    for deltaU = -dist, dist do
+      for deltaV = -dist, dist do
+        -- Choose only the edge — exclude closer pads
+        local isEdge = math.abs(deltaU) == dist or math.abs(deltaV) == dist
+        local candU, candV = foeU + deltaU, foeV + deltaV
+        if isEdge and Grid.isFree(grid, candU, candV, ent.id, ent) then
+          if not (candU == u and candV == v) then
+            -- Only pads at least as far or farther from foe than current position
+            local prevDist = math.max(math.abs(u - foeU), math.abs(v - foeV))
+            local newDist = math.max(math.abs(candU - foeU), math.abs(candV - foeV))
+            if newDist >= prevDist then
+              candidatePads[#candidatePads + 1] = { u = candU, v = candV }
+            end
+          end
         end
       end
     end
   end
-  local choice = pickCell(area3x3)
+
+  local choice = pickCell(candidatePads)
   local function anchor(nextU, nextV)
     ent.homePadU, ent.homePadV = nextU, nextV
     ent._meleeAnchor = true

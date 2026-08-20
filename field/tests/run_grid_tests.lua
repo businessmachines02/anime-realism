@@ -3617,6 +3617,38 @@ function tests.world_space_projectiles()
     moveType = "NORMAL", moveId = "PAY_DAY",
   })
   eq(payday.glitz, "coin", "pay day tosses coin sparks")
+  local iceCrit = Projectiles.critBurst(session, "enemy", { moveType = "ICE" })
+  eq(iceCrit.glitz, "ICE", "ice crit uses ice fill")
+  local elecCrit = Projectiles.critBurst(session, "enemy", { moveType = "ELECTRIC" })
+  eq(elecCrit.glitz, "ELECTRIC", "electric crit uses electric fill")
+  local psyCrit = Projectiles.critBurst(session, "enemy", { moveType = "PSYCHIC" })
+  eq(psyCrit.glitz, "PSYCHIC", "psychic crit uses psychic fill")
+  local darkCrit = Projectiles.critBurst(session, "enemy", { moveType = "DARK" })
+  eq(darkCrit.glitz, "DARK", "dark crit uses ink fill")
+  local qa = Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "QUICK_ATTACK",
+  })
+  eq(qa.glitz, "dash", "quick attack uses dash contact")
+  local qaSmear
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "dash_smear" then
+      qaSmear = session.projectiles[i]
+    end
+  end
+  truthy(qaSmear, "quick attack smears the attacker")
+  eq(qaSmear.glitz, "dash", "quick attack smear is a dash")
+  truthy(qaSmear.sx < qaSmear.ex, "smear runs toward the foe")
+  Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "EXTREMESPEED",
+  })
+  local esSmear
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "dash_smear"
+        and session.projectiles[i].glitz == "extreme" then
+      esSmear = session.projectiles[i]
+    end
+  end
+  truthy(esSmear, "extreme speed smears with a longer trail")
   local light = Projectiles.lightHit(session, "enemy", {
     moveType = "NORMAL", moveId = "TACKLE",
   })
@@ -3872,6 +3904,49 @@ function tests.fire_tongues_and_gust_paint()
   critPaint.age = 0.10
   critPaint:draw(0, 0)
   truthy(calls.polygon > 0, "crit paints a comic starburst")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local icePaint = Projectiles.critBurst(session, "enemy", { moveType = "ICE" })
+  icePaint.age = 0.10
+  icePaint:draw(0, 0)
+  truthy(calls.polygon > 0, "ice crit keeps the comic starburst")
+  truthy(calls.polygon > 4, "ice crit fills with ice shards")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local boltPaint = Projectiles.critBurst(session, "enemy", { moveType = "ELECTRIC" })
+  boltPaint.age = 0.10
+  boltPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "electric crit keeps the comic starburst")
+  truthy(calls.line > 0, "electric crit fills with lightning forks")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local psyPaint = Projectiles.critBurst(session, "enemy", { moveType = "PSYCHIC" })
+  psyPaint.age = 0.10
+  psyPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "psychic crit keeps the comic starburst")
+  truthy(calls.ellipse > 0, "psychic crit fills with rings")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local inkPaint = Projectiles.critBurst(session, "enemy", { moveType = "DARK" })
+  inkPaint.age = 0.10
+  inkPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "dark crit keeps the comic starburst")
+  truthy(calls.ellipse > 0, "dark crit fills with an ink blot")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  Projectiles.contact(session, "player", {
+    moveType = "NORMAL", moveId = "QUICK_ATTACK",
+  })
+  local dashPaint
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "dash_smear" then
+      dashPaint = session.projectiles[i]
+    end
+  end
+  truthy(dashPaint, "quick attack spawns a dash smear")
+  dashPaint.age = 0.16
+  dashPaint:draw(0, 0)
+  truthy(calls.line > 0, "quick attack smear paints speed lines")
 
   session._battle.game.overworld.map = {
     isWaterCell = function() return false end,

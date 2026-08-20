@@ -175,8 +175,9 @@ Catalog.MOVE_FX = {
   STRENGTH = { style = "contact", glitz = "impact" },
   MEGA_PUNCH = { style = "contact", glitz = "impact" },
   MEGA_KICK = { style = "contact", glitz = "impact" },
-  QUICK_ATTACK = { style = "contact", glitz = "dash" },
-  EXTREMESPEED = { style = "contact", glitz = "dash" },
+  QUICK_ATTACK = { style = "contact", glitz = "dash", duration = 0.34 },
+  EXTREMESPEED = { style = "contact", glitz = "dash", duration = 0.40 },
+  EXTREME_SPEED = { style = "contact", glitz = "dash", duration = 0.40 },
   -- Weak / early physicals: still get a readable contact signature.
   POUND = { style = "contact", glitz = "slap" },
   SCRATCH = { style = "contact", glitz = "slash" },
