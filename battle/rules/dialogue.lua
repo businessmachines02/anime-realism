@@ -96,6 +96,7 @@ function Dialogue.formatCall(template, a, b, c)
     if n <= 0 then
         return template
     end
+    a, b, c = a or "", b or "", c or ""
     if n >= 3 then
         return template:format(a, b, c)
     end
@@ -318,15 +319,20 @@ function Dialogue.wrapBattleSay(methodName)
                     dodgeSide == "enemy" and "enemy" or "player", "dodge")
             end
         elseif wasAccuracyMiss then
-            local side = self._arAccuracyMissSide == "enemy" and "enemy" or "player"
-            local item = self.queue and self.queue[self.nextInsert]
-            if type(item) == "table" then
-                hostCall("tagFieldCue", item, side, "miss")
+            if self._arFireCarryThrough then
+                -- Slow FIRE whoosh; do not hop the charger aside.
+                self._arAccuracyMissSide = nil
+            else
+                local side = self._arAccuracyMissSide == "enemy" and "enemy" or "player"
+                local item = self.queue and self.queue[self.nextInsert]
+                if type(item) == "table" then
+                    hostCall("tagFieldCue", item, side, "miss")
+                end
+                if hostCall("fieldFlowsText", self) then
+                    hostCall("armFieldChip", self, side, "MISS")
+                end
+                self._arAccuracyMissSide = nil
             end
-            if hostCall("fieldFlowsText", self) then
-                hostCall("armFieldChip", self, side, "MISS")
-            end
-            self._arAccuracyMissSide = nil
         end
         if dodgeWhiff then
             hostCall("maybeQueueSameTurnCounter", self)
@@ -380,9 +386,12 @@ function Dialogue.wrapBattleSay(methodName)
                 local moveDef = moveName and hostCall("findMoveByName", self, moveName)
                 local damaging = moveDef and (moveDef.power or 0) > 0
                     and moveDef.category ~= "status"
-                if damaging and (st.sameTurnCounterQueued or st.offerSameTurnCounter) then
+                local guaranteed = hostCall("isGuaranteedCounterHit",
+                    self, self.player, self.enemy)
+                if damaging and not guaranteed
+                    and (st.sameTurnCounterQueued or st.offerSameTurnCounter) then
                     st.pendingFoeReaction = { moveDef = moveDef }
-                elseif damaging then
+                elseif damaging and not guaranteed then
                     local foeLine, foeBuffs, foeTrack, failNarr =
                         hostCall("tryFoeCoverReaction", self, moveDef)
                     if failNarr then

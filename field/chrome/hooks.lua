@@ -90,6 +90,9 @@ function Hooks.fieldPausePressed(input, battle)
     if not input or type(input.wasPressed) ~= "function" then
         return false
     end
+    if battle and battle._arAwaitCallout then
+        return false
+    end
     local phase = battle and battle.phase
     if phase ~= "moveSelect"
         and not (phase == "menu" and battle._arFieldPreferMoves) then
@@ -168,9 +171,21 @@ function Hooks.install(FBV, mod)
         return ok and side and side.entrenched == true and (side.entrenchTurns or 0) > 0
     end
 
+    local function playerLikelyGoesSecond(battle)
+        if not battle or battle._arAwaitCallout then
+            return false
+        end
+        local React = FBV and FBV.React
+        if React and type(React.playerLikelyGoesSecond) == "function" then
+            return React.playerLikelyGoesSecond(battle) == true
+        end
+        return false
+    end
+
     local ctx = {
         isFieldBattle = isFieldBattle,
         focusEntrenched = focusEntrenched,
+        playerLikelyGoesSecond = playerLikelyGoesSecond,
     }
     if type(Hooks.installDraw) == "function" then
         Hooks.installDraw(FBV, mod, ctx)

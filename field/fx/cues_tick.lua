@@ -47,6 +47,18 @@ return function(Cues)
         end
         local battle = session._battle
         local t = H.now(session)
+        -- FIRE / clash shot was latched on the HUD click; run it here so
+        -- performMove cannot mutate sprites after this frame's pose.
+        do
+            local resume = battle and battle._arResumeReactPick
+            if type(resume) == "function" then
+                battle._arResumeReactPick = nil
+                local okR, errR = pcall(resume)
+                if not okR then
+                    H.noteErr(session, battle, "resumeReactPick", errR)
+                end
+            end
+        end
         Cues.tickBraceCounter(session, Grid)
         local whiff = battle and battle._arWhiffCloseStrike
         if whiff then

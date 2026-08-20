@@ -274,8 +274,18 @@ return function(Hooks)
                         hit = peeked
                     end
                 end
-                if hit == false then
+                if hit == false and battle._arFireNow then
+                    -- Missed FIRE still plays the shot, slower, so the charger
+                    -- can run through it. Do not convert to a slip-past miss.
+                    opts.slowShot = true
+                    opts.fireCarry = true
+                    battle._arFireCarryThrough = true
+                    battle._arFireNowHit = false
+                elseif hit == false then
                     kind = "miss"
+                end
+                if battle._arFireNow and hit == true then
+                    battle._arFireNowHit = true
                 end
                 if not skip and type(FBV.shouldSkipEventReact) == "function" then
                     local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, kind, opts)
@@ -323,6 +333,11 @@ return function(Hooks)
                     crit = ev.crit == true,
                     via = "dmg",
                 }
+                if type(FBV.isFinishingBlow) == "function"
+                    and FBV.isFinishingBlow(ev.user, ev.target) then
+                    hitOpts.finishing = true
+                    hitOpts.clash = true
+                end
 
                 -- if the mon is still walking in
                 -- we want to hold out on actually calling the engine to deal damage.
@@ -340,8 +355,9 @@ return function(Hooks)
 
                 local skip = false
 
-                if type(FBV.shouldSkipEventReact) == "function" then
-                    local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "hit")
+                if not hitOpts.finishing
+                    and type(FBV.shouldSkipEventReact) == "function" then
+                    local okS, s = pcall(FBV.shouldSkipEventReact, battle, side, "hit", hitOpts)
                     skip = okS and s
                 end
                 if not skip then

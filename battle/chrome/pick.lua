@@ -564,7 +564,15 @@ function Pick.newModal(game, opts)
         Sound.play(self.game.data, "Press_AB")
         self.game.stack:pop()
         if self.onPick then
-            self.onPick(choice)
+            -- FIRE / dodge must not throw out of Menu:update — FIELD
+            -- swallows that as a native abort with no error screen.
+            local ok, err = pcall(self.onPick, choice)
+            if not ok then
+                local fn = host.log
+                if type(fn) == "function" then
+                    pcall(fn, nil, "ERR pick", tostring(err))
+                end
+            end
         end
     end
 

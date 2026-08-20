@@ -2078,6 +2078,7 @@ local function drawWaterJet(g, x, y, ox, oy, t, age, c)
   end
   local breakup = math.max(0, (t - 0.70) / 0.30)
   local flow = age * 16.5
+  c = c or {}
   local cr, cg, cb = c[1] or 0.2, c[2] or 0.58, c[3] or 1
   local segs = 16
   local pts = {}
@@ -4332,6 +4333,13 @@ local function spawn(session, spec)
     followEnt = spec.followEnt,
     followPin = spec.followPin == true,
   }
+  if session._fireShotSlow then
+    p.duration = (p.duration or 0.36) * 1.75
+    if type(p.ex) == "number" and type(p.sx) == "number" then
+      p.ex = p.ex + (p.ex - p.sx) * 0.55
+      p.ey = (p.ey or 0) + ((p.ey or 0) - (p.sy or 0)) * 0.55
+    end
+  end
   local dx, dy = p.ex - p.sx, p.ey - p.sy
   local len = math.sqrt(dx * dx + dy * dy)
   if len > 0 then
@@ -4572,6 +4580,12 @@ end
 
 function Projectiles.move(session, side, opts)
   opts = opts or {}
+  local slow = opts.slowShot or opts.fireCarry or session._fireShotSlow
+  if slow then
+    session._fireShotSlow = true
+  else
+    session._fireShotSlow = nil
+  end
   local from = (side == "player") and session.playerMon or session.enemyMon
   local target = (side == "player") and session.enemyMon or session.playerMon
   local sx, sy = center(session, from)
@@ -5260,6 +5274,68 @@ function Projectiles.clashBurst(session, side, opts)
     end
   end
   return Projectiles.powerHit(session, foeSide, opts)
+end
+
+--- Two specials meet in the middle. Short streaks + a burst at the midpoint.
+function Projectiles.beamClash(session, playerOpts, enemyOpts)
+  playerOpts = playerOpts or {}
+  enemyOpts = enemyOpts or {}
+  local atk = session and session.playerMon
+  local def = session and session.enemyMon
+  local ax, ay = center(session, atk)
+  local bx, by = center(session, def)
+  if not (ax and bx) then
+    return nil
+  end
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5
+  local function streak(sx, sy, opts)
+    local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
+    local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
+    local fx = resolveFx({
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+      category = "special",
+    })
+    return spawn(session, {
+      kind = "move",
+      style = (fx and fx.style ~= "contact" and fx.style) or "beam",
+      glitz = fx and fx.glitz,
+      sx = sx, sy = sy, ex = mx, ey = my,
+      duration = 0.28,
+      arc = 0,
+      color = (fx and fx.color) or color,
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+    })
+  end
+  streak(ax, ay, playerOpts)
+  streak(bx, by, enemyOpts)
+  local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local color = TYPE_COLORS[pType] or TYPE_COLORS.NORMAL
+  spawn(session, {
+    kind = "effect",
+    style = "clash_glow",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.72,
+    arc = 0,
+    color = color,
+  })
+  spawn(session, {
+    kind = "effect",
+    style = "clash_trail",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.48,
+    arc = 0,
+    color = color,
+  })
+  return spawn(session, {
+    kind = "effect",
+    style = "power_hit",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.36,
+    arc = 0,
+    color = color,
+  })
 end
 
 function Projectiles.powerHit(session, side, opts)

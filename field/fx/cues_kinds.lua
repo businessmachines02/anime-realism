@@ -34,12 +34,18 @@ return function(Cues)
         if Projectiles and type(Projectiles.move) == "function" then
             local jump = type(Grid.pathObstructed) == "function"
                 and Grid.pathObstructed(g, ent, foe)
+            local slow = opts.slowShot == true or opts.fireCarry == true
+            if slow then
+                session._fireShotSlow = true
+            end
             Projectiles.move(session, side, {
                 category = category or "special",
                 jump = jump,
                 moveType = opts.moveType,
                 moveId = opts.moveId,
+                slowShot = slow,
             })
+            session._fireShotSlow = nil
         end
         H.playAnim(ent, "cast")
     end
@@ -346,10 +352,35 @@ return function(Cues)
             and not battle._arPendingBraceCounter.fireAt then
             battle._arPendingBraceCounter.fireAt = H.now(session) + 0.34
         end
+        local finishing = opts.finishing == true
+        if finishing then
+            local atkSide = (side == "player") and "enemy" or "player"
+            H.finishingFocus(session, atkSide, opts)
+        end
+        -- FIRE NOW that connected: knock the charger off the line.
+        if battle and battle._arFireNow and side == "enemy" then
+            local foe = H.foeOf(session, side)
+            Cues.cancelCloseStrike(session, side, Grid)
+            if Grid and type(Grid.knockbackTiles) == "function" then
+                Grid.knockbackTiles(session.grid, ent, foe, 2)
+            end
+            ent._heavyHit = true
+            local Projectiles = session._deps and session._deps.Projectiles
+            if Projectiles and type(Projectiles.powerHit) == "function" then
+                Projectiles.powerHit(session, side, opts)
+            end
+            if Projectiles and type(Projectiles.groundKick) == "function" then
+                Projectiles.groundKick(session, side, opts)
+            end
+            H.impactKick(session, { powerful = true })
+            H.playAnim(ent, "hit")
+            return true
+        end
         local foe = H.foeOf(session, side)
         local g = session.grid
         local category = H.normCategory(opts.category)
-        local clash = opts.clash == true or session._clashPunch == true
+        local clash = opts.clash == true or opts.finishing == true
+            or session._clashPunch == true
 
         if type(nudgeCamera) == "function" and battle and not clash then
             nudgeCamera(battle, side, 0.35)
@@ -437,7 +468,36 @@ return function(Cues)
         if H.isExitPlaying(ent) then
             return true
         end
+        -- Dodge-counter / COUNTER! after a miss always connects. A leftover
+        -- "attack missed" tagged on the player must not slip-past that swing
+        -- or hop the foe as if they dodged the proc.
+        local shot = session._dodgeCounterShot
+        if side == "player" and (
+            (battle and (battle._arGuaranteedHit or battle._arCounterClash))
+            or (shot and shot.side == "player")
+        ) then
+            return true
+        end
         opts = opts or {}
+        -- Missed FIRE NOW: keep the shot pose, do not hop the charger aside.
+        if battle and (battle._arFireNow or battle._arFireCarryThrough)
+            and side == "player" then
+            local Projectiles = session._deps and session._deps.Projectiles
+            session._fireShotSlow = true
+            if Projectiles and type(Projectiles.move) == "function" and opts.moveId then
+                Projectiles.move(session, side, {
+                    category = opts.category or "special",
+                    moveType = opts.moveType,
+                    moveId = opts.moveId,
+                    slowShot = true,
+                })
+            elseif Projectiles and type(Projectiles.miss) == "function" then
+                Projectiles.miss(session, side)
+            end
+            session._fireShotSlow = nil
+            H.playAnim(ent, "cast")
+            return true
+        end
         -- Accuracy miss: no punch, no HP. Convert a close-the-gap walk into
         -- a slip-past, then walk home.
         if ent._pendingCloseStrike then

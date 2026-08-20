@@ -132,8 +132,10 @@ function tests.b_pauses_move_field_hud()
   }), "B on the sticky command frame is pause")
   truthy(not Hooks.fieldPausePressed(press("b"), { phase = "messages" }),
     "B during dialogue is not field pause")
-  truthy(not Hooks.fieldPausePressed(press("a"), { phase = "moveSelect" }),
-    "A on the diamond is not pause")
+  truthy(not Hooks.fieldPausePressed(press("b"), {
+    phase = "moveSelect",
+    _arAwaitCallout = true,
+  }), "delayed callout cannot pause back to FIGHT")
   truthy(not Hooks.fieldPausePressed(nil, { phase = "moveSelect" }),
     "missing input is not pause")
 
@@ -377,6 +379,39 @@ function tests.water_types_may_step_onto_water()
   truthy(Sprites.isWaterType({ curTypes = { "WATER", "FLYING" } }), "dual Water")
   truthy(not Sprites.isWaterType({ curTypes = { "FIRE" } }), "Fire is not Water")
   truthy(Sprites.isWaterType({ def = { types = { "WATER" } } }), "def.types WATER")
+end
+
+function tests.mons_on_water_use_the_swim_sheet()
+  local land = { sprite = { id = "land" }, lift = 8 }
+  local swim = { sprite = { id = "swim" }, lift = 8 }
+  local grid = { water = {}, originWx = 0, originWy = 0, uAxis = { x = 1, y = 0 }, vAxis = { x = 0, y = 1 } }
+  local fire = {
+    padU = 2, padV = 0,
+    canSwim = false,
+    _grid = grid,
+    sprite = land.sprite,
+    _fieldSurface = "land",
+    _surfaceVisuals = { land = land, water = swim },
+  }
+  grid.water[Coords.key(2, 0)] = true
+  truthy(Sprites.feetOnWater(fire), "occupancy on water counts")
+  Sprites.syncSurface(fire)
+  eq(fire._fieldSurface, "water", "Fire-type on water still swims")
+  eq(fire.sprite.id, "swim", "swim sheet is applied")
+
+  fire.padU, fire.padV = 0, 0
+  fire._fieldSurface = "land"
+  fire.sprite = land.sprite
+  fire.basePx, fire.basePy = 2 * 16 + 4, 2
+  grid.water[Coords.key(2, 0)] = true
+  truthy(Sprites.feetOnWater(fire), "pixels over water count mid-step")
+  Sprites.syncSurface(fire)
+  eq(fire._fieldSurface, "water", "lerp across a pond uses the swim sheet")
+
+  fire.basePx, fire.basePy = 0, 0
+  grid.water[Coords.key(2, 0)] = nil
+  Sprites.syncSurface(fire)
+  eq(fire._fieldSurface, "land", "back on land restores the land sheet")
 end
 
 function tests.dodge_styles_follow_type_and_cycle()
@@ -1055,6 +1090,8 @@ function tests.fire_now_reacts_during_a_charge()
     playerMon = player,
     enemyMon = enemy,
   }
+  truthy(Cues.fireRangeOpen(session),
+    "opening homes are a two-tile fire range")
   truthy(Cues.chargeWindowOpen(session),
     "opening homes are still a fire window")
   truthy(Cues.shouldHoldApplyDamage(session, battle, battle.player),
@@ -1067,6 +1104,473 @@ function tests.fire_now_reacts_during_a_charge()
   battle._arFireNow = nil
   enemy._pendingCloseStrike = nil
   truthy(not Cues.chargeWindowOpen(session), "no charge is not a fire window")
+end
+
+function tests.fire_now_only_at_two_tile_gap()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    basePx = 0, basePy = 0,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    basePx = 32, basePy = 0,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+  }
+  eq(math.max(math.abs(eHome.u - pHome.u), math.abs(eHome.v - pHome.v)),
+    Cues.FIRE_PAD_RANGE, "homes sit two tiles apart")
+  truthy(Cues.fireRangeOpen(session), "FIRE while they are two tiles out")
+
+  -- Occupancy already adjacent; feet still two tiles away.
+  enemy.padU = pHome.u + 1
+  enemy.padV = pHome.v
+  enemy.basePx = 48
+  truthy(not Cues.inMeleeReach(player, enemy), "sprite has not arrived")
+  truthy(Cues.fireRangeOpen(session),
+    "FIRE while they close from two tiles")
+  truthy(Cues.chargeWindowOpen(session),
+    "pending charge at that gap is still a fire window")
+
+  enemy.basePx = 8
+  truthy(Cues.inMeleeReach(player, enemy), "they are in your face")
+  truthy(not Cues.fireRangeOpen(session), "no FIRE once they reach melee")
+  truthy(not Cues.chargeWindowOpen(session),
+    "a punch in your face is not a fire window")
+
+  enemy.basePx = 48
+  enemy.padU = pHome.u + 3
+  enemy.padV = pHome.v
+  truthy(not Cues.fireRangeOpen(session), "three tiles is not the shot")
+  enemy._pendingCloseStrike = nil
+  enemy.padU = eHome.u
+  enemy.padV = eHome.v
+  truthy(Cues.fireRangeOpen(session), "homes without a charge are still range")
+end
+
+function tests.far_shot_specials_lose_accuracy()
+  eq(Cues.farShotMissChance(2), 0, "opening gap is not a long shot")
+  eq(Cues.farShotMissChance(4), 0, "four tiles is still close")
+  eq(Cues.farShotMissChance(5), 0.10, "five tiles is a long shot")
+  eq(Cues.farShotMissChance(6), 0.15, "six tiles is longer")
+  eq(Cues.farShotMissChance(8), 0.20, "farther caps")
+
+  local session = {
+    playerMon = { padU = 0, padV = 0 },
+    enemyMon = { padU = 6, padV = 0 },
+  }
+  local alwaysMiss = function() return 0 end
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "EMBER", category = "special" },
+  }, true, alwaysMiss), false, "far ember can miss extra")
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "TACKLE", category = "physical" },
+  }, true, alwaysMiss), true, "physicals do not take the long-shot tax")
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "SWIFT", category = "special", neverMiss = true },
+  }, true, alwaysMiss), true, "never-miss stays never-miss")
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "SWIFT", category = "special", accuracy = 0 },
+  }, true, alwaysMiss), true, "gen1 never-miss accuracy 0 is skipped")
+
+  session.enemyMon.padU = 2
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "EMBER", category = "special" },
+  }, true, alwaysMiss), true, "two tiles does not extra-miss")
+  eq(Cues.applyFarShotAccuracy(session, {
+    move = { id = "EMBER", category = "special" },
+  }, false, alwaysMiss), false, "an engine miss stays a miss")
+end
+
+function tests.fire_now_hit_stops_the_charge()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startU, startV = enemy.padU, enemy.padV
+  local battle = { _arFireNow = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 40,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, battle, {
+    category = "special", moveId = "WATER_GUN",
+  }), "FIRE hit cue")
+  truthy(not enemy._pendingCloseStrike, "connecting FIRE cancels the charge")
+  truthy(enemy._heavyHit, "charger is knocked back")
+  eq(enemy.lastAnim, "hit", "charger takes the bolt")
+  truthy(enemy.padU ~= startU or enemy.padV ~= startV,
+    "charger leaves the charge cell")
+end
+
+function tests.fire_now_miss_lets_the_charge_through()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {
+    _arFireNow = true,
+    _arFireCarryThrough = true,
+    kind = "wild",
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 41,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  player.lastAnim = "idle"
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, battle, {
+    category = "special", moveId = "WATER_GUN",
+  }), "missed FIRE still plays")
+  eq(player.lastAnim, "cast", "caster holds the shot pose")
+  eq(enemy.lastAnim, nil, "charger does not hop aside")
+  truthy(enemy._pendingCloseStrike, "the charge still carries through")
+
+  session.projectiles = nil
+  local normal = Projectiles.move(session, "player", {
+    category = "special", moveId = "WATER_GUN",
+  })
+  session.projectiles = nil
+  local slow = Projectiles.move(session, "player", {
+    category = "special", moveId = "WATER_GUN", slowShot = true,
+  })
+  truthy(normal and slow, "both shots spawn")
+  truthy(slow.duration > normal.duration, "missed FIRE flies slower")
+end
+
+function tests.fire_pick_defers_the_shot_off_the_hud()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    _pendingCloseStrike = { moveId = "PECK" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {}
+  local fired = 0
+  battle._arResumeReactPick = function()
+    fired = fired + 1
+  end
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = battle,
+    _now = 0,
+  }
+  Cues.tickReturns(session, Grid)
+  eq(fired, 1, "FIRE shot runs on the present tick, not the HUD click")
+  eq(battle._arResumeReactPick, nil, "resume is consumed")
+  Cues.tickReturns(session, Grid)
+  eq(fired, 1, "resume does not replay")
+end
+
+function tests.slower_side_holds_the_call_until_after_incoming()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  local slow = { curStats = { speed = 40 }, stats = { speed = 40 } }
+  local fast = { curStats = { speed = 90 }, stats = { speed = 90 } }
+  truthy(React.playerLikelyGoesSecond({ player = slow, enemy = fast }),
+    "lower Speed waits on the incoming")
+  truthy(not React.playerLikelyGoesSecond({ player = fast, enemy = slow }),
+    "higher Speed still calls first")
+  truthy(not React.playerLikelyGoesSecond({ player = fast, enemy = fast }),
+    "speed tie still picks first")
+  local wait = React.awaitIncomingAction()
+  truthy(React.isAwaitIncoming(wait), "FIGHT going second is awaitIncoming")
+  truthy(React.spendsQueuedAction("cover"), "COVER spends the slower call")
+  truthy(React.spendsQueuedAction("entrench"), "ENTRENCH spends the slower call")
+  truthy(React.spendsQueuedAction("fire", { fireNow = true }),
+    "FIRE spends the slower call")
+  truthy(not React.spendsQueuedAction("dodge"), "DODGE still gets the delayed call")
+  truthy(not React.spendsQueuedAction("brace"), "BRACE still gets the delayed call")
+  truthy(not React.spendsQueuedAction("commit"), "COMMIT still gets the delayed call")
+  local goingSecond = { player = slow, enemy = fast }
+  React.state(goingSecond)
+  React.peek(goingSecond).queuedPlayerAction = wait
+  truthy(React.counterDefersToLaterCall(goingSecond),
+    "going-second proc waits for the later call")
+  React.peek(goingSecond).playerActedThisTurn = true
+  truthy(not React.counterDefersToLaterCall(goingSecond),
+    "already-acted dodge still counters on the incoming")
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { _arAwaitCallout = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = battle,
+  }
+  truthy(Cues.awaitingCallout(battle), "callout flag is live")
+  truthy(Cues.shouldParkEngineQueue(session),
+    "engine waits for the slower call")
+  battle._arAwaitCallout = nil
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "callout park clears after the pick")
+end
+
+function tests.counter_after_a_miss_always_connects()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  local player = { isPlayer = true }
+  local enemy = { isPlayer = false }
+  local battle = {}
+  truthy(not React.isGuaranteedCounterHit(battle, player, enemy),
+    "no latch is not a counter")
+  React.state(battle)
+  local st = React.peek(battle)
+  st.mode = "counter"
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "post-miss opening always connects")
+  truthy(not React.isGuaranteedCounterHit(battle, enemy, player),
+    "foe swings are not guaranteed")
+  st.mode = nil
+  st.sameTurnCounterStrike = true
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "COUNTER! extra strike always connects")
+  st.sameTurnCounterStrike = nil
+  battle._arGuaranteedHit = true
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "REACT dodge-counter proc always connects")
+  battle._arGuaranteedHit = nil
+  battle._arCounterClash = true
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "clash counter always connects")
+end
+
+function tests.counter_proc_does_not_play_a_player_miss()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  player.lastAnim = "cast"
+  local battle = { _arGuaranteedHit = true, _arAccuracyMissSide = "player" }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 80,
+    _deps = { Projectiles = Projectiles, UI = UI },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, battle),
+    "leftover miss is consumed")
+  eq(player.lastAnim, "cast", "counter pose is not replaced by a miss")
+  eq(enemy.lastAnim, nil, "the foe does not sidestep the proc")
+end
+
+function tests.empty_focus_skips_react_hud()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local battle = {
+    player = { stats = { speed = 80, defense = 50, special = 60 } },
+    enemy = { stats = { speed = 55, defense = 90, special = 40 } },
+  }
+  RD.state(battle)
+  local side = RD.sideState(battle, true)
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  side.focus = 0
+  local actions = RD.menuActions(battle, tackle)
+  eq(#actions, 1, "drained Focus only lists COMMIT")
+  eq(actions[1].id, "commit", "the leftover row is COMMIT")
+  truthy(not RD.hasReactChoice(battle, tackle),
+    "REACT HUD stays closed when only COMMIT remains")
+  actions = RD.menuActions(battle, tackle, { canFireNow = true })
+  eq(#actions, 1, "FIRE is not listed with empty Focus")
+  truthy(not RD.hasReactChoice(battle, tackle, { canFireNow = true }),
+    "an unaffordable FIRE window still skips the HUD")
+  side.focus = RD.COST.brace
+  truthy(RD.hasReactChoice(battle, tackle),
+    "enough Focus for Brace opens REACT")
+  side.focus = 0
+  side.cover = true
+  truthy(RD.hasReactChoice(battle, tackle),
+    "holding cover is still a pick at 0 Focus")
+end
+
+function tests.fire_clashes_with_an_incoming_special()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local ember = { id = "EMBER", power = 40, category = "special", type = "FIRE" }
+  local water = { id = "WATER_GUN", power = 40, category = "special", type = "WATER" }
+  truthy(RD.isSpecialClashIncoming(ember), "Ember is a clashable special")
+  truthy(not RD.isSpecialClashIncoming({
+    id = "TACKLE", power = 35, category = "physical", type = "NORMAL",
+  }), "Tackle is not a beam clash")
+  truthy(not RD.isSpecialClashIncoming({
+    id = "THUNDER_WAVE", power = 0, category = "status", type = "ELECTRIC",
+  }), "status shots do not clash")
+
+  local battle = {
+    player = { stats = { special = 120, speed = 50 } },
+    enemy = { stats = { special = 40, speed = 80 } },
+  }
+  RD.state(battle)
+  local verdict = RD.contestSpecialClash(battle, ember, water)
+  eq(verdict, "win", "higher Special shoves the incoming beam")
+  local result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = ember,
+    replyMove = water,
+  })
+  eq(result.fireClash, "win", "FIRE vs Ember is a clash win")
+  eq(result.forceMiss, true, "incoming beam dies")
+  eq(result.fireNowContinue, true, "your shot continues")
+  eq(result.chip, "CLASH", "CLASH chip on a beam contest")
+
+  battle = {
+    player = { stats = { special = 80, speed = 50 } },
+    enemy = { stats = { special = 80, speed = 80 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, ember, water)
+  eq(verdict, "tie", "matched Special deadlocks")
+  result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = ember,
+    replyMove = water,
+  })
+  eq(result.fireClash, "tie", "even clash cancels both")
+  eq(result.forceMiss, true, "neither full hit lands")
+  eq(result.fireNowContinue, false, "your shot dies in the middle")
+
+  battle = {
+    player = { stats = { special = 30, speed = 50 } },
+    enemy = { stats = { special = 120, speed = 80 } },
+  }
+  RD.state(battle)
+  result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = ember,
+    replyMove = water,
+  })
+  eq(result.fireClash, "lose", "weaker Special loses the push")
+  eq(result.forceMiss, false, "theirs continues")
+  truthy(result.damageMult < 1, "theirs continues weaker")
+  eq(result.fireNowContinue, false, "your shot is spent")
+  RD.clear(battle)
+
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  React.bind({
+    isFieldBattle = function() return true end,
+    playerStatusLocked = function() return false end,
+    listFireNowMoves = function()
+      return { { moveId = "WATER_GUN", name = "WATER GUN",
+        moveInst = { id = "WATER_GUN" } } }
+    end,
+    isRangedCounter = function(_, opts)
+      return tostring(opts.category or ""):lower() == "special"
+    end,
+    isMeleeAttack = function() return false end,
+    chargeWindowOpen = function() return false end,
+  })
+  local field = { player = { isPlayer = true }, enemy = {} }
+  React.state(field)
+  truthy(React.canFireNow(field, ember), "FIRE opens vs an incoming special")
+  truthy(not React.canFireNow(field, {
+    id = "THUNDER_WAVE", power = 0, category = "status", type = "ELECTRIC",
+  }), "status shots do not open FIRE")
+  React.bind({
+    isFieldBattle = function() return true end,
+    playerStatusLocked = function() return false end,
+    listFireNowMoves = function()
+      return { { moveId = "WATER_GUN", name = "WATER GUN",
+        moveInst = { id = "WATER_GUN" } } }
+    end,
+    isRangedCounter = function(_, opts)
+      return tostring(opts.category or ""):lower() == "special"
+    end,
+    isMeleeAttack = function() return false end,
+    chargeWindowOpen = function() return false end,
+    fireRangeOpen = function() return false end,
+  })
+  truthy(not React.canFireNow(field, ember),
+    "FIRE stays off when they are not two tiles out")
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  truthy(Cues.playBeamClash(session, Grid, { fireClash = "tie" }, {
+    move = ember,
+    replyMove = water,
+  }), "beam clash paints")
+  eq(player.lastAnim, "cast", "player casts into the clash")
+  truthy(session._clashPunch, "camera holds the midpoint")
+  local styles = {}
+  for i = 1, #(session.projectiles or {}) do
+    styles[session.projectiles[i].style] = true
+  end
+  truthy(styles.clash_glow, "clash burst at mid")
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()
@@ -1599,6 +2103,59 @@ function tests.counter_clash_punches_in()
   }), "clash hit cue")
   eq(enemy.lastAnim, "hit", "foe takes the clash")
   truthy(enemy._heavyHit, "clash knock is heavy")
+end
+
+function tests.finishing_blow_plays_the_clash()
+  truthy(not Cues.isFinishingBlow(
+    { isPlayer = true },
+    { isPlayer = false, mon = { hp = 12 } }
+  ), "a living foe is not a finisher")
+  truthy(Cues.isFinishingBlow(
+    { isPlayer = true },
+    { isPlayer = false, mon = { hp = 0 } }
+  ), "KO from the player is a finisher")
+  truthy(not Cues.isFinishingBlow(
+    { isPlayer = false },
+    { isPlayer = true, mon = { hp = 0 } }
+  ), "the foe KOing you is not your finisher")
+
+  local plan = Layout.plan(0, 0, 8, 0)
+  local grid = Grid.build({
+    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
+  }, plan)
+  local player = {
+    id = "player", padU = 2, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = 4, padV = 0,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 50,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    category = "physical", moveId = "TACKLE", finishing = true,
+  }), "finishing hit cue")
+  eq(player.lastAnim, "counter", "attacker plays the counter pose")
+  eq(enemy.lastAnim, "hit", "foe takes the KO")
+  truthy(session._clashPunch, "camera punch-in is armed")
+  truthy((session._clashSlowT or 0) >= 0.7, "slow-mo holds the beat")
+  truthy(enemy._heavyHit, "KO knock is heavy")
+  local styles = {}
+  for i = 1, #(session.projectiles or {}) do
+    styles[session.projectiles[i].style] = true
+  end
+  truthy(styles.clash_glow, "finisher rims the mons with glow")
+  truthy(styles.clash_trail, "finisher paints hair trails")
 end
 
 function tests.brace_counter_waits_for_the_incoming_hit()

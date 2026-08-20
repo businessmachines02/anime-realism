@@ -17,6 +17,7 @@ S.ENEMY_LOW = {
 }
 S.PAR_REACT_FAIL_EXTRA = 0.25
 S.PAR_SHAKE_OFF = 0.10
+-- Unused: counters after a miss always connect (no extra whiff).
 S.COUNTER_EXTRA_MISS = 0.05
 S.COUNTER_SNAPBACK_CHANCE = 0.40
 S.COUNTER_SNAPBACK_MULT = 0.50 -- of the foe's stashed whiff estimate

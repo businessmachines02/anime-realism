@@ -88,7 +88,8 @@ function Fx.play(battle, action, result)
         if kind == "dodge" or kind == "cover" or kind == "brace"
             or kind == "entrench" or kind == "entrench_hold" then
             local opts
-            if kind == "dodge" and result and result.counter then
+            if kind == "dodge" and result and result.counter
+                and not result.counter.deferToCall then
                 opts = {
                     counterMoveId = result.counter.moveId,
                     counterMoveType = result.counter.moveType,

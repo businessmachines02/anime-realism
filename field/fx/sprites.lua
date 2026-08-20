@@ -1125,7 +1125,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._walkFrame = (math.floor(self._walkT * 8) % 2)
       end
     end
-    -- Land ↔ swim sheet when a Water-type steps onto surveyed water.
+    -- Land ↔ swim sheet when feet are on surveyed water (any species).
     Sprites.syncSurface(self)
     -- Always advance bob — independent of battle queue / waitFrames / UI.
     -- Major status lightly flavors the idle pose (freeze stills, para jitters).
@@ -1603,7 +1603,9 @@ local function finalizeEntity(ent, battler, barLift, mod, game, species)
     ent._spriteGame = game
     ent._spriteSpecies = species
     ent._fieldSurface = "land"
-    ent.canSwim = Sprites.isWaterType(battler, game, species) and true or false
+    -- Combat mons may splash through surveyed water; the swim sheet
+    -- follows their feet, not their typing.
+    ent.canSwim = true
   end
   return ent
 end
@@ -1731,16 +1733,40 @@ function Sprites.applySurface(ent, surface)
   return true
 end
 
+--- True when this entity's occupancy or live feet sit on surveyed water.
+function Sprites.feetOnWater(ent)
+  if not ent then
+    return false
+  end
+  local g = ent._grid
+  if not (g and type(g.water) == "table" and Coords) then
+    return false
+  end
+  local function wet(u, v)
+    return u ~= nil and v ~= nil and g.water[Coords.key(u, v)] == true
+  end
+  if wet(ent.padU, ent.padV) then
+    return true
+  end
+  local px = ent.basePx or ent.px
+  local py = ent.basePy or ent.py
+  if type(px) == "number" and type(py) == "number" then
+    local cell = Coords.CELL or 16
+    local wx = math.floor(px / cell)
+    local wy = math.floor(py / cell)
+    local u, v = Coords.worldToPad(g, wx, wy)
+    if wet(u, v) then
+      return true
+    end
+  end
+  return false
+end
+
 function Sprites.syncSurface(ent)
   if not ent or ent._removed or ent.hidden then
     return
   end
-  local g = ent._grid
-  local onWater = false
-  if g and type(g.water) == "table" and ent.padU ~= nil and Coords then
-    onWater = g.water[Coords.key(ent.padU, ent.padV)] == true
-  end
-  local want = (onWater and ent.canSwim) and "water" or "land"
+  local want = Sprites.feetOnWater(ent) and "water" or "land"
   if want ~= ent._fieldSurface then
     Sprites.applySurface(ent, want)
   end

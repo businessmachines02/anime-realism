@@ -160,6 +160,29 @@ function H.clashFocus(session, side, opts)
     })
 end
 
+--- Player KO: same clash beat as a counter (glow, hair trails, slow-mo).
+function H.finishingFocus(session, atkSide, opts)
+    if not session then
+        return false
+    end
+    if session._clashPunch then
+        return true
+    end
+    H.clashFocus(session, atkSide, opts)
+    local atk = H.sideEnt(session, atkSide)
+    H.playAnim(atk, "counter")
+    return true
+end
+
+--- Player hit that just dropped the foe to 0 HP.
+function Cues.isFinishingBlow(user, target)
+    if not (user and user.isPlayer and target and not target.isPlayer) then
+        return false
+    end
+    local hp = target.mon and target.mon.hp
+    return type(hp) == "number" and hp <= 0
+end
+
 --- Contact juice without a fake zoom: freeze a few frames and bump the camera.
 --- Classic battle.fx.shake recrops the voxel pass and can abort Love.
 function H.impactKick(session, spec)
@@ -645,11 +668,113 @@ function H.hasStruckThisTurn(ent)
     return type(struck) == "table" and next(struck) ~= nil
 end
 
---- True while a foe close-gap charge is still pending.
---- Opening homes are one cell apart; a pending charge is still a fire window.
---- The punch waits for REACT, so pad distance is not "too late."
-function Cues.chargeWindowOpen(session)
+--- Opening homes leave one empty cell (Chebyshev 2). That is the FIRE shot.
+Cues.FIRE_PAD_RANGE = 2
+--- Ranged specials from this far pick up an extra miss. Compact pads
+--- top out around 4, so this only bites on a wide arena.
+Cues.FAR_SHOT_RANGE = 5
+Cues.FAR_SHOT_MISS = {
+    [5] = 0.10,
+    [6] = 0.15,
+}
+Cues.FAR_SHOT_MISS_CAP = 0.20
+
+local function padChebyshev(a, b)
+    if not (a and b) then
+        return 0
+    end
+    return math.max(
+        math.abs((b.padU or 0) - (a.padU or 0)),
+        math.abs((b.padV or 0) - (a.padV or 0)))
+end
+
+function Cues.livePadDistance(session, a, b)
+    a = a or (session and session.playerMon)
+    b = b or (session and session.enemyMon)
+    local dist = padChebyshev(a, b)
+    local Grid = session and session._deps and session._deps.Grid
+    if Grid and type(Grid.padDistance) == "function" and session.grid then
+        dist = Grid.padDistance(session.grid, a, b) or dist
+    end
+    return dist
+end
+
+function Cues.farShotMissChance(dist)
+    dist = tonumber(dist) or 0
+    if dist < (Cues.FAR_SHOT_RANGE or 5) then
+        return 0
+    end
+    local by = Cues.FAR_SHOT_MISS
+    if type(by) == "table" and type(by[dist]) == "number" then
+        return by[dist]
+    end
+    return Cues.FAR_SHOT_MISS_CAP or 0.20
+end
+
+function Cues.rollFarShotMiss(dist, rng)
+    local chance = Cues.farShotMissChance(dist)
+    if chance <= 0 then
+        return false
+    end
+    if type(rng) ~= "function" then
+        rng = (love and love.math and love.math.random) or math.random
+    end
+    return rng() < chance
+end
+
+--- Extra miss on a ranged special fired from 5+ tiles. Melee, never-miss,
+--- and compact-pad shots are unchanged. `hit` is the engine's roll.
+function Cues.applyFarShotAccuracy(session, ctx, hit, rng)
+    if not hit then
+        return false
+    end
+    local move = ctx and ctx.move
+    if not move then
+        return hit
+    end
+    if move.neverMiss or move.accuracy == 0 then
+        return hit
+    end
+    local Projectiles = session and session._deps and session._deps.Projectiles
+    if not Cues.isRangedCounter({
+        category = move.category,
+        moveId = move.id,
+        moveType = move.type,
+    }, Projectiles) then
+        return hit
+    end
+    if Cues.rollFarShotMiss(Cues.livePadDistance(session), rng) then
+        return false
+    end
+    return true
+end
+
+--- True when the foe is still a two-tile shot.
+--- closeGap jumps occupancy to adjacent immediately; feet can still be
+--- two tiles out, and that is still FIRE until they reach melee.
+function Cues.fireRangeOpen(session)
     if not (session and session.live) then
+        return false
+    end
+    local player = session.playerMon
+    local foe = session.enemyMon
+    if not (player and foe) then
+        return false
+    end
+    local dist = Cues.livePadDistance(session, player, foe)
+    if dist == Cues.FIRE_PAD_RANGE then
+        return true
+    end
+    if dist == 1 and foe._pendingCloseStrike
+        and not Cues.inMeleeReach(player, foe) then
+        return true
+    end
+    return false
+end
+
+--- True while a foe close-gap charge is still a two-tile FIRE window.
+function Cues.chargeWindowOpen(session)
+    if not Cues.fireRangeOpen(session) then
         return false
     end
     local charger = session.enemyMon
@@ -658,6 +783,11 @@ end
 
 function Cues.awaitingReact(battle)
     return battle and battle._arAwaitingReact == true
+end
+
+--- True while the slower side's move diamond is waiting after the incoming.
+function Cues.awaitingCallout(battle)
+    return battle and battle._arAwaitCallout == true
 end
 
 --- Brace/entrench counter: clash after the incoming hit, not on the pick.
@@ -725,6 +855,40 @@ function Cues.fireDodgeCounterShot(session, side, opts)
         side = side,
         moveId = tostring(moveId):upper():gsub("%s+", "_"),
     }
+    return true
+end
+
+--- Two specials collide between the mons.
+function Cues.playBeamClash(session, Grid, result, ctx)
+    if not session then
+        return false
+    end
+    result = result or {}
+    ctx = ctx or {}
+    local incoming = ctx.move or {}
+    local reply = ctx.replyMove or {}
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.beamClash) == "function" then
+        Projectiles.beamClash(session, {
+            moveId = reply.id or reply.moveId,
+            moveType = reply.type or reply.moveType,
+        }, {
+            moveId = incoming.id or incoming.moveId,
+            moveType = incoming.type or incoming.moveType,
+        })
+    end
+    local player = H.sideEnt(session, "player")
+    if player then
+        H.playAnim(player, "cast")
+    end
+    H.punchIn(session, "player", {
+        mode = "clash",
+        focus = "mid",
+        hold = 0.88,
+        slow = 0.78,
+        lift = 6,
+        burst = false,
+    })
     return true
 end
 
@@ -1100,7 +1264,10 @@ function Cues.skipReason(session, side, kind, opts)
             kind == "attack" or kind == "vanish" or kind == "emerge"
             or kind == "hit" or kind == "selfhit" or kind == "status"
             or kind == "miss" or kind == "counter" or kind == "faint" or Cues.isReactKind(kind)) then
-        return "beat" -- "beat" prevents excessively repeating the same cue for the same side in rapid succession.
+        if opts.finishing then
+            return nil
+        end
+        return "beat"
     end
     return nil
 end

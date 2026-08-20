@@ -304,6 +304,13 @@ return function(env)
     end
   end
 
+  function FBV.interruptCharge(battle, side)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.interruptCharge) == "function" then
+      return Cues.interruptCharge(session, side, Grid)
+    end
+  end
+
   function FBV.deferCancelCloseStrike(battle, side, delay)
     local session = Lifecycle.get(battle)
     if session and Cues and type(Cues.deferCancelCloseStrike) == "function" then
@@ -325,6 +332,13 @@ return function(env)
     end
   end
 
+  function FBV.playBeamClash(battle, result, ctx)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.playBeamClash) == "function" then
+      return Cues.playBeamClash(session, Grid, result, ctx)
+    end
+  end
+
   function FBV.isRangedCounter(opts)
     if Cues and type(Cues.isRangedCounter) == "function" then
       return Cues.isRangedCounter(opts, Projectiles)
@@ -337,6 +351,21 @@ return function(env)
       return Cues.chargeWindowOpen(session)
     end
     return false
+  end
+
+  function FBV.fireRangeOpen(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.fireRangeOpen) == "function" then
+      return Cues.fireRangeOpen(session)
+    end
+  end
+
+  function FBV.applyFarShotAccuracy(battle, ctx, hit)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.applyFarShotAccuracy) == "function" then
+      return Cues.applyFarShotAccuracy(session, ctx, hit)
+    end
+    return hit
   end
 
   function FBV.closeGapPending(battle, side)
@@ -484,6 +513,13 @@ return function(env)
     return Lifecycle.shouldSkipEventReact(battle, side, kind, opts)
   end
 
+  function FBV.isFinishingBlow(user, target)
+    if Cues and type(Cues.isFinishingBlow) == "function" then
+      return Cues.isFinishingBlow(user, target)
+    end
+    return false
+  end
+
   function FBV.onFainted(battle, side)
     return Lifecycle.onFainted(battle, side)
   end
@@ -585,6 +621,9 @@ return function(env)
     local RD = packages and packages.battle and packages.battle.ReactiveDefense
     deps.ReactiveDefense = RD
     FBV.ReactiveDefense = RD
+    local React = packages and packages.battle and packages.battle.React
+    deps.React = React
+    FBV.React = React
     if packages and packages.log then
       FBV.setLog(packages.log)
     end

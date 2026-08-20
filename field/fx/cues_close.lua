@@ -97,7 +97,13 @@ return function(Cues)
             Projectiles.contact(session, side, pending)
         end
         local jump = (pending and pending.jump) or ent._attackJump
-        H.playAnim(ent, jump and "jump" or "attack")
+        local held = session._pendingCloseHit
+        local finishing = held and held.opts and held.opts.finishing == true
+        if finishing and side == "player" then
+            H.finishingFocus(session, side, held.opts)
+        else
+            H.playAnim(ent, jump and "jump" or "attack")
+        end
         local punch = jump and 0.56 or 0.48
         ent._returnAt = H.now(session) + punch
         -- Shove now that occupancy is adjacent. damage_dealt during the walk
@@ -136,6 +142,9 @@ return function(Cues)
         if Cues.awaitingReact(battle) then
             return false
         end
+        if Cues.awaitingCallout(battle) then
+            return true
+        end
         if battle and battle._arPendingBraceCounter then
             return true
         end
@@ -153,6 +162,27 @@ return function(Cues)
         H.restoreStepSpeed(ent)
         ent._withdrawAfterStrike = true
         ent._returnAt = H.now(session)
+        return true
+    end
+
+    --- FIRE NOW connected: stop the charge and shove the charger back.
+    function Cues.interruptCharge(session, side, Grid)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        local wasCharging = ent._pendingCloseStrike ~= nil
+        Cues.cancelCloseStrike(session, side, Grid)
+        if not wasCharging then
+            return false
+        end
+        Grid = Grid or (session._deps and session._deps.Grid)
+        local foe = H.foeOf(session, side)
+        if Grid and type(Grid.knockbackTiles) == "function" then
+            Grid.knockbackTiles(session.grid, ent, foe, 2)
+        end
+        ent._heavyHit = true
+        H.playAnim(ent, "hit")
         return true
     end
 
