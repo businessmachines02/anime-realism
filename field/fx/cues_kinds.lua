@@ -5,6 +5,7 @@
 -- faint looks wrong.
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
+--   cast                           overlapping FIRE pose (shot is the attack cue)
 --   attack                         physicals walk in; specials cast in place
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
@@ -206,6 +207,15 @@ return function(Cues)
         return true
     end)
 
+    Cues.register("cast", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        H.playAnim(ent, "cast")
+        return true
+    end)
+
     Cues.register("status", function(session, side, kind, Grid, nudgeCamera, battle, opts)
         local ent = H.sideEnt(session, side)
         if not ent then
@@ -373,23 +383,26 @@ return function(Cues)
             H.finishingFocus(session, atkSide, opts)
         end
         -- FIRE NOW that connected: knock the charger off the line.
-        if battle and battle._arFireNow and side == "enemy" then
-            local foe = H.foeOf(session, side)
-            Cues.cancelCloseStrike(session, side, Grid)
-            if Grid and type(Grid.knockbackTiles) == "function" then
-                Grid.knockbackTiles(session.grid, ent, foe, 2)
+        if battle and battle._arFireNow then
+            local charger = battle._arFireNowCharger or "enemy"
+            if side == charger then
+                local foe = H.foeOf(session, side)
+                Cues.cancelCloseStrike(session, side, Grid)
+                if Grid and type(Grid.knockbackTiles) == "function" then
+                    Grid.knockbackTiles(session.grid, ent, foe, 2)
+                end
+                ent._heavyHit = true
+                local Projectiles = session._deps and session._deps.Projectiles
+                if Projectiles and type(Projectiles.powerHit) == "function" then
+                    Projectiles.powerHit(session, side, opts)
+                end
+                if Projectiles and type(Projectiles.groundKick) == "function" then
+                    Projectiles.groundKick(session, side, opts)
+                end
+                H.impactKick(session, { powerful = true })
+                H.playAnim(ent, "hit")
+                return true
             end
-            ent._heavyHit = true
-            local Projectiles = session._deps and session._deps.Projectiles
-            if Projectiles and type(Projectiles.powerHit) == "function" then
-                Projectiles.powerHit(session, side, opts)
-            end
-            if Projectiles and type(Projectiles.groundKick) == "function" then
-                Projectiles.groundKick(session, side, opts)
-            end
-            H.impactKick(session, { powerful = true })
-            H.playAnim(ent, "hit")
-            return true
         end
         local foe = H.foeOf(session, side)
         local g = session.grid
@@ -502,8 +515,7 @@ return function(Cues)
         end
         opts = opts or {}
         -- Missed FIRE NOW: keep the shot pose, do not hop the charger aside.
-        if battle and (battle._arFireNow or battle._arFireCarryThrough)
-            and side == "player" then
+        if battle and (battle._arFireNow or battle._arFireCarryThrough) then
             local Projectiles = session._deps and session._deps.Projectiles
             session._fireShotSlow = true
             if Projectiles and type(Projectiles.move) == "function" and opts.moveId then

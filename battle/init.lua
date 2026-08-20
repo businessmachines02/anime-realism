@@ -1,12 +1,12 @@
 -- Battle systems — traditional battle layer
 --
---   rules/   → Focus math, REACT pipeline, dialogue rewrite
+--   rules/   → Focus math, REACT pipeline, foe AI, dialogue rewrite
 --   chrome/  → pick HUD, speech bubbles, trainer cameo, notice stack
 --   fx.lua   → classic vs FIELD animation policy
 --   strings.lua → callout / banter copy
 --
 -- Sibling files load via env.load (zip-safe). Public surface stays
--- Battle.ReactiveDefense / React / Fx / Dialogue / Strings.
+-- Battle.ReactiveDefense / FoeAi / React / Fx / Dialogue / Strings.
 
 return function(env)
     local loadFile = env and env.load
@@ -37,6 +37,10 @@ return function(env)
     end
 
     local ReactiveDefense = loadMod("rules/reactive_defense.lua")
+    local FoeAi = loadMod("rules/foe_ai.lua")
+    if FoeAi and ReactiveDefense and type(FoeAi.attach) == "function" then
+        FoeAi.attach(ReactiveDefense)
+    end
     local Pick = loadMod("chrome/pick.lua")
     local BubblesChrome = loadMod("chrome/bubbles.lua")
     local Notices = loadMod("chrome/notices.lua")
@@ -53,6 +57,7 @@ return function(env)
     end
 
     Battle.ReactiveDefense = ReactiveDefense
+    Battle.FoeAi = FoeAi
     Battle.React = React
     Battle.Fx = Fx
     Battle.Dialogue = Dialogue

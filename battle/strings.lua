@@ -547,6 +547,18 @@ S.FIRE_NOW_CALLS = {
     "%s! While they're open!",
     "Fire, %s!",
 }
+S.TRAINER_FOE_FIRE_CALLS = {
+    "%s: %s, now!",
+    "%s: Fire, %s!",
+    "%s: %s! While they're open!",
+    "%s: Hit them, %s!",
+}
+S.FOE_FIRE_CALLS = {
+    "%s! Now!",
+    "Fire, %s!",
+    "%s! While they're open!",
+    "Hit them, %s!",
+}
 S.ENTRENCH_MAX_TURNS = 3
 S.STAY_ENTRENCHED_CALLS = {
     "Stay entrenched, %s!",

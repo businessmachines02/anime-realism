@@ -253,7 +253,7 @@ local function clashMoveType(battle, move)
   return tostring(def and def.type or "NORMAL"):upper()
 end
 
---- Who shoves whom when two specials meet. `reply` is the player's shot.
+--- Who shoves whom when two specials meet. `reply` is the defender's shot.
 function RD.clashScore(battle, user, move, foe)
   local power = clashMovePower(battle, move)
   local spec = specialStat(user)
@@ -261,12 +261,24 @@ function RD.clashScore(battle, user, move, foe)
   return math.max(1, power) * spec * mod
 end
 
-function RD.contestSpecialClash(battle, incoming, reply)
+--- `opts.replySide` is "player" (default) or "enemy". Win means the
+--- defender's reply overpowers the incoming shot.
+function RD.contestSpecialClash(battle, incoming, reply, opts)
   if not (battle and incoming and reply) then
     return "tie", 1
   end
-  local mine = RD.clashScore(battle, battle.player, reply, battle.enemy)
-  local theirs = RD.clashScore(battle, battle.enemy, incoming, battle.player)
+  opts = opts or {}
+  local replySide = opts.replySide or "player"
+  local mineUser, mineFoe, theirsUser, theirsFoe
+  if replySide == "enemy" then
+    mineUser, mineFoe = battle.enemy, battle.player
+    theirsUser, theirsFoe = battle.player, battle.enemy
+  else
+    mineUser, mineFoe = battle.player, battle.enemy
+    theirsUser, theirsFoe = battle.enemy, battle.player
+  end
+  local mine = RD.clashScore(battle, mineUser, reply, mineFoe)
+  local theirs = RD.clashScore(battle, theirsUser, incoming, theirsFoe)
   local ratio = mine / math.max(1, theirs)
   if ratio >= (RD.CLASH_PUSH or 1.35) then
     return "win", ratio
@@ -489,56 +501,8 @@ function RD.dodgeSuccessChance(defender, attacker)
   return chance
 end
 
---- Trainer-foe REACT pick. Weighted, not a fixed special→dodge / physical→brace
---- split. Unaffordable options drop out so a drained foe has to Commit.
-function RD.pickFoeReact(battle, move, isSpecial)
-  if not battle or not RD.canReact(battle, false) or RD.isUnreactable(move) then
-    return "commit"
-  end
-  if isSpecial == nil then
-    isSpecial = moveIsSpecial(move)
-  end
-  local enemy = battle.enemy
-  local player = battle.player
-  local focus = (RD.sideState(battle, false).focus) or 0
-  local speGap = speedStat(enemy) - speedStat(player)
-  local bulk = isSpecial and specialStat(enemy) or defenseStat(enemy)
-
-  local function jitter(w)
-    return math.max(0, (w or 0) * (0.70 + rng() * 0.60))
-  end
-
-  local wCommit = jitter(30)
-  local wDodge = jitter(isSpecial and 32 or 16)
-  local wBrace = jitter(isSpecial and 16 or 32)
-  wDodge = wDodge + clamp(speGap * 0.12, -14, 16)
-  wBrace = wBrace + clamp((bulk - 70) * 0.08, -10, 14)
-  if focus <= 22 then
-    wCommit = wCommit + 20
-  end
-  if not RD.affordable(battle, false, "dodge") then
-    wDodge = 0
-  end
-  if not RD.affordable(battle, false, "brace") then
-    wBrace = 0
-  end
-  wDodge = math.max(0, wDodge)
-  wBrace = math.max(0, wBrace)
-  wCommit = math.max(0, wCommit)
-  local total = wCommit + wDodge + wBrace
-  if total <= 0 then
-    return "commit"
-  end
-  local roll = rng() * total
-  if roll < wCommit then
-    return "commit"
-  end
-  roll = roll - wCommit
-  if roll < wDodge then
-    return "dodge"
-  end
-  return "brace"
-end
+-- Trainer-foe picks live in rules/foe_ai.lua (FoeAi.attach installs
+-- RD.pickFoeReact). Tests that call the picker must load both files.
 
 function RD.braceReduction(defender, category)
   local bulk = (category == "special") and specialStat(defender) or defenseStat(defender)

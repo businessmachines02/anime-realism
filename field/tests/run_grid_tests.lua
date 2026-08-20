@@ -1005,8 +1005,15 @@ local function sampleGrid()
   return Grid.build(nil, plan), plan
 end
 
-function tests.npc_react_spends_focus_and_mixes_picks()
+local function loadReactiveDefense()
   local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local FoeAi = assert(loadfile(root .. "/../battle/rules/foe_ai.lua"))()
+  FoeAi.attach(RD)
+  return RD, FoeAi
+end
+
+function tests.npc_react_spends_focus_and_mixes_picks()
+  local RD = loadReactiveDefense()
   local battle = {
     player = { stats = { speed = 80, defense = 50, special = 60 } },
     enemy = { stats = { speed = 55, defense = 90, special = 40 } },
@@ -1034,6 +1041,92 @@ function tests.npc_react_spends_focus_and_mixes_picks()
   truthy(seen.dodge < 48, "ember is not an automatic dodge")
   truthy((seen.commit + seen.brace) > 0, "foe sometimes braces or stands in")
   RD.clear(battle)
+end
+
+function tests.npc_react_may_fire_when_the_window_is_open()
+  local RD, FoeAi = loadReactiveDefense()
+  local ember = { id = "EMBER", power = 40, category = "special", type = "FIRE" }
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  local specialist = {
+    player = { stats = { speed = 50, defense = 40, special = 45 } },
+    enemy = { stats = { speed = 70, defense = 50, special = 95 } },
+  }
+  RD.state(specialist)
+  local firedClosed = false
+  for _ = 1, 32 do
+    if RD.pickFoeReact(specialist, tackle, false) == "fire"
+      or RD.pickFoeReact(specialist, ember, true) == "fire" then
+      firedClosed = true
+    end
+  end
+  truthy(not firedClosed, "FIRE stays off when the window is closed")
+  -- Seed a few rolls so a specialist actually takes FIRE sometimes.
+  local seen = { commit = 0, dodge = 0, brace = 0, fire = 0 }
+  for _ = 1, 80 do
+    local pick = RD.pickFoeReact(specialist, tackle, false, { canFireNow = true })
+    seen[pick] = (seen[pick] or 0) + 1
+  end
+  truthy(seen.fire > 0, "a special attacker may FIRE a charging physical")
+  truthy(seen.fire < 80, "FIRE is not automatic")
+  local clashSeen = 0
+  for _ = 1, 80 do
+    if RD.pickFoeReact(specialist, ember, true, { canFireNow = true }) == "fire" then
+      clashSeen = clashSeen + 1
+    end
+  end
+  truthy(clashSeen > 0, "a special attacker may FIRE into an incoming beam")
+
+  local drained = RD.sideState(specialist, false)
+  drained.focus = 10
+  eq(RD.pickFoeReact(specialist, tackle, false, { canFireNow = true }), "commit",
+    "drained foe cannot FIRE")
+  RD.clear(specialist)
+
+  local wall = {
+    player = { stats = { speed = 80, defense = 50, special = 60 } },
+    enemy = { stats = { speed = 40, defense = 90, special = 35 } },
+  }
+  RD.state(wall)
+  eq(FoeAi.canFireNow(wall, tackle, {
+    fieldBattle = true,
+    fireRangeOpen = true,
+    playerChargeOpen = true,
+    shotCount = 1,
+    incomingMelee = true,
+  }), true, "melee charge at two tiles is a FIRE window")
+  eq(FoeAi.canFireNow(wall, ember, {
+    fieldBattle = true,
+    fireRangeOpen = true,
+    shotCount = 1,
+  }), true, "incoming special at two tiles is a clash window")
+  eq(FoeAi.canFireNow(wall, ember, {
+    fieldBattle = true,
+    fireRangeOpen = false,
+    shotCount = 1,
+  }), false, "adjacent melee is too late to FIRE")
+  eq(FoeAi.canFireNow(wall, ember, {
+    fieldBattle = false,
+    fireRangeOpen = true,
+    shotCount = 1,
+  }), false, "classic battles do not FIRE")
+  eq(FoeAi.canFireNow(wall, ember, {
+    fieldBattle = true,
+    fireRangeOpen = true,
+    shotCount = 0,
+  }), false, "no ranged specials means no FIRE")
+  eq(FoeAi.canFireNow(wall, ember, {
+    fieldBattle = true,
+    fireRangeOpen = true,
+    shotCount = 1,
+    alreadyActed = true,
+  }), false, "foe who already called cannot FIRE")
+  local shots = FoeAi.pickFireShot({
+    { moveId = "EMBER", power = 40 },
+    { moveId = "FLAMETHROWER", power = 95 },
+    { moveId = "SMOKESCREEN", power = 0 },
+  })
+  eq(shots.moveId, "FLAMETHROWER", "foe FIRE picks the strongest shot")
+  RD.clear(wall)
 end
 
 function tests.fire_now_reacts_during_a_charge()
@@ -1157,6 +1250,25 @@ function tests.fire_now_only_at_two_tile_gap()
   enemy.padU = eHome.u
   enemy.padV = eHome.v
   truthy(Cues.fireRangeOpen(session), "homes without a charge are still range")
+
+  -- Your charge: foe FIRE uses the same two-tile / still-closing window.
+  player._pendingCloseStrike = { moveId = "TACKLE" }
+  player.padU = pHome.u + 1
+  player.padV = pHome.v
+  player.basePx = 0
+  enemy.padU = eHome.u
+  enemy.padV = eHome.v
+  enemy.basePx = 32
+  truthy(not Cues.inMeleeReach(player, enemy), "you have not arrived")
+  truthy(Cues.fireRangeOpen(session),
+    "foe FIRE while you close from two tiles")
+  truthy(Cues.playerChargeWindowOpen(session),
+    "your pending charge is their fire window")
+  truthy(not Cues.chargeWindowOpen(session),
+    "your charge is not the player's FIRE window")
+  player.basePx = 8
+  truthy(Cues.inMeleeReach(player, enemy), "you reached melee")
+  truthy(not Cues.fireRangeOpen(session), "no foe FIRE once you arrive")
 end
 
 function tests.far_shot_specials_lose_accuracy()
@@ -1227,6 +1339,42 @@ function tests.fire_now_hit_stops_the_charge()
   eq(enemy.lastAnim, "hit", "charger takes the bolt")
   truthy(enemy.padU ~= startU or enemy.padV ~= startV,
     "charger leaves the charge cell")
+end
+
+function tests.foe_fire_hit_stops_your_charge()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startU, startV = player.padU, player.padV
+  local battle = { _arFireNow = true, _arFireNowCharger = "player" }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 40,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "player", "hit", Grid, nil, battle, {
+    category = "special", moveId = "PSYCHIC",
+  }), "foe FIRE hit cue")
+  truthy(not player._pendingCloseStrike, "connecting foe FIRE cancels your charge")
+  truthy(player._heavyHit, "you are knocked back")
+  eq(player.lastAnim, "hit", "you take the bolt")
+  truthy(player.padU ~= startU or player.padV ~= startV,
+    "you leave the charge cell")
 end
 
 function tests.fire_now_miss_lets_the_charge_through()
@@ -1509,6 +1657,16 @@ function tests.fire_clashes_with_an_incoming_special()
   eq(result.forceMiss, false, "theirs continues")
   truthy(result.damageMult < 1, "theirs continues weaker")
   eq(result.fireNowContinue, false, "your shot is spent")
+
+  battle = {
+    player = { stats = { special = 40, speed = 50 } },
+    enemy = { stats = { special = 120, speed = 80 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, ember, water, { replySide = "enemy" })
+  eq(verdict, "win", "foe FIRE with higher Special shoves your beam")
+  verdict = RD.contestSpecialClash(battle, ember, water)
+  eq(verdict, "lose", "default contest still treats reply as the player")
   RD.clear(battle)
 
   local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
@@ -1553,7 +1711,8 @@ function tests.fire_clashes_with_an_incoming_special()
   local eHome = grid.home.enemy
   local player = { id = "player", padU = pHome.u, padV = pHome.v,
     play = function(self, kind) self.lastAnim = kind end }
-  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end }
   Grid.setPad(grid, player, player.padU, player.padV)
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
   local session = {
@@ -1569,6 +1728,7 @@ function tests.fire_clashes_with_an_incoming_special()
     replyMove = water,
   }), "beam clash paints")
   eq(player.lastAnim, "cast", "player casts into the clash")
+  eq(enemy.lastAnim, "cast", "foe casts into the clash")
   truthy(session._clashPunch, "camera holds the midpoint")
   local styles = {}
   for i = 1, #(session.projectiles or {}) do
@@ -1590,6 +1750,11 @@ function tests.failed_npc_dodge_is_not_a_dodge_cue()
     { { who = "enemy", stat = "defense", delta = 1 } },
     "BROCK:\nOnix, brace!")
   eq(cue.kind, "brace", "landed defense is a brace")
+  cue = Fx.foeCoverCue(nil, "BROCK:\nAlakazam, now!", {
+    kind = "fire", moveId = "PSYCHIC", moveType = "PSYCHIC",
+  })
+  eq(cue.kind, "cast", "foe FIRE is a cast cue")
+  eq(cue.moveId, "PSYCHIC", "FIRE cue names the shot")
   Fx.bind({
     isDodgeFailNarrator = function(text)
       return type(text) == "string" and text:find("too slow", 1, true) ~= nil

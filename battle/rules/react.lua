@@ -81,6 +81,7 @@ local function freshMomentum()
         enemyActedThisTurn = false,
         playerActedThisTurn = false,
         skipQueuedPlayerAction = false,
+        skipQueuedEnemyAction = false,
         queuedPlayerAction = nil,
         fireNowMove = nil,
         pickOfferedThisTurn = false,
@@ -240,41 +241,41 @@ local function flushPendingFoeReaction(battle)
     if not pending or not pending.moveDef then
         return
     end
-    local foeLine, foeBuffs, foeTrack, failNarr =
-        hostCall("tryFoeCoverReaction", battle, pending.moveDef)
-    if not foeLine and not failNarr then
-        return
-    end
-    hostCall("applyCalloutBuffs", battle, foeBuffs, foeTrack)
-    -- If the real move anim is already gone from the queue, shouting / sparkles
-    -- would land after damage/faint — keep the silent buffs only.
-    if not hostCall("indexOfMoveAnim", battle) then
-        return
-    end
-    -- Insert fail first, then order: each insertBeforeAnim lands before anim,
-    -- so later inserts sit earlier in the queue (order → fail → anim).
-    local delay = (S().CALLOUT_AUTO_DELAY or 55)
-    if failNarr then
-        local failItem = {
-            text = failNarr,
-            auto = true,
-            autoDelay = delay,
-        }
-        hostCall("tagFieldCue", failItem, "enemy", "hit")
-        hostCall("insertBeforeAnim", battle, failItem)
-        -- Order shout without a dodge pose — they were told to dodge and missed it.
-        if foeLine and not hostCall("enqueueNpcFlavor", battle, foeLine, delay) then
-            local item = {
-                text = foeLine,
+        local foeLine, foeBuffs, foeTrack, failNarr, foeCue =
+            hostCall("tryFoeCoverReaction", battle, pending.moveDef)
+        if not foeLine and not failNarr then
+            return
+        end
+        hostCall("applyCalloutBuffs", battle, foeBuffs, foeTrack)
+        -- If the real move anim is already gone from the queue, shouting / sparkles
+        -- would land after damage/faint — keep the silent buffs only.
+        if not hostCall("indexOfMoveAnim", battle) then
+            return
+        end
+        -- Insert fail first, then order: each insertBeforeAnim lands before anim,
+        -- so later inserts sit earlier in the queue (order → fail → anim).
+        local delay = (S().CALLOUT_AUTO_DELAY or 55)
+        if failNarr then
+            local failItem = {
+                text = failNarr,
                 auto = true,
                 autoDelay = delay,
             }
-            hostCall("markBubbleWait", item, "foe", true, battle)
-            hostCall("insertBeforeAnim", battle, item)
-        end
-    elseif foeLine then
-        local cue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
-        local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
+            hostCall("tagFieldCue", failItem, "enemy", "hit")
+            hostCall("insertBeforeAnim", battle, failItem)
+            -- Order shout without a dodge pose — they were told to dodge and missed it.
+            if foeLine and not hostCall("enqueueNpcFlavor", battle, foeLine, delay) then
+                local item = {
+                    text = foeLine,
+                    auto = true,
+                    autoDelay = delay,
+                }
+                hostCall("markBubbleWait", item, "foe", true, battle)
+                hostCall("insertBeforeAnim", battle, item)
+            end
+        elseif foeLine then
+            local cue = foeCue or hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
+            local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
         if not hostCall("enqueueReactWithAttack", battle, foeLine, delay, bubble, cue) then
             local item = {
                 text = foeLine,

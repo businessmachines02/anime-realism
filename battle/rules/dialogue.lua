@@ -392,7 +392,7 @@ function Dialogue.wrapBattleSay(methodName)
                     and (st.sameTurnCounterQueued or st.offerSameTurnCounter) then
                     st.pendingFoeReaction = { moveDef = moveDef }
                 elseif damaging and not guaranteed then
-                    local foeLine, foeBuffs, foeTrack, failNarr =
+                    local foeLine, foeBuffs, foeTrack, failNarr, foeCue =
                         hostCall("tryFoeCoverReaction", self, moveDef)
                     if failNarr then
                         -- Trainer still shouted dodge; the mon did not make it.
@@ -406,9 +406,9 @@ function Dialogue.wrapBattleSay(methodName)
                             { side = "enemy", kind = "hit" })
                     elseif foeLine then
                         local foeBubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
-                        local foeCue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
+                        local foeCueNow = foeCue or hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
                         hostCall("enqueueReactWithAttack", self, foeLine,
-                            strings().CALLOUT_AUTO_DELAY or 55, foeBubble, foeCue)
+                            strings().CALLOUT_AUTO_DELAY or 55, foeBubble, foeCueNow)
                         hostCall("applyCalloutBuffs", self, foeBuffs, foeTrack)
                         if foeTrack and foeBuffs then
                             local braced = false

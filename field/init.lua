@@ -345,12 +345,16 @@ return function(env)
     end
   end
 
-  function FBV.chargeWindowOpen(battle)
+  function FBV.chargeWindowOpen(battle, side)
     local session = Lifecycle.get(battle)
     if session and Cues and type(Cues.chargeWindowOpen) == "function" then
-      return Cues.chargeWindowOpen(session)
+      return Cues.chargeWindowOpen(session, side)
     end
     return false
+  end
+
+  function FBV.playerChargeWindowOpen(battle)
+    return FBV.chargeWindowOpen(battle, "player")
   end
 
   function FBV.fireRangeOpen(battle)

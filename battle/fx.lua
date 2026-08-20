@@ -58,7 +58,17 @@ function Fx.tagLatest(battle, side, kind, category, moveType, moveId)
     return Fx.tag(battle.queue[battle.nextInsert], side, kind, category, moveType, moveId)
 end
 
-function Fx.foeCoverCue(foeBuffs, foeLine)
+function Fx.foeCoverCue(foeBuffs, foeLine, extra)
+    extra = extra or {}
+    if extra.kind == "cast" or extra.kind == "fire" then
+        return {
+            side = "enemy",
+            kind = "cast",
+            category = extra.category or "special",
+            moveType = extra.moveType,
+            moveId = extra.moveId,
+        }
+    end
     if hostCall("isDodgeFailNarrator", foeLine) then
         return { side = "enemy", kind = "hit" }
     end

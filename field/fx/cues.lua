@@ -809,7 +809,7 @@ function Cues.applyFarShotAccuracy(session, ctx, hit, rng)
     return true
 end
 
---- True when the foe is still a two-tile shot.
+--- True when the mons are still a two-tile shot.
 --- closeGap jumps occupancy to adjacent immediately; feet can still be
 --- two tiles out, and that is still FIRE until they reach melee.
 function Cues.fireRangeOpen(session)
@@ -825,20 +825,27 @@ function Cues.fireRangeOpen(session)
     if dist == Cues.FIRE_PAD_RANGE then
         return true
     end
-    if dist == 1 and foe._pendingCloseStrike
-        and not Cues.inMeleeReach(player, foe) then
+    local closing = (foe._pendingCloseStrike or player._pendingCloseStrike)
+        and not Cues.inMeleeReach(player, foe)
+    if dist == 1 and closing then
         return true
     end
     return false
 end
 
---- True while a foe close-gap charge is still a two-tile FIRE window.
-function Cues.chargeWindowOpen(session)
+--- True while a close-gap charge is still a two-tile FIRE window.
+--- `side` is the charger: "enemy" (default, your FIRE) or "player" (theirs).
+function Cues.chargeWindowOpen(session, side)
     if not Cues.fireRangeOpen(session) then
         return false
     end
-    local charger = session.enemyMon
+    side = side or "enemy"
+    local charger = (side == "player") and session.playerMon or session.enemyMon
     return charger and charger._pendingCloseStrike and true or false
+end
+
+function Cues.playerChargeWindowOpen(session)
+    return Cues.chargeWindowOpen(session, "player")
 end
 
 function Cues.awaitingReact(battle)
@@ -931,19 +938,30 @@ function Cues.playBeamClash(session, Grid, result, ctx)
     ctx = ctx or {}
     local incoming = ctx.move or {}
     local reply = ctx.replyMove or {}
+    local replySide = ctx.replySide or "player"
+    local playerShot, enemyShot
+    if replySide == "enemy" then
+        playerShot, enemyShot = incoming, reply
+    else
+        playerShot, enemyShot = reply, incoming
+    end
     local Projectiles = session._deps and session._deps.Projectiles
     if Projectiles and type(Projectiles.beamClash) == "function" then
         Projectiles.beamClash(session, {
-            moveId = reply.id or reply.moveId,
-            moveType = reply.type or reply.moveType,
+            moveId = playerShot.id or playerShot.moveId,
+            moveType = playerShot.type or playerShot.moveType,
         }, {
-            moveId = incoming.id or incoming.moveId,
-            moveType = incoming.type or incoming.moveType,
+            moveId = enemyShot.id or enemyShot.moveId,
+            moveType = enemyShot.type or enemyShot.moveType,
         })
     end
     local player = H.sideEnt(session, "player")
+    local enemy = H.sideEnt(session, "enemy")
     if player then
         H.playAnim(player, "cast")
+    end
+    if enemy then
+        H.playAnim(enemy, "cast")
     end
     H.punchIn(session, "player", {
         mode = "clash",
@@ -1401,7 +1419,8 @@ end
 
 function Cues.isReactKind(kind)
     kind = tostring(kind or "")
-    return kind == "dodge" or kind == "cover" or kind == "hide" or kind == "brace"
+    return kind == "dodge" or kind == "cover" or kind == "hide"
+        or kind == "brace" or kind == "cast"
 end
 
 --- Load cue siblings. `loadFile` is field/init.lua's env.load (or the
