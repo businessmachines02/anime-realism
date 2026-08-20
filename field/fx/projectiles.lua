@@ -2026,6 +2026,153 @@ local function drawFlameJet(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Water Gun: pressurized squirt — a coherent ribbon that breaks into spray.
+local function drawWaterDrop(g, px, py, fx, fy, scale, c, alpha)
+  local nx, ny = -fy, fx
+  local tipX = px + fx * 2.4 * scale
+  local tipY = py + fy * 2.4 * scale
+  local tailX = px - fx * 1.3 * scale
+  local tailY = py - fy * 1.3 * scale
+  local leftX = px + nx * 0.85 * scale
+  local leftY = py + ny * 0.85 * scale
+  local rightX = px - nx * 0.85 * scale
+  local rightY = py - ny * 0.85 * scale
+  g.setColor(c[1], c[2], c[3], 0.82 * alpha)
+  g.polygon("fill", tipX, tipY, leftX, leftY, tailX, tailY, rightX, rightY)
+  g.setColor(0.88, 0.98, 1.00, 0.7 * alpha)
+  g.polygon("fill",
+    px + fx * 0.7 * scale, py + fy * 0.7 * scale - 0.25 * scale,
+    px + nx * 0.28 * scale, py + ny * 0.28 * scale,
+    px - fx * 0.15 * scale, py - fy * 0.15 * scale)
+end
+
+local function drawWaterRibbon(g, pts, widthAt, cr, cg, cb, alpha)
+  if not (g.polygon and pts and #pts >= 2) then
+    return
+  end
+  for i = 1, #pts - 1 do
+    local a, b = pts[i], pts[i + 1]
+    local wa, wb = widthAt(a.u), widthAt(b.u)
+    g.setColor(cr, cg, cb, alpha)
+    g.polygon("fill",
+      a.x + a.nx * wa, a.y + a.ny * wa,
+      b.x + b.nx * wb, b.y + b.ny * wb,
+      b.x - b.nx * wb, b.y - b.ny * wb,
+      a.x - a.nx * wa, a.y - a.ny * wa)
+  end
+end
+
+local function drawWaterJet(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  age = age or 0
+  local fade = 1
+  if t > 0.78 then
+    fade = 1 - (t - 0.78) / 0.22
+  end
+  local breakup = math.max(0, (t - 0.70) / 0.30)
+  local flow = age * 16.5
+  local cr, cg, cb = c[1] or 0.2, c[2] or 0.58, c[3] or 1
+  local segs = 16
+  local pts = {}
+  for i = 0, segs do
+    local u = i / segs
+    -- Light turbulence that travels along the jet, not a hanging hose.
+    local wobble = math.sin(u * 10.5 - flow) * (0.45 + u * 1.15)
+        + math.sin(u * 23 - flow * 1.55 + 0.9) * (0.18 + u * 0.32)
+    local sag = u * u * 1.35
+    pts[i + 1] = {
+      u = u,
+      x = ox + dx * u + nx * wobble,
+      y = oy + dy * u + ny * wobble * 0.38 + sag,
+    }
+  end
+  for i = 1, #pts do
+    local a = pts[math.max(1, i - 1)]
+    local b = pts[math.min(#pts, i + 1)]
+    local tx, ty = b.x - a.x, b.y - a.y
+    local tl = math.sqrt(tx * tx + ty * ty)
+    if tl < 0.001 then
+      pts[i].nx, pts[i].ny = nx, ny
+    else
+      pts[i].nx, pts[i].ny = -ty / tl, tx / tl
+    end
+  end
+  local tip = pts[#pts]
+  local function widthAt(u)
+    local pulse = 0.88 + 0.12 * math.sin(u * 15 - flow * 1.25)
+    local w = (2.15 + (1 - u) * 1.55) * pulse * (1 - breakup * 0.45)
+    if u > 0.84 then
+      w = w + (u - 0.84) * (5.5 + breakup * 4)
+    end
+    return w
+  end
+  -- Outer wash, body, inner highlight — a volume of water, not beads.
+  drawWaterRibbon(g, pts, function(u) return widthAt(u) * 1.55 end,
+    cr * 0.42, cg * 0.62, math.min(1, cb * 1.05), 0.20 * fade)
+  drawWaterRibbon(g, pts, widthAt, cr, cg, cb, 0.58 * fade)
+  drawWaterRibbon(g, pts, function(u) return widthAt(u) * 0.38 end,
+    0.78, 0.94, 1.00, 0.42 * fade)
+  -- Speculars ride the top of the ribbon with the current.
+  for i = 2, #pts - 1, 2 do
+    local p = pts[i]
+    local lift = 0.55 + math.sin(p.u * 18 - flow * 1.8) * 0.35
+    g.setColor(0.92, 0.99, 1.00, (0.55 - p.u * 0.22) * fade)
+    g.ellipse("fill",
+      p.x + p.nx * lift * 0.6,
+      p.y + p.ny * lift * 0.6 - 0.35,
+      1.6 + (1 - p.u) * 0.8, 0.55)
+  end
+  -- Muzzle bloom where it leaves the caster.
+  g.setColor(cr, cg, cb, 0.40 * fade)
+  g.ellipse("fill", ox - fx * 1.2, oy - fy * 1.2, 4.2, 2.4)
+  g.setColor(0.88, 0.97, 1.00, 0.55 * fade)
+  g.ellipse("fill", ox, oy, 2.4, 1.3)
+  -- Spray peeling off the last third as elongated drops.
+  for i = 1, 9 do
+    local u = 0.42 + i * 0.06
+    local crest = math.sin(u * 10.5 - flow + i * 0.55)
+    if math.abs(crest) > 0.18 then
+      local idx = 1 + math.floor(u * segs + 0.5)
+      local p = pts[math.max(1, math.min(#pts, idx))]
+      local side = crest > 0 and 1 or -1
+      local off = (1.4 + (i % 3) * 0.7) * (0.45 + math.abs(crest))
+      drawWaterDrop(g,
+        p.x + p.nx * side * off,
+        p.y + p.ny * side * off * 0.45 + math.abs(crest) * 0.6,
+        fx, fy, 0.55 + (i % 3) * 0.12, c, 0.62 * fade)
+    end
+  end
+  -- Impact splash once the jet has arrived.
+  local splash = math.max(0, math.min(1, (t - 0.38) / 0.22))
+  if splash > 0.02 then
+    g.setColor(cr, cg, cb, 0.28 * fade * splash)
+    g.ellipse("fill", tip.x, tip.y + 1.2, 6.5 + splash * 3, 3.2)
+    g.setColor(0.86, 0.96, 1.00, 0.45 * fade * splash)
+    g.ellipse("fill", tip.x + fx * 1.4, tip.y - 0.8, 4.2, 1.6)
+    for i = 1, 8 do
+      local a = age * 13 + i * 0.82
+      local dist = (2.2 + (i % 4) * 1.6 + splash * 2.4)
+          * (0.7 + 0.3 * math.abs(math.sin(age * 8 + i)))
+      local bx = tip.x + math.cos(a) * dist + fx * 1.2
+      local by = tip.y + math.sin(a) * dist * 0.52 - math.abs(math.sin(a)) * 1.4
+      local hx, hy = math.cos(a) * 0.35 + fx, math.sin(a) * 0.2 + fy
+      local hl = math.sqrt(hx * hx + hy * hy)
+      if hl > 0.01 then
+        hx, hy = hx / hl, hy / hl
+      end
+      drawWaterDrop(g, bx, by, hx, hy, 0.62 + (i % 3) * 0.18, c,
+        (0.55 + splash * 0.25) * fade)
+    end
+  end
+end
+
 --- Fire Blast: traveling fireball, then a 大-shaped star of tongues.
 local function drawFireBlast(g, x, y, ox, oy, t, age, c, radius)
   local dx, dy = x - ox, y - oy
@@ -3658,6 +3805,8 @@ Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
         or (glitz == "blob" and 10 or 8)
     if glitz == "flame" then
       drawFlameJet(g, x, y, ox, oy, t, age, c)
+    elseif glitz == "jet" then
+      drawWaterJet(g, x, y, ox, oy, t, age, c)
     elseif glitz == "bubble" then
       for i = 0, n do
         local u = i / n
@@ -3697,7 +3846,7 @@ Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
       g.setColor(1, 1, 1, 0.55)
       g.circle("fill", x, y, 2.2)
     end
-    if glitz ~= "flame" then
+    if glitz ~= "flame" and glitz ~= "jet" then
       drawMove(g, p, x, y)
     end
 end)
@@ -4700,13 +4849,14 @@ function Projectiles.move(session, side, opts)
   end
 
   if fx.style == "stream" then
+    local jet = fx.glitz == "jet"
     return spawn(session, {
       kind = "effect",
       style = "stream",
       glitz = fx.glitz,
       sx = sx, sy = sy, ex = ex, ey = ey,
       duration = fx.duration or (jump and 0.44 or 0.38),
-      arc = jump and 10 or 2,
+      arc = jump and 10 or (jet and 0 or 2),
       color = fx.color,
       onDone = opts.onDone,
     })

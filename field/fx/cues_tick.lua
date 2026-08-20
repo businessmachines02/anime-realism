@@ -60,16 +60,19 @@ return function(Cues)
             local ent = H.sideEnt(session, side)
             if ent and ent._pendingCloseStrike then
                 local foe = H.foeOf(session, side)
+                Cues.tickCloseGapGait(ent, foe)
                 tryCloseGap(session, Grid, ent, foe, battle)
                 if ent._closeStrikeWait then
                     -- Cue just armed this tick (HUD confirm / announce). Walk first.
                     ent._closeStrikeWait = nil
                 elseif H.fieldMenuOpen(session._battle) then
                     -- REACT! / other menus: keep the walk parked.
+                elseif ent._closeGapMinAt and t < ent._closeGapMinAt then
+                    -- Slow wind-up so FIRE NOW has a beat to read.
                 elseif Cues.inMeleeReach(ent, foe) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.punch")
                 elseif ent._closeStrikeArmedAt
-                    and (t - ent._closeStrikeArmedAt) > 2.8
+                    and (t - ent._closeStrikeArmedAt) > Cues.closeGapPunchTimeout(ent)
                     and not H.fieldMenuOpen(session._battle) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.timeout")
                 end

@@ -540,6 +540,12 @@ S.COMMIT_CALLS = {
     "Endure it, %s!",
     "%s! Don't give in!",
 }
+S.FIRE_NOW_CALLS = {
+    "%s! Now!",
+    "Hit them, %s!",
+    "%s! While they're open!",
+    "Fire, %s!",
+}
 S.ENTRENCH_MAX_TURNS = 3
 S.STAY_ENTRENCHED_CALLS = {
     "Stay entrenched, %s!",

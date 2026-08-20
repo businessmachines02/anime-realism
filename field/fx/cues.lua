@@ -372,10 +372,213 @@ function Cues.closeGapSpeed(ent, battle, side)
     return px
 end
 
+local function closeGapStatTable(ent, battle, side)
+    local stats = ent and ent._closeGapStats
+    if type(stats) == "table" then
+        return stats
+    end
+    local battler = nil
+    if battle then
+        battler = (side == "player") and battle.player or battle.enemy
+    end
+    if not battler and ent then
+        battler = ent._battleBattler
+    end
+    local mon = battler and battler.mon
+    local def = mon and (mon.pokemon or mon.def)
+    if type(def) == "table" and type(def.baseStats) == "table" then
+        return def.baseStats
+    end
+    if battler and type(battler.stats) == "table" then
+        return battler.stats
+    end
+    if mon and type(mon.stats) == "table" then
+        return mon.stats
+    end
+    return nil
+end
+
+--- 0 = melee brawler, 1 = glass cannon that wants space.
+function Cues.keepAwayBias(ent, battle, side)
+    local stats = closeGapStatTable(ent, battle, side)
+    if type(stats) ~= "table" then
+        return tonumber(ent and ent._keepAway) or 0
+    end
+    local spa = tonumber(stats.special or stats.spa or stats.spAtk
+        or stats.spatk or stats.spAttack) or 70
+    local defn = tonumber(stats.defense or stats.def) or 70
+    if spa > 140 or defn > 160 then
+        spa = spa * 0.45
+        defn = defn * 0.45
+    end
+    local d = spa - defn
+    if d <= 10 then
+        return 0
+    end
+    if d >= 80 then
+        return 1
+    end
+    return (d - 10) / 70
+end
+
+--- Damaging ranged special this battler can still fire (PP left).
+function Cues.battlerHasFireSpecial(battle, battler, Projectiles)
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
+    local moves = battler and battler.curMoves
+    if type(moves) ~= "table" then
+        moves = battler and battler.mon and battler.mon.moves
+    end
+    if type(moves) ~= "table" then
+        return false
+    end
+    for i = 1, #moves do
+        local mv = moves[i]
+        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+            local id = tostring(mv.id or mv.name or ""):upper():gsub("%s+", "_")
+            local power = tonumber(mv.power)
+            local cat = tostring(mv.category or ""):lower()
+            local def = nil
+            if type(battle) == "table" and type(battle.moveDef) == "function" then
+                local ok, got = pcall(battle.moveDef, battle, mv)
+                if ok and type(got) == "table" then
+                    def = got
+                end
+            end
+            if not def and battle and battle.data and battle.data.moves then
+                def = battle.data.moves[id]
+            end
+            if def then
+                power = tonumber(def.power) or power
+                cat = tostring(def.category or cat):lower()
+                id = tostring(def.id or id):upper():gsub("%s+", "_")
+            end
+            if id ~= "" and (power or 0) > 0 and cat ~= "status" then
+                local opts = {
+                    moveId = id,
+                    moveType = (def and def.type) or mv.type,
+                    category = cat,
+                }
+                local contact = Projectiles and type(Projectiles.isContactFx) == "function"
+                    and Projectiles.isContactFx(opts)
+                local travel = Projectiles and type(Projectiles.isTravelFx) == "function"
+                    and Projectiles.isTravelFx(opts)
+                if not contact and (travel or cat == "special") then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function rng01()
+    local r = (love and love.math and love.math.random) or math.random
+    return r()
+end
+
+--- Slow wind-up into the usual dash. Stronger / more random when the
+--- player could FIRE NOW, and when the charger wants to keep space.
+function Cues.armCloseGapGait(ent, battle, side, foe, opts)
+    opts = opts or {}
+    if not ent then
+        return 0
+    end
+    local cruise = Cues.closeGapSpeed(ent, battle, side)
+    local bias = Cues.keepAwayBias(ent, battle, side)
+    ent._keepAway = bias
+    local playerSpecial = false
+    if side == "enemy" then
+        local Projectiles = opts.Projectiles
+        playerSpecial = Cues.battlerHasFireSpecial(battle, battle and battle.player,
+            Projectiles) == true
+    end
+    local roll = tonumber(opts.rand)
+    if roll == nil then
+        roll = rng01()
+    end
+    local startFrac
+    if playerSpecial then
+        -- Still a wind-up, but not a crawl — the player needs a beat, not a stall.
+        startFrac = 0.28 + roll * 0.24
+    else
+        startFrac = 0.58 + roll * 0.30
+    end
+    startFrac = startFrac * (1 - 0.40 * math.max(0, bias))
+    local start = cruise * startFrac
+    if start < 14 then
+        start = 14
+    end
+    if start > cruise then
+        start = cruise
+    end
+    ent._closeGapCruise = cruise
+    ent._closeGapStart = start
+    ent.stepSpeed = start
+    local ax, ay = H.walkPx(ent)
+    local fx, fy = H.walkPx(foe)
+    local span = 48
+    if type(ax) == "number" and type(fx) == "number" then
+        local dx, dy = fx - ax, (fy or 0) - (ay or 0)
+        span = math.sqrt(dx * dx + dy * dy)
+    end
+    ent._closeGapSpan = math.max(span, 8)
+    if playerSpecial then
+        local now = opts.now
+        if type(now) ~= "number" then
+            now = 0
+        end
+        ent._closeGapMinAt = now + 0.28 + roll * 0.34
+    else
+        ent._closeGapMinAt = nil
+    end
+    return start
+end
+
+function Cues.tickCloseGapGait(ent, foe)
+    if not (ent and ent._pendingCloseStrike and ent._closeGapCruise) then
+        return ent and ent.stepSpeed
+    end
+    local cruise = ent._closeGapCruise
+    local start = ent._closeGapStart or cruise
+    local span = ent._closeGapSpan or 48
+    local dist = span
+    local ax, ay = H.walkPx(ent)
+    local fx, fy = H.walkPx(foe)
+    if type(ax) == "number" and type(fx) == "number" then
+        local dx, dy = fx - ax, (fy or 0) - (ay or 0)
+        dist = math.sqrt(dx * dx + dy * dy)
+    end
+    local u = 1 - math.max(0, math.min(1, dist / span))
+    -- Mix linear with quadratic so the first steps aren't glued down.
+    local eased = u * (0.42 + 0.58 * u)
+    local px = start + (cruise - start) * eased
+    ent.stepSpeed = px
+    return px
+end
+
+function Cues.closeGapPunchTimeout(ent)
+    local cruise = ent and ent._closeGapCruise
+    local start = ent and ent._closeGapStart
+    local t = 2.8
+    if cruise and start and start > 0 and start < cruise then
+        t = 2.8 * (cruise / start)
+        if t > 5.6 then
+            t = 5.6
+        end
+    end
+    return t
+end
+
 function H.restoreStepSpeed(ent)
     if not ent then
         return
     end
+    ent._closeGapCruise = nil
+    ent._closeGapStart = nil
+    ent._closeGapSpan = nil
+    ent._closeGapMinAt = nil
     if ent._savedStepSpeed ~= nil then
         ent.stepSpeed = ent._savedStepSpeed
         ent._savedStepSpeed = nil
@@ -440,6 +643,17 @@ function H.hasStruckThisTurn(ent)
     end
     local struck = ent._struckMoves
     return type(struck) == "table" and next(struck) ~= nil
+end
+
+--- True while a foe close-gap charge is still pending.
+--- Opening homes are one cell apart; a pending charge is still a fire window.
+--- The punch waits for REACT, so pad distance is not "too late."
+function Cues.chargeWindowOpen(session)
+    if not (session and session.live) then
+        return false
+    end
+    local charger = session.enemyMon
+    return charger and charger._pendingCloseStrike and true or false
 end
 
 function Cues.awaitingReact(battle)

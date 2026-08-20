@@ -1,7 +1,7 @@
 -- Field battle — stage trainers + mons onto pad cells.
 --
 -- Pad (u, v) is truth; pixels come from Coords.padToPx. Homes come from
--- Layout's tight opening (adjacent mons, trainers one tile back). Cast.tick
+-- Layout's opening (one empty cell between mons, trainers one tile back). Cast.tick
 -- lerps px/py toward the current pad each frame.
 
 local Coords = require("coords")
@@ -124,6 +124,29 @@ function Cast.idleStepSpeed(ent)
     return px
 end
 
+--- 0 = stay in the foe's face, 1 = glass cannon that wants space.
+function Cast.keepAwayBias(ent)
+    local stats = gaitStats(ent)
+    if type(stats) ~= "table" then
+        return 0
+    end
+    local spa = tonumber(stats.special or stats.spa or stats.spAtk
+        or stats.spatk or stats.spAttack) or 70
+    local def = tonumber(stats.defense or stats.def) or 70
+    if spa > 140 or def > 160 then
+        spa = spa * 0.45
+        def = def * 0.45
+    end
+    local d = spa - def
+    if d <= 10 then
+        return 0
+    end
+    if d >= 80 then
+        return 1
+    end
+    return (d - 10) / 70
+end
+
 local function worldBlockKeys(session, ignoreEnt)
     local keys = {}
     local function mark(e)
@@ -211,6 +234,7 @@ local function bindHome(ent, plan, side, grid)
         return
     end
     ent.stepSpeed = Cast.idleStepSpeed(ent)
+    ent._keepAway = Cast.keepAwayBias(ent)
     ent._grid = grid
     local homeSide = (side == "player") and "player" or "enemy"
     local trainerSide = (side == "player") and "playerTrainer" or "enemyTrainer"
@@ -273,6 +297,10 @@ function Cast.stageEnemy(session, battle, mod, Sprites, Grid)
     end
     bindHome(ent, plan, "enemy", session.grid)
     occupyPad(Grid, session, ent)
+    if session.playerMon and type(Grid.preferDistance) == "function" then
+        Grid.preferDistance(session.grid, ent, session.playerMon)
+        Grid.preferDistance(session.grid, session.playerMon, ent)
+    end
     if type(ent.play) == "function" then
         ent:play("sendout")
     end
@@ -296,6 +324,10 @@ function Cast.stagePlayer(session, battle, mod, Sprites, Grid)
     end
     bindHome(ent, plan, "player", session.grid)
     occupyPad(Grid, session, ent)
+    if session.enemyMon and type(Grid.preferDistance) == "function" then
+        Grid.preferDistance(session.grid, ent, session.enemyMon)
+        Grid.preferDistance(session.grid, session.enemyMon, ent)
+    end
     if type(ent.play) == "function" then
         ent:play("sendout")
     end

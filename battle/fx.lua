@@ -241,6 +241,80 @@ local function lookupMoveDef(battle, mv)
     return nil, raw
 end
 
+local GEN1_SPECIAL = {
+    FIRE = true, WATER = true, ELECTRIC = true, GRASS = true,
+    ICE = true, PSYCHIC = true, DRAGON = true,
+}
+
+local function defIsSpecial(def, mv)
+    local cat = tostring((def and def.category) or (mv and mv.category) or ""):lower()
+    if cat == "special" then
+        return true
+    end
+    if cat == "physical" or cat == "status" then
+        return false
+    end
+    local typ = tostring((def and def.type) or (mv and mv.type) or ""):upper()
+    return GEN1_SPECIAL[typ] == true
+end
+
+local function isRangedSpecial(battle, def, mv, id)
+    local opts = {
+        moveId = id,
+        moveType = (def and def.type) or (mv and mv.type),
+        category = (def and def.category) or (mv and mv.category),
+    }
+    local flagged = hostCall("isRangedCounter", battle, opts)
+    if flagged ~= nil then
+        return flagged == true
+    end
+    if not defIsSpecial(def, mv) then
+        return false
+    end
+    -- Contact punches stay melee even when the type looks special.
+    if id and id:find("PUNCH", 1, true) then
+        return false
+    end
+    return true
+end
+
+-- Damaging ranged specials this battler can still fire (PP left).
+function Fx.listFireNowMoves(battle, battler)
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
+    local out = {}
+    local moves = battlerMoveList(battler)
+    if type(moves) ~= "table" then
+        return out
+    end
+    for i = 1, #moves do
+        local mv = moves[i]
+        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+            local def, id = lookupMoveDef(battle, mv)
+            if not id then
+                id = canonMoveId(mv.id or mv.name)
+            end
+            local power = tonumber(def and def.power) or tonumber(mv.power) or 0
+            local category = tostring((def and def.category) or mv.category or ""):lower()
+            if id and power > 0 and category ~= "status"
+                and isRangedSpecial(battle, def, mv, id) then
+                out[#out + 1] = {
+                    label = tostring((def and def.name) or mv.name or id),
+                    hint = (mv.pp ~= nil) and ("PP " .. tostring(mv.pp)) or "Special now",
+                    moveInst = mv,
+                    moveDef = def,
+                    moveId = id,
+                    name = (def and def.name) or mv.name or id,
+                    moveType = (def and def.type) or mv.type,
+                    category = "special",
+                }
+            end
+        end
+    end
+    return out
+end
+
 -- Counter clip for the battler that is actually striking (you or the foe).
 -- Flavor lists only rank moves they already know — never a dex punch
 -- like MEGA_PUNCH / HEADBUTT that nobody on the field has.
@@ -248,21 +322,6 @@ function Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
     kind = tostring(kind or "")
     if type(battler) ~= "table" then
         battler = battle and battle.player
-    end
-    local GEN1_SPECIAL = {
-        FIRE = true, WATER = true, ELECTRIC = true, GRASS = true,
-        ICE = true, PSYCHIC = true, DRAGON = true,
-    }
-    local function defIsSpecial(def, mv)
-        local cat = tostring((def and def.category) or (mv and mv.category) or ""):lower()
-        if cat == "special" then
-            return true
-        end
-        if cat == "physical" or cat == "status" then
-            return false
-        end
-        local typ = tostring((def and def.type) or (mv and mv.type) or ""):upper()
-        return GEN1_SPECIAL[typ] == true
     end
     local function incomingPhysical()
         if type(incoming) ~= "table" then

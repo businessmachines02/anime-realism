@@ -46,7 +46,11 @@ return function(Cues)
 
     local function armCloseGap(session, side, ent, foe, Grid, g, opts, thisId, jump, closed, stepped, battle)
         ent._savedStepSpeed = ent.stepSpeed
-        ent.stepSpeed = Cues.closeGapSpeed(ent, battle or session._battle, side)
+        local Projectiles = session._deps and session._deps.Projectiles
+        Cues.armCloseGapGait(ent, battle or session._battle, side, foe, {
+            Projectiles = Projectiles,
+            now = H.now(session),
+        })
         ent._pendingCloseStrike = {
             moveType = opts.moveType,
             moveId = thisId,
@@ -55,7 +59,9 @@ return function(Cues)
         }
         -- Already next to the foe: punch on the next present tick, do not
         -- burn a "walk first" frame (that stall is most obvious on your mon).
-        ent._closeStrikeWait = not Cues.inMeleeReach(ent, foe)
+        -- If the player could FIRE NOW, keep a wind-up so the charge reads.
+        local fireWait = ent._closeGapMinAt ~= nil
+        ent._closeStrikeWait = (not Cues.inMeleeReach(ent, foe)) or fireWait
         ent._closeStrikeArmedAt = H.now(session)
         ent._returnAt = nil
         ent._withdrawAfterStrike = true

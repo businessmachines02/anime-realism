@@ -26,6 +26,7 @@ RD.FOCUS_REGEN_REACT = 5
 RD.COST = {
   commit = 0, -- just take it the usual way
   dodge = 25,
+  fire = 15,
   cover = 20,
   cover_exit = 10,
   brace = 15,
@@ -51,6 +52,7 @@ RD.DODGE_COUNTER_CHANCE = 0.30
 RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2
 RD.DODGE_FAIL_MULT = 1.10
+RD.FIRE_CAST_MULT = 1.20
 
 RD.BRACE_WRONG_MULT = 1.18
 RD.BRACE_COUNTER_CHANCE = 0.35
@@ -563,6 +565,22 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     return result
   end
 
+  if action == "fire" then
+    local ok, cost = RD.spend(battle, true, "fire")
+    if not ok then
+      result.action = "commit"
+      result.lines[#result.lines + 1] = "Not enough\nFocus!"
+      return RD.resolveIncoming(battle, "commit", nil, ctx)
+    end
+    result.focusSpent = cost
+    side.reactedThisTurn = true
+    result.fireNow = true
+    result.damageMult = RD.FIRE_CAST_MULT
+    result.chip = "FIRE"
+    result.lines[#result.lines + 1] = "Struck in the\nmiddle of it!"
+    return result
+  end
+
   if action == "dodge" then
     local ok, cost = RD.spend(battle, true, "dodge")
     if not ok then
@@ -768,7 +786,8 @@ function RD.endTurn(battle)
   end
 end
 
-function RD.menuActions(battle, move)
+function RD.menuActions(battle, move, opts)
+  opts = opts or {}
   local side = RD.sideState(battle, true)
   local actions = {}
   local function add(id, label, hint, costKey)
@@ -823,12 +842,18 @@ function RD.menuActions(battle, move)
   if not unreactable then
     add("dodge", "DODGE", "Evade or bust", "dodge")
   end
+  if opts.canFireNow then
+    add("fire", "FIRE", opts.fireHint or "Strike now", "fire")
+  end
   add("cover", side.cover and "STAY COVER" or "TAKE COVER",
     side.cover and "Hold position" or "Durability pool", "cover")
   if not unreactable then
     add("brace", "BRACE", "Match the hit", "brace")
   end
-  add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
+  -- FIRE takes the diamond's fourth slot; entrenching mid-lunge is the odd one out.
+  if not opts.canFireNow then
+    add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
+  end
   add("commit", "COMMIT", "Take the hit", "commit")
 
   return actions

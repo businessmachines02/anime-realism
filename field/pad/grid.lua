@@ -854,6 +854,7 @@ local function wanderNearFoe(grid, ent, foeEnt)
   local distToFoe = math.max(math.abs(u - foeU), math.abs(v - foeV))
   local rand = randomFn()
   local dirs = shuffleDirs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }, rand)
+  local keep = tonumber(ent._keepAway) or 0
 
   local function tryStep(okDist)
     for i = 1, #dirs do
@@ -877,19 +878,57 @@ local function wanderNearFoe(grid, ent, foeEnt)
       return dist >= 1 and dist <= 2
     end)
   end
-  if distToFoe == 1 and rand() <= 0.55 then
+  if distToFoe == 1 and rand() <= (0.55 + 0.35 * keep) then
     if tryStep(function(dist) return dist == 2 end) then
       return true
     end
   end
-  if distToFoe == 2 and rand() <= 0.50 then
+  if distToFoe == 2 and rand() <= (0.50 + 0.35 * keep) then
     if tryStep(function(dist) return dist == 2 end) then
       return true
     end
+  end
+  if keep >= 0.4 then
+    return tryStep(function(dist)
+      return dist >= 2 and dist <= 3
+    end) or tryStep(function(dist)
+      return dist >= 1 and dist <= 2
+    end)
   end
   return tryStep(function(dist)
     return dist >= 1 and dist <= 2
   end)
+end
+
+--- Step one cell away from the foe when this mon wants space.
+function Grid.preferDistance(grid, ent, foeEnt)
+  if not (grid and ent and foeEnt) then
+    return false
+  end
+  local keep = tonumber(ent._keepAway) or 0
+  if keep < 0.28 then
+    return false
+  end
+  local u, v = padOf(grid, ent)
+  local foeU, foeV = padOf(grid, foeEnt)
+  local du, dv = u - foeU, v - foeV
+  local su, sv = 0, 0
+  if math.abs(du) >= math.abs(dv) and du ~= 0 then
+    su = du > 0 and 1 or -1
+  elseif dv ~= 0 then
+    sv = dv > 0 and 1 or -1
+  else
+    su = -(grid.sx or 1)
+    sv = -(grid.sy or 0)
+    if su == 0 and sv == 0 then
+      su = -1
+    end
+  end
+  if not Grid.step(grid, ent, su, sv) then
+    return false
+  end
+  ent.homePadU, ent.homePadV = ent.padU, ent.padV
+  return true
 end
 
 function Grid.idleWander(grid, ent, side, foeEnt)
@@ -930,6 +969,14 @@ function Grid.idleWander(grid, ent, side, foeEnt)
   end
   if distFromHome == 1 and rand() <= 0.62 then
     return tryStepTowardHome()
+  end
+
+  if foeEnt and (tonumber(ent._keepAway) or 0) >= 0.28 then
+    local fu, fv = padOf(grid, foeEnt)
+    local distToFoe = math.max(math.abs(u - fu), math.abs(v - fv))
+    if distToFoe < 2 and Grid.preferDistance(grid, ent, foeEnt) then
+      return true
+    end
   end
 
   -- Wander one step, but never beyond two cells from home.

@@ -492,6 +492,8 @@ function Dialogue.buildCallPool(kind, battle)
         add(strings().DODGE_SCENE[scene], 2)
     elseif kind == "commit" then
         add(strings().COMMIT_CALLS, 1)
+    elseif kind == "fire" then
+        add(strings().FIRE_NOW_CALLS, 1)
     elseif kind == "entrench" or kind == "entrench_hold" then
         add(strings().STAY_ENTRENCHED_CALLS, 1)
         add(strings().BRACE_SCENE[scene], 2)

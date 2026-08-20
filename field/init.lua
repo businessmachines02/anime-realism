@@ -218,6 +218,11 @@ return function(env)
       and Cues.closeGapHoldActive(session)
   end
 
+  function FBV.shouldHoldApplyDamage(session, battle, target)
+    return Cues and type(Cues.shouldHoldApplyDamage) == "function"
+      and Cues.shouldHoldApplyDamage(session, battle, target)
+  end
+
   function FBV.shouldParkEngineQueue(session)
     return Cues and type(Cues.shouldParkEngineQueue) == "function"
       and Cues.shouldParkEngineQueue(session)
@@ -324,6 +329,14 @@ return function(env)
     if Cues and type(Cues.isRangedCounter) == "function" then
       return Cues.isRangedCounter(opts, Projectiles)
     end
+  end
+
+  function FBV.chargeWindowOpen(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.chargeWindowOpen) == "function" then
+      return Cues.chargeWindowOpen(session)
+    end
+    return false
   end
 
   function FBV.closeGapPending(battle, side)

@@ -49,7 +49,7 @@ Catalog.MOVE_FX = {
   EMBER = { style = "ember", glitz = "flame", duration = 0.54, arc = 13 },
   FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
   HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
-  WATER_GUN = { style = "orb", glitz = "bubble" },
+  WATER_GUN = { style = "stream", glitz = "jet", duration = 0.52 },
   BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE_BEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },

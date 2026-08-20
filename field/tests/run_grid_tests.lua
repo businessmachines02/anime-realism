@@ -310,8 +310,8 @@ function tests.read_only_walkable_envelope()
   local envelope = Survey.build(map, plan, {
     entityPools = { { obstacle } },
   })
-  -- Tight opening (trainers ± back of adjacent mons) + EXTRA_U/HALF_V roam room.
-  eq(envelope.pad.sizeU, 8, "free-tile envelope width")
+  -- Opening (trainers ± back of spaced mons) + EXTRA_U/HALF_V roam room.
+  eq(envelope.pad.sizeU, 9, "free-tile envelope width")
   eq(envelope.pad.sizeV, 5, "free-tile envelope height")
   truthy(envelope.readOnly, "survey is explicitly read-only")
   truthy(calls.walk > 0 and calls.water > 0, "survey queries map traversal")
@@ -324,7 +324,7 @@ function tests.read_only_walkable_envelope()
 
   local arena = Arena.generate(nil, plan, 123, envelope)
   local grid = Grid.build(arena, plan)
-  eq(grid.sizeU, 8, "grid adopts surveyed width")
+  eq(grid.sizeU, 9, "grid adopts surveyed width")
   eq(grid.sizeV, 5, "grid adopts surveyed height")
   local wu, wv = Coords.worldToPad(envelope.pad, 13, 12)
   truthy(envelope.water[Coords.key(wu, wv)], "water cells stay in the water mask")
@@ -923,9 +923,9 @@ function tests.compact_arena_keeps_cast_lanes_clear()
   local fx, fy = Layout.wildAnchor(player)
   local plan = Layout.plan(player.cellX, player.cellY, fx, fy)
   eq(plan.pCellX, player.cellX, "wild pad starts at player")
-  eq(math.abs(plan.pMonX - plan.eMonX), 1, "wild mons start adjacent")
+  eq(math.abs(plan.pMonX - plan.eMonX), 2, "wild mons start one cell apart")
   local arena = Arena.generate(nil, plan, 12345)
-  eq(arena.pad.sizeU, 4, "tight arena width")
+  eq(arena.pad.sizeU, 5, "opening arena width")
   eq(arena.pad.sizeV, 3, "arena height")
   truthy(not arena.handcrafted, "tight pad ignores 10x5 hand layouts")
 
@@ -961,8 +961,8 @@ function tests.trainer_layout_resolves_engaged_npc()
   }
   eq(Layout.findFoeTrainer(overworld, battle), trainer, "resolve engaged trainer")
   local plan = Layout.plan(player.cellX, player.cellY, trainer.cellX, trainer.cellY)
-  eq(math.abs(plan.pCellY - plan.eCellY), 3, "trainer edges span tight pad")
-  eq(math.abs(plan.pMonY - plan.eMonY), 1, "mons start on adjacent tiles")
+  eq(math.abs(plan.pCellY - plan.eCellY), 4, "trainer edges span the opening pad")
+  eq(math.abs(plan.pMonY - plan.eMonY), 2, "mons start one cell apart")
 end
 
 local function sampleGrid()
@@ -999,6 +999,74 @@ function tests.npc_react_spends_focus_and_mixes_picks()
   truthy(seen.dodge < 48, "ember is not an automatic dodge")
   truthy((seen.commit + seen.brace) > 0, "foe sometimes braces or stands in")
   RD.clear(battle)
+end
+
+function tests.fire_now_reacts_during_a_charge()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local battle = {
+    player = { stats = { speed = 90, defense = 40, special = 80 } },
+    enemy = { stats = { speed = 40, defense = 80, special = 30 } },
+  }
+  RD.state(battle)
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  local actions = RD.menuActions(battle, tackle)
+  local ids = {}
+  for i = 1, #actions do
+    ids[actions[i].id] = true
+  end
+  truthy(not ids.fire, "FIRE stays off when the charge window is closed")
+  actions = RD.menuActions(battle, tackle, {
+    canFireNow = true,
+    fireHint = "THUNDERBOLT",
+  })
+  ids = {}
+  for i = 1, #actions do
+    ids[actions[i].id] = actions[i]
+  end
+  truthy(ids.fire, "FIRE is on the REACT menu during a charge")
+  eq(ids.fire.hint, "THUNDERBOLT", "FIRE names the locked special")
+  truthy(not ids.entrench, "entrench yields the diamond slot to FIRE")
+  local result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = tackle,
+  })
+  eq(result.fireNow, true, "FIRE NOW spends this turn's action on the special")
+  eq(result.forceMiss, false, "FIRE NOW does not dodge")
+  truthy(result.damageMult > 1, "caught casting takes extra if the charge lands")
+  RD.clear(battle)
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    _pendingCloseStrike = { moveId = "QUICK_ATTACK" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { player = { isPlayer = true }, enemy = { isPlayer = false } }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+  }
+  truthy(Cues.chargeWindowOpen(session),
+    "opening homes are still a fire window")
+  truthy(Cues.shouldHoldApplyDamage(session, battle, battle.player),
+    "the incoming punch still waits")
+  truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.enemy),
+    "FIRE NOW HP lands on the charger during the walk")
+  battle._arFireNow = true
+  truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.player),
+    "FIRE NOW does not stash its own damage")
+  battle._arFireNow = nil
+  enemy._pendingCloseStrike = nil
+  truthy(not Cues.chargeWindowOpen(session), "no charge is not a fire window")
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()
@@ -1298,11 +1366,11 @@ end
 
 function tests.occupancy_and_movement()
   local grid = sampleGrid()
-  eq(grid.sizeU, 4, "tight pad width")
+  eq(grid.sizeU, 5, "opening pad width")
   eq(grid.sizeV, 3, "compact pad height")
   local pHome = grid.home.player
   local eHome = grid.home.enemy
-  eq(math.abs(pHome.u - eHome.u), 1, "opening homes are adjacent")
+  eq(math.abs(pHome.u - eHome.u), 2, "opening homes leave one empty cell")
   local p = { id = "player", padU = pHome.u, padV = pHome.v }
   local e = { id = "enemy", padU = eHome.u, padV = eHome.v }
   truthy(Grid.setPad(grid, p, p.padU, p.padV), "place player")
@@ -1337,19 +1405,20 @@ function tests.occupancy_and_movement()
   truthy(Grid.setPad(grid, e, e.padU, e.padV), "restore foe occupancy")
 
   local homeU, homeV = p.padU, p.padV
-  -- Already adjacent: lunge cannot occupy the foe tile.
-  truthy(not Grid.attackStep(grid, p, e), "adjacent attack does not step onto foe")
-  eq(p.padU, homeU, "stays on home when already adjacent")
-  -- Give one free cell between mons (tight pad still has room at the foe edge).
-  truthy(Grid.setPad(grid, e, eHome.u + 1, eHome.v), "slide foe back for step test")
+  -- Opening homes already leave a free cell; the lunge steps into it.
   truthy(Grid.attackStep(grid, p, e), "attack step with room")
   eq(p.padU, homeU + 1, "attack advances on u axis")
   truthy(Grid.returnHome(grid, p), "return after attack")
   eq(p.padU, homeU, "returned u")
   eq(p.padV, homeV, "returned v")
+  -- Already adjacent: lunge cannot occupy the foe tile.
+  truthy(Grid.setPad(grid, p, eHome.u - 1, eHome.v), "stand next to the foe")
+  local adjU, adjV = p.padU, p.padV
+  truthy(not Grid.attackStep(grid, p, e), "adjacent attack does not step onto foe")
+  eq(p.padU, adjU, "stays put when already adjacent")
+  truthy(Grid.setPad(grid, p, homeU, homeV), "reset player to opening home")
 
   -- Close-the-gap: from farther than one tile, occupy a cell adjacent to the foe.
-  -- Foe is already one cell past home from the attack-step setup (distance 2).
   truthy(Grid.padDistance(grid, p, e) > 1, "foe is more than a tile away")
   local originU, originV = p.padU, p.padV
   truthy(Grid.closeGap(grid, p, e), "close gap toward the foe")
@@ -1363,8 +1432,8 @@ function tests.occupancy_and_movement()
   truthy(p.padU ~= originU or p.padV ~= originV or after == 2,
     "does not snap back to the far opening cell")
   p._meleeAnchor = nil
-  truthy(Grid.setPad(grid, p, originU, originV), "reset player for adjacent no-op")
-  truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "restore adjacent homes")
+  truthy(Grid.setPad(grid, p, eHome.u - 1, eHome.v), "stand next to the foe")
+  truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "foe on home")
   truthy(not Grid.closeGap(grid, p, e), "already-adjacent close-gap is a no-op")
 
   Grid.clear(grid)
@@ -1631,6 +1700,45 @@ function tests.close_the_gap_physicals()
   truthy(rocket <= 130, "dash speed is capped")
   truthy(snorlax >= 52, "even slow mons still close")
 
+  local brawler = Cues.keepAwayBias({ _closeGapStats = { special = 40, defense = 110 } })
+  local glass = Cues.keepAwayBias({ _closeGapStats = { special = 135, defense = 50 } })
+  truthy(brawler < 0.15, "high def low spa stays in the foe's face")
+  truthy(glass > 0.7, "high spa low def prefers space")
+  local cruise = Cues.closeGapSpeed({ _closeGapStats = { speed = 80, attack = 90 } })
+  local charger = { _closeGapStats = { speed = 80, attack = 90, special = 40, defense = 80 } }
+  local foe = { basePx = 80, basePy = 0 }
+  charger.basePx, charger.basePy = 0, 0
+  local battle = {
+    player = {
+      curMoves = { { id = "WATER_GUN", pp = 25, power = 40, category = "special" } },
+    },
+    data = {
+      moves = {
+        WATER_GUN = { id = "WATER_GUN", power = 40, category = "special", type = "WATER" },
+      },
+    },
+  }
+  truthy(Cues.battlerHasFireSpecial(battle, battle.player, Projectiles),
+    "water gun is a fireable special")
+  charger._pendingCloseStrike = { moveId = "TACKLE" }
+  local slow = Cues.armCloseGapGait(charger, battle, "enemy", foe, {
+    Projectiles = Projectiles, rand = 0.4, now = 1,
+  })
+  truthy(slow < cruise * 0.55, "foe winds up slower when you can FIRE NOW")
+  truthy(slow > cruise * 0.22, "FIRE NOW wind-up is not a crawl")
+  charger.basePx = 70
+  local later = Cues.tickCloseGapGait(charger, foe)
+  truthy(later > slow, "close-gap speeds up as they draw in")
+  truthy(later <= cruise + 0.01, "close-gap does not pass cruise speed")
+  local noSpecial = { _closeGapStats = { speed = 80, attack = 90 } }
+  noSpecial.basePx, noSpecial.basePy = 0, 0
+  local emptyBattle = { player = { curMoves = { { id = "TACKLE", pp = 35, power = 35, category = "physical" } } } }
+  local normal = Cues.armCloseGapGait(noSpecial, emptyBattle, "enemy", foe, {
+    Projectiles = Projectiles, rand = 0.4, now = 1,
+  })
+  truthy(normal > slow, "no special means the charge does not crawl")
+  eq(noSpecial._closeGapMinAt, nil, "no fire window does not hold the punch")
+
   local plan = Layout.plan(0, 0, 8, 0)
   local grid = Grid.build({
     pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
@@ -1867,8 +1975,7 @@ function tests.cues_and_dedupe()
   }
   Grid.setPad(grid, player, player.padU, player.padV)
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
-  -- Opening homes are adjacent; open one cell so the physical lunge can step.
-  truthy(Grid.setPad(grid, enemy, eHome.u + 1, eHome.v), "room for attack step")
+  -- Opening homes already leave a free cell for the physical lunge.
   enemy.basePx, enemy.basePy = enemy.targetPx, enemy.targetPy
   local session = {
     live = true,
@@ -3466,6 +3573,13 @@ function tests.world_space_projectiles()
     moveType = "FLYING", moveId = "SKY_ATTACK",
   })
   eq(sky.glitz, "wing", "sky attack uses a wing slash")
+  local waterGun = Projectiles.move(session, "player", {
+    moveType = "WATER", moveId = "WATER_GUN",
+  })
+  eq(waterGun.style, "stream", "water gun is a stream")
+  eq(waterGun.glitz, "jet", "water gun paints a water jet")
+  truthy((waterGun.duration or 0) >= 0.4, "water gun holds the stream")
+  truthy(waterGun.sx < waterGun.ex, "water gun travels toward the foe")
   local bubblebeam = Projectiles.move(session, "player", {
     moveType = "WATER", moveId = "BUBBLEBEAM",
   })
@@ -3886,6 +4000,15 @@ function tests.fire_tongues_and_gust_paint()
   flamethrower.age = 0.22
   flamethrower:draw(0, 0)
   truthy(calls.polygon > 0, "flamethrower paints a jet of flame tongues")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local waterGunPaint = Projectiles.move(session, "player", {
+    moveType = "WATER", moveId = "WATER_GUN",
+  })
+  waterGunPaint.age = 0.28
+  waterGunPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "water gun paints a water ribbon, not beads")
+  truthy(calls.ellipse > 0, "water gun paints wet highlight sheets")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local blast = Projectiles.move(session, "player", {
@@ -5605,6 +5728,47 @@ do
     }), "EMBER", "dodge vs a charge prefers a special they know")
     eq(BattleFx.pickCounterStrikeMove(battle, "dodge", battle.player), "SCRATCH",
       "dodge without an incoming charge still uses the physical poke")
+  end
+
+  function tests.fire_now_lists_known_specials_not_the_queued_move()
+    local battle = {
+      data = {
+        moves = {
+          SCRATCH = { id = "SCRATCH", power = 40, category = "physical", type = "NORMAL" },
+          EMBER = { id = "EMBER", name = "EMBER", power = 40, category = "special", type = "FIRE" },
+          FIRE_PUNCH = { id = "FIRE_PUNCH", power = 75, category = "special", type = "FIRE" },
+          BUBBLEBEAM = { id = "BUBBLEBEAM", power = 65, category = "special", type = "WATER" },
+          GROWL = { id = "GROWL", power = 0, category = "status", type = "NORMAL" },
+        },
+      },
+      moveDef = function(self, inst)
+        return inst and self.data.moves[inst.id]
+      end,
+      player = {
+        curMoves = {
+          { id = "SCRATCH", pp = 35 },
+          { id = "GROWL", pp = 40 },
+          { id = "EMBER", pp = 25 },
+          { id = "FIRE_PUNCH", pp = 15 },
+          { id = "BUBBLEBEAM", pp = 0 },
+        },
+      },
+    }
+    local shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "only a ranged special with PP is fireable")
+    eq(shots[1].moveId, "EMBER", "queued Scratch can still switch to Ember")
+
+    battle.player.curMoves = {
+      { id = "SCRATCH", pp = 35 },
+      { id = "WATER_GUN", pp = 25 },
+    }
+    battle.data.moves.WATER_GUN = {
+      id = "WATER_GUN", name = "WATER GUN", power = 40,
+      category = "special", type = "WATER",
+    }
+    shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "Water Gun is a fireable special")
+    eq(shots[1].moveId, "WATER_GUN", "Nidorina can FIRE NOW with Water Gun")
   end
 end
 

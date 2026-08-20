@@ -51,6 +51,10 @@ return function(Cues)
         ent._closeStrikeDeadline = nil
         ent._closeStrikeWait = nil
         ent._closeStrikeArmedAt = nil
+        ent._closeGapMinAt = nil
+        ent._closeGapCruise = nil
+        ent._closeGapStart = nil
+        ent._closeGapSpan = nil
     end
 
     function H.fireCloseStrike(session, side, ent, Grid)
@@ -208,6 +212,28 @@ return function(Cues)
         local side = user.isPlayer and "player" or "enemy"
         local ent = H.sideEnt(session, side)
         return ent and ent._pendingCloseStrike and true or false
+    end
+
+    --- Hold the charger's punch HP. A FIRE NOW bolt into the charger lands now.
+    function Cues.shouldHoldApplyDamage(session, battle, target)
+        if not (session and battle) then
+            return false
+        end
+        if battle._arFireNow or battle._arCloseGapResuming then
+            return false
+        end
+        if not Cues.closeGapHoldActive(session) then
+            return false
+        end
+        local playerCharging = session.playerMon and session.playerMon._pendingCloseStrike
+        local enemyCharging = session.enemyMon and session.enemyMon._pendingCloseStrike
+        if enemyCharging and not playerCharging then
+            return target == battle.player
+        end
+        if playerCharging and not enemyCharging then
+            return target == battle.enemy
+        end
+        return true
     end
 
     --- Normalize one held `{ ctx, record }` or a list of them.

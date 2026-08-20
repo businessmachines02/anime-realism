@@ -910,6 +910,10 @@ return function(mod)
                     st.keepDodgeMissAnim = nil
                     st.dodgeMissName = nil
                     st.dodgeMissSide = nil
+                    st.queuedPlayerAction = ev.playerAction or battle._arQueuedPlayerAction
+                    st.queuedEnemyAction = ev.enemyAction
+                    st.skipQueuedPlayerAction = nil
+                    st.fireNowMove = nil
                 end
                 dev.log(battle, "TURN start",
                     string.format("keepCounter=%s youTmp=%s foeTmp=%s",
@@ -2800,6 +2804,37 @@ return function(mod)
             end
         end
 
+        -- Fire a special during a close-gap charge (FIRE NOW).
+        -- Uses the picked special when you switch off the locked move.
+        dev.fireQueuedSpecial = function(battle, moveInst)
+            if not (battle and battle.player and battle.enemy) then
+                return false
+            end
+            local state = React.peek(battle)
+            local action = moveInst or (state and state.fireNowMove)
+                or (state and state.queuedPlayerAction)
+            if state then
+                state.fireNowMove = nil
+            end
+            if type(action) ~= "table" or not (action.id or action.name) then
+                return false
+            end
+            if type(battle.performMove) ~= "function" then
+                return false
+            end
+            battle._arFireNow = true
+            local ok = pcall(battle.performMove, battle, battle.player, battle.enemy, action)
+            battle._arFireNow = nil
+            if not ok then
+                return false
+            end
+            if state then
+                state.skipQueuedPlayerAction = true
+                state.playerActedThisTurn = true
+            end
+            return true
+        end
+
         -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
         -- Drives animPlayer + picFx without stealing the FIGHT / STRIKE menus.
         clearAmbientStance = function(battle)
@@ -3656,6 +3691,11 @@ return function(mod)
                     end
                 end,
                 isDodgeFailNarrator = isDodgeFailNarrator,
+                isRangedCounter = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isRangedCounter) == "function" then
+                        return FieldBattleViewer.isRangedCounter(opts)
+                    end
+                end,
             })
         end
         if React then
@@ -3722,6 +3762,11 @@ return function(mod)
                         return Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
                     end
                 end,
+                listFireNowMoves = function(battle, battler)
+                    if Fx and type(Fx.listFireNowMoves) == "function" then
+                        return Fx.listFireNowMoves(battle, battler)
+                    end
+                end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
@@ -3741,9 +3786,24 @@ return function(mod)
                         return FieldBattleViewer.isRangedCounter(opts)
                     end
                 end,
+                isMeleeAttack = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isMeleeAttack) == "function" then
+                        return FieldBattleViewer.isMeleeAttack(opts)
+                    end
+                end,
                 closeGapPending = function(battle, side)
                     if FieldBattleViewer and type(FieldBattleViewer.closeGapPending) == "function" then
                         return FieldBattleViewer.closeGapPending(battle, side)
+                    end
+                end,
+                chargeWindowOpen = function(battle)
+                    if FieldBattleViewer and type(FieldBattleViewer.chargeWindowOpen) == "function" then
+                        return FieldBattleViewer.chargeWindowOpen(battle)
+                    end
+                end,
+                fireQueuedSpecial = function(battle, moveInst)
+                    if type(dev.fireQueuedSpecial) == "function" then
+                        return dev.fireQueuedSpecial(battle, moveInst)
                     end
                 end,
                 cancelCloseStrike = function(battle, side)
@@ -4147,6 +4207,20 @@ return function(mod)
                 end
             end
 
+            local origResolveTurn = BattleState.resolveTurn
+            if type(origResolveTurn) == "function" then
+                function BattleState.resolveTurn(self, action)
+                    -- turn_started does not carry the locked move; stash it here
+                    -- so FIRE NOW can switch off Tackle / onto Water Gun.
+                    self._arQueuedPlayerAction = action
+                    local state = React.peek(self)
+                    if state then
+                        state.queuedPlayerAction = action
+                    end
+                    return origResolveTurn(self, action)
+                end
+            end
+
             local origExecuteAction = BattleState.executeAction
             if type(origExecuteAction) == "function" then
                 function BattleState.executeAction(self, user, target, action)
@@ -4260,6 +4334,11 @@ return function(mod)
                     -- After a dodge opening going second: use the counter move you picked.
                     if user and user.isPlayer then
                         local state = React.peek(self)
+                        if state and state.skipQueuedPlayerAction then
+                            state.skipQueuedPlayerAction = nil
+                            dev.log(self, "FIRE now", "skip later executeAction")
+                            return
+                        end
                         if state and state.overridePlayerAction then
                             action = state.overridePlayerAction
                             state.overridePlayerAction = nil

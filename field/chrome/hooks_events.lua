@@ -219,9 +219,10 @@ return function(Hooks)
                     end
                     local session = FBV and type(FBV.session) == "function"
                         and FBV.session(self)
-                    if session and type(FBV.closeGapHoldActive) == "function"
-                        and FBV.closeGapHoldActive(session) then
-                        local args = { ... }
+                    local args = { ... }
+                    local holdApply = session and type(FBV.shouldHoldApplyDamage) == "function"
+                        and FBV.shouldHoldApplyDamage(session, self, args[1])
+                    if holdApply then
                         self._arCloseGapApply = self._arCloseGapApply or {}
                         self._arCloseGapApply[#self._arCloseGapApply + 1] = args
                         -- Report the hit without changing HP yet.
