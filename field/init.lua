@@ -299,6 +299,42 @@ return function(env)
     end
   end
 
+  function FBV.deferCancelCloseStrike(battle, side, delay)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.deferCancelCloseStrike) == "function" then
+      return Cues.deferCancelCloseStrike(session, side, delay)
+    end
+  end
+
+  function FBV.beginReactHold(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.beginReactHold) == "function" then
+      return Cues.beginReactHold(session, battle)
+    end
+  end
+
+  function FBV.releaseReactHold(battle, outcome)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.releaseReactHold) == "function" then
+      return Cues.releaseReactHold(session, outcome)
+    end
+  end
+
+  function FBV.isRangedCounter(opts)
+    if Cues and type(Cues.isRangedCounter) == "function" then
+      return Cues.isRangedCounter(opts, Projectiles)
+    end
+  end
+
+  function FBV.closeGapPending(battle, side)
+    local session = Lifecycle.get(battle)
+    if not session then
+      return false
+    end
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    return ent and ent._pendingCloseStrike and true or false
+  end
+
   function FBV.nudgeCamera(battle, side, seconds)
     return Lifecycle.nudgeCamera(battle, side, seconds)
   end

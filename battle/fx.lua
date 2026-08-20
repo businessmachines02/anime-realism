@@ -87,8 +87,16 @@ function Fx.play(battle, action, result)
         local kind = tostring(action or "")
         if kind == "dodge" or kind == "cover" or kind == "brace"
             or kind == "entrench" or kind == "entrench_hold" then
+            local opts
+            if kind == "dodge" and result and result.counter then
+                opts = {
+                    counterMoveId = result.counter.moveId,
+                    counterMoveType = result.counter.moveType,
+                    counterCategory = result.counter.category,
+                }
+            end
             hostCall("fieldReact", battle, "player",
-                (kind == "entrench_hold" and "brace") or kind)
+                (kind == "entrench_hold" and "brace") or kind, opts)
         end
         return
     end
@@ -236,18 +244,55 @@ end
 -- Counter clip for the battler that is actually striking (you or the foe).
 -- Flavor lists only rank moves they already know — never a dex punch
 -- like MEGA_PUNCH / HEADBUTT that nobody on the field has.
-function Fx.pickCounterStrikeMove(battle, kind, battler)
+function Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
     kind = tostring(kind or "")
     if type(battler) ~= "table" then
         battler = battle and battle.player
+    end
+    local GEN1_SPECIAL = {
+        FIRE = true, WATER = true, ELECTRIC = true, GRASS = true,
+        ICE = true, PSYCHIC = true, DRAGON = true,
+    }
+    local function defIsSpecial(def, mv)
+        local cat = tostring((def and def.category) or (mv and mv.category) or ""):lower()
+        if cat == "special" then
+            return true
+        end
+        if cat == "physical" or cat == "status" then
+            return false
+        end
+        local typ = tostring((def and def.type) or (mv and mv.type) or ""):upper()
+        return GEN1_SPECIAL[typ] == true
+    end
+    local function incomingPhysical()
+        if type(incoming) ~= "table" then
+            return false
+        end
+        local cat = tostring(incoming.category or ""):lower()
+        if cat == "physical" then
+            return true
+        end
+        if cat == "special" or cat == "status" then
+            return false
+        end
+        local typ = tostring(incoming.type or ""):upper()
+        if typ == "" then
+            return false
+        end
+        return not GEN1_SPECIAL[typ]
     end
     local byKind = {
         dodge = { "QUICK_ATTACK", "TACKLE", "POUND", "SCRATCH", "DOUBLE_KICK" },
         brace = { "MEGA_PUNCH", "TACKLE", "STRENGTH", "HEADBUTT", "BODY_SLAM", "POUND", "SCRATCH" },
         entrench = { "TACKLE", "HEADBUTT", "POUND", "MEGA_PUNCH", "SCRATCH" },
     }
+    local specialFlavor = {
+        "THUNDERBOLT", "THUNDERSHOCK", "EMBER", "FLAMETHROWER",
+        "WATER_GUN", "BUBBLEBEAM", "SURF", "PSYBEAM", "PSYCHIC",
+        "ICE_BEAM", "AURORABEAM", "MEGA_DRAIN", "SOLARBEAM",
+    }
     local flavor = byKind[kind] or byKind.brace
-    local physical, any = {}, {}
+    local physical, specials, any = {}, {}, {}
     local known = {}
     local moves = battlerMoveList(battler)
     if type(moves) == "table" then
@@ -263,7 +308,9 @@ function Fx.pickCounterStrikeMove(battle, kind, battler)
                 if id and power > 0 and category ~= "status" then
                     known[id] = true
                     any[#any + 1] = id
-                    if category ~= "special" then
+                    if defIsSpecial(def, mv) then
+                        specials[#specials + 1] = id
+                    else
                         physical[#physical + 1] = id
                     end
                 end
@@ -281,6 +328,10 @@ function Fx.pickCounterStrikeMove(battle, kind, battler)
             end
         end
         return nil
+    end
+    if kind == "dodge" and incomingPhysical() then
+        return firstKnown(specialFlavor) or specials[1]
+            or firstKnown(flavor) or physical[1] or any[1]
     end
     return firstKnown(flavor) or physical[1] or any[1]
 end

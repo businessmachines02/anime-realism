@@ -2277,6 +2277,85 @@ function tests.close_gap_walk_still_overlaps_react()
   truthy(player._pendingCloseStrike, "walk stays pending after overlap")
 end
 
+function tests.react_hold_slows_then_speeds_up_on_shot()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = { _arAwaitingReact = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    closeTheGap = true,
+    _now = 60,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "enemy", "attack", Grid, nil, battle, {
+    category = "physical", moveId = "TACKLE", moveType = "NORMAL",
+  }), "foe charge starts")
+  truthy(Cues.beginReactHold(session, battle), "REACT hold starts")
+  truthy(session._reactHold, "present clock holds the charge")
+  truthy(not session._clashPunch, "select hold is not a counter clash")
+  truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
+    "camera punches in on the charger")
+
+  Cues.releaseReactHold(session, "dodge_shot")
+  eq(session._reactHold, nil, "pick drops the hold")
+  truthy((session._reactReleaseT or 0) > 0, "outcome speeds the present clock back up")
+  truthy((session._camShakeT or 0) > 0, "outcome kicks the camera")
+  eq(session._hitStopT, nil, "speed-up is not a freeze")
+
+  Projectiles.clear(session)
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, battle, {
+    counterMoveId = "THUNDERBOLT",
+    counterMoveType = "ELECTRIC",
+    counterCategory = "special",
+  }), "dodge with a special counter")
+  eq(player.lastAnim, "dodge", "defender sidesteps the charge")
+  local shot
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].kind == "move"
+        or session.projectiles[i].style == "beam" then
+      shot = session.projectiles[i]
+    end
+  end
+  truthy(shot, "special counter fires during the walk")
+  eq(shot.style, "beam", "thunderbolt is a beam")
+  truthy(shot.sx ~= nil, "beam originates on the defender")
+  truthy(enemy._pendingCloseStrike, "charger is still committed")
+
+  Cues.deferCancelCloseStrike(session, "enemy", 0.42)
+  Cues.tickReturns(session, Grid)
+  truthy(enemy._pendingCloseStrike, "whiff waits for the shot to read")
+  session._now = 61
+  Cues.tickReturns(session, Grid)
+  truthy(not enemy._pendingCloseStrike, "walk cancels after the shot")
+end
+
+function tests.ranged_counter_skips_contact_punches()
+  truthy(Cues.isRangedCounter({
+    moveId = "THUNDERBOLT", category = "special", moveType = "ELECTRIC",
+  }, Projectiles), "thunderbolt is a ranged counter")
+  truthy(Cues.isRangedCounter({
+    moveId = "EMBER", category = "special", moveType = "FIRE",
+  }, Projectiles), "ember is a ranged counter")
+  truthy(not Cues.isRangedCounter({
+    moveId = "FIRE_PUNCH", category = "special", moveType = "FIRE",
+  }, Projectiles), "fire punch stays a melee poke")
+end
+
 function tests.turn_start_clears_close_gap_drift()
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -5517,6 +5596,15 @@ do
       "empty set does not invent HEADBUTT from the dex")
     eq(BattleFx.pickCounterStrikeMove(battle, "brace", battle.player) ~= "HEADBUTT", true,
       "dex HEADBUTT stays unused")
+    battle.player.curMoves = {
+      { id = "SCRATCH", pp = 35 },
+      { id = "EMBER", pp = 25 },
+    }
+    eq(BattleFx.pickCounterStrikeMove(battle, "dodge", battle.player, {
+      category = "physical", type = "NORMAL", id = "TACKLE",
+    }), "EMBER", "dodge vs a charge prefers a special they know")
+    eq(BattleFx.pickCounterStrikeMove(battle, "dodge", battle.player), "SCRATCH",
+      "dodge without an incoming charge still uses the physical poke")
   end
 end
 

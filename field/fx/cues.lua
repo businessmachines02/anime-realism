@@ -108,7 +108,7 @@ function H.punchIn(session, side, spec)
     if not (session and ent) then
         return false
     end
-    if spec.mode ~= "clash" and session._clashPunch then
+    if spec.mode ~= "clash" and spec.mode ~= "react" and session._clashPunch then
         return false
     end
     local foe = H.foeOf(session, side)
@@ -168,7 +168,7 @@ function H.impactKick(session, spec)
         return false
     end
     local heavy = spec.powerful == true or spec.clash == true
-    if spec.clash ~= true and (session._clashSlowT or 0) <= 0 then
+    if spec.noStop ~= true and spec.clash ~= true and (session._clashSlowT or 0) <= 0 then
         session._hitStopT = heavy and 0.08 or 0.045
     end
     session._camShakeDur = heavy and 0.16 or 0.10
@@ -444,6 +444,119 @@ end
 
 function Cues.awaitingReact(battle)
     return battle and battle._arAwaitingReact == true
+end
+
+--- Incoming special/travel used as a dodge-counter (not a punch/bite).
+function Cues.isRangedCounter(opts, Projectiles)
+    opts = opts or {}
+    if Projectiles and type(Projectiles.isContactFx) == "function"
+        and Projectiles.isContactFx(opts) then
+        return false
+    end
+    if Projectiles and type(Projectiles.isTravelFx) == "function"
+        and Projectiles.isTravelFx(opts) then
+        return true
+    end
+    return H.normCategory(opts.category) == "special"
+end
+
+--- Fire the dodge-counter special while the charger is still walking in.
+function Cues.fireDodgeCounterShot(session, side, opts)
+    opts = opts or {}
+    local moveId = opts.counterMoveId
+    if not moveId or tostring(moveId) == "" then
+        return false
+    end
+    local shot = {
+        moveId = moveId,
+        moveType = opts.counterMoveType,
+        category = opts.counterCategory or "special",
+    }
+    local Projectiles = session and session._deps and session._deps.Projectiles
+    if not Cues.isRangedCounter(shot, Projectiles) then
+        return false
+    end
+    if Projectiles and type(Projectiles.move) == "function" then
+        Projectiles.move(session, side, shot)
+    end
+    session._dodgeCounterShot = {
+        side = side,
+        moveId = tostring(moveId):upper():gsub("%s+", "_"),
+    }
+    return true
+end
+
+--- Hold slow-mo + camera on the charger while REACT is open.
+function Cues.beginReactHold(session, battle)
+    if not session then
+        return false
+    end
+    if session._reactHold then
+        return true
+    end
+    session._reactHold = true
+    session._reactReleaseT = nil
+    session._reactReleaseDur = nil
+    local incoming = "enemy"
+    if session.playerMon and session.playerMon._pendingCloseStrike then
+        incoming = "player"
+    elseif session.enemyMon and session.enemyMon._pendingCloseStrike then
+        incoming = "enemy"
+    end
+    H.punchIn(session, incoming, {
+        mode = "react",
+        focus = "user",
+        hold = 8,
+        lift = 8,
+    })
+    return true
+end
+
+--- Snap out of the REACT hold: speed up, then juice matches the pick.
+function Cues.releaseReactHold(session, outcome)
+    if not session then
+        return false
+    end
+    local held = session._reactHold == true
+    session._reactHold = nil
+    outcome = tostring(outcome or "commit")
+    if outcome == "clash" then
+        session._reactReleaseT = nil
+        session._reactReleaseDur = nil
+        return held
+    end
+    local shot = outcome == "dodge_shot"
+    session._reactReleaseT = shot and 0.24 or 0.16
+    session._reactReleaseDur = session._reactReleaseT
+    H.impactKick(session, {
+        powerful = shot or outcome == "dodge_fail" or outcome == "commit",
+        noStop = true,
+    })
+    return true
+end
+
+function Cues.syncReactHold(session, battle)
+    if not session then
+        return false
+    end
+    if Cues.awaitingReact(battle) then
+        return Cues.beginReactHold(session, battle)
+    end
+    if session._reactHold then
+        return Cues.releaseReactHold(session, "commit")
+    end
+    return false
+end
+
+--- Keep the close-gap walk alive until the dodge-counter shot reads.
+function Cues.deferCancelCloseStrike(session, side, delay)
+    local battle = session and session._battle
+    if not battle then
+        return false
+    end
+    battle._arWhiffCloseStrike = side
+    battle._arWhiffCloseAfter = H.now(session) + (tonumber(delay) or 0.42)
+    return true
 end
 
 function H.fieldMenuOpen(battle)

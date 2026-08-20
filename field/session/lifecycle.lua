@@ -472,7 +472,8 @@ function Lifecycle.clashLetterboxSize(viewW, viewH)
 end
 
 function Lifecycle.drawClashLetterbox(session, battle)
-    if not (session and (session._clashPunch or (session._clashSlowT or 0) > 0)) then
+    if not (session and (session._clashPunch or session._reactHold
+        or (session._clashSlowT or 0) > 0)) then
         return
     end
     local g = love and love.graphics
@@ -950,9 +951,10 @@ function Lifecycle.focusCamera(battle, dt)
     local nudgeT = session.cameraNudgeT or 0
     if not looking and nudgeT > 0 and session.cameraNudgeX and session.cameraNudgeY then
         local punch = session._clashPunch == true
+        local react = session._reactHold == true
         -- Full lock on the clash while the hold is up; ease out in the last 0.4s.
-        local hold = punch and 0.45 or 0.35
-        local blend = math.min(1, nudgeT / hold) * (punch and 1 or 0.55)
+        local hold = (punch and 0.45) or (react and 0.55) or 0.35
+        local blend = math.min(1, nudgeT / hold) * ((punch and 1) or (react and 0.82) or 0.55)
         focusX = focusX * (1 - blend) + session.cameraNudgeX * blend
         focusY = focusY * (1 - blend) + session.cameraNudgeY * blend
         if punch then
@@ -1005,7 +1007,7 @@ function Lifecycle.focusCamera(battle, dt)
         local rate = Lifecycle.CAMERA_PAN_RATE
         if looking then
             rate = Lifecycle.CAMERA_LOOK_RATE
-        elseif session._clashPunch then
+        elseif session._clashPunch or session._reactHold then
             rate = Lifecycle.CAMERA_PAN_CLASH_RATE
         elseif nudgeT > 0 then
             rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
@@ -1991,6 +1993,11 @@ function Lifecycle.onTurnStarted(battle)
         battle._arCloseGapResuming = nil
         battle._arAwaitingReact = nil
         battle._arWhiffCloseStrike = nil
+        battle._arWhiffCloseAfter = nil
+        session._reactHold = nil
+        session._reactReleaseT = nil
+        session._reactReleaseDur = nil
+        session._dodgeCounterShot = nil
     end
     if Cues and type(Cues.resetTurnSide) == "function" then
         Cues.resetTurnSide(session, "player", keepPlayer, Grid)
@@ -2171,9 +2178,25 @@ function Lifecycle.tick(battle, dt, deps)
     deps = deps or session._deps
     dt = dt or (1 / 60)
     local wallDt = dt
+    if deps.Cues and type(deps.Cues.syncReactHold) == "function" then
+        pcall(deps.Cues.syncReactHold, session, battle)
+    end
     -- A few frozen frames on contact (not a cinematic). Clash slow-mo owns
-    -- the clock when a counter is already hanging.
-    if (session._hitStopT or 0) > 0 and (session._clashSlowT or 0) <= 0 then
+    -- the clock when a counter is already hanging. REACT hold freezes the
+    -- charge for the pick, then a short speed-up on the outcome.
+    if session._reactHold then
+        dt = wallDt * 0.22
+    elseif (session._reactReleaseT or 0) > 0 then
+        local dur = session._reactReleaseDur or 0.2
+        session._reactReleaseT = session._reactReleaseT - wallDt
+        if session._reactReleaseT <= 0 then
+            session._reactReleaseT = nil
+            session._reactReleaseDur = nil
+        else
+            local u = 1 - session._reactReleaseT / dur
+            dt = wallDt * (1.32 - 0.32 * u)
+        end
+    elseif (session._hitStopT or 0) > 0 and (session._clashSlowT or 0) <= 0 then
         session._hitStopT = session._hitStopT - wallDt
         if session._hitStopT <= 0 then
             session._hitStopT = nil
@@ -2242,7 +2265,7 @@ function Lifecycle.tick(battle, dt, deps)
         deps.Cues.syncSemiInvuln(session, deps.Grid)
     end
 
-    if session.cameraNudgeT and session.cameraNudgeT > 0 then
+    if session.cameraNudgeT and session.cameraNudgeT > 0 and not session._reactHold then
         local nudgeDt = session._clashPunch and wallDt or dt
         session.cameraNudgeT = math.max(0, session.cameraNudgeT - nudgeDt)
         if session.cameraNudgeT <= 0 then
@@ -2290,7 +2313,8 @@ function Lifecycle.tick(battle, dt, deps)
 
     -- Soft-pan every present tick so intro / nudge easing stays continuous.
     -- Clash punch-in uses wall time so the camera dives while action hangs.
-    Lifecycle.focusCamera(battle, (session._clashPunch or (session._camShakeT or 0) > 0) and wallDt or dt)
+    Lifecycle.focusCamera(battle, (session._clashPunch or session._reactHold
+        or (session._camShakeT or 0) > 0) and wallDt or dt)
 
     session._faceAcc = (session._faceAcc or 0) + dt
     if session._faceAcc >= 0.15 then

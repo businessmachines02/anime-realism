@@ -3717,18 +3717,43 @@ return function(mod)
                     end
                 end,
                 tagFieldCue = tagFieldCue,
-                pickCounterStrikeMove = function(battle, kind, battler)
+                pickCounterStrikeMove = function(battle, kind, battler, incoming)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
-                        return Fx.pickCounterStrikeMove(battle, kind, battler)
+                        return Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
                     end
                 end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 signalAttackPresentation = signalAttackPresentation,
+                beginReactHold = function(battle)
+                    if FieldBattleViewer and type(FieldBattleViewer.beginReactHold) == "function" then
+                        return FieldBattleViewer.beginReactHold(battle)
+                    end
+                end,
+                releaseReactHold = function(battle, outcome)
+                    if FieldBattleViewer and type(FieldBattleViewer.releaseReactHold) == "function" then
+                        return FieldBattleViewer.releaseReactHold(battle, outcome)
+                    end
+                end,
+                isRangedCounter = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isRangedCounter) == "function" then
+                        return FieldBattleViewer.isRangedCounter(opts)
+                    end
+                end,
+                closeGapPending = function(battle, side)
+                    if FieldBattleViewer and type(FieldBattleViewer.closeGapPending) == "function" then
+                        return FieldBattleViewer.closeGapPending(battle, side)
+                    end
+                end,
                 cancelCloseStrike = function(battle, side)
                     if FieldBattleViewer and type(FieldBattleViewer.cancelCloseStrike) == "function" then
                         return FieldBattleViewer.cancelCloseStrike(battle, side)
+                    end
+                end,
+                deferCancelCloseStrike = function(battle, side, delay)
+                    if FieldBattleViewer and type(FieldBattleViewer.deferCancelCloseStrike) == "function" then
+                        return FieldBattleViewer.deferCancelCloseStrike(battle, side, delay)
                     end
                 end,
                 tryAgainStrike = tryAgainStrike,

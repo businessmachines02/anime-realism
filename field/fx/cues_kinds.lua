@@ -151,9 +151,11 @@ return function(Cues)
         if not ent then
             return false
         end
+        opts = opts or {}
         Grid.dodge(session.grid, ent, H.foeOf(session, side))
         -- Pose variety (type / speed / cycle) is picked inside play("dodge").
         H.playAnim(ent, "dodge")
+        Cues.fireDodgeCounterShot(session, side, opts)
         return true
     end)
 
@@ -316,6 +318,13 @@ return function(Cues)
             return false
         end
         opts = opts or {}
+        local shot = session._dodgeCounterShot
+        local mid = H.cueMoveId(opts)
+        if shot and shot.side == side and (not mid or shot.moveId == mid) then
+            session._dodgeCounterShot = nil
+            H.playAnim(ent, "cast")
+            return true
+        end
         H.clashFocus(session, side, opts)
         H.playAnim(ent, "counter")
         return true

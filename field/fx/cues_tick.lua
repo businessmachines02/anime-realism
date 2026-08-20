@@ -46,12 +46,16 @@ return function(Cues)
             return
         end
         local battle = session._battle
+        local t = H.now(session)
         local whiff = battle and battle._arWhiffCloseStrike
         if whiff then
-            battle._arWhiffCloseStrike = nil
-            Cues.cancelCloseStrike(session, whiff, Grid)
+            local after = battle._arWhiffCloseAfter
+            if not (after and t < after) then
+                battle._arWhiffCloseStrike = nil
+                battle._arWhiffCloseAfter = nil
+                Cues.cancelCloseStrike(session, whiff, Grid)
+            end
         end
-        local t = H.now(session)
         for _, side in ipairs({ "player", "enemy" }) do
             local ent = H.sideEnt(session, side)
             if ent and ent._pendingCloseStrike then

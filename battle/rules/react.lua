@@ -497,12 +497,23 @@ local function queueReactCounterStrike(battle, result, ctx)
 
     local kind = result.counter.kind
     local user = battle.player
-    local moveId = hostCall("pickCounterStrikeMove", battle, kind, user)
+    local moveId = result.counter.moveId
+        or hostCall("pickCounterStrikeMove", battle, kind, user, ctx and ctx.move)
     local moves = battle.data and battle.data.moves
     local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
         and moves[moveId]
         or (moveId and { id = moveId, category = "physical", power = 40, type = "NORMAL" })
         or nil
+    local category = tostring((result.counter.category or (move and move.category) or "physical")):lower()
+    if category ~= "special" then
+        category = "physical"
+    end
+    local ranged = result.counter.ranged == true
+        or hostCall("isRangedCounter", battle, {
+            moveId = moveId,
+            moveType = move and move.type,
+            category = category,
+        }) == true
 
     local me = hostCall("playerMonName", battle) or "POKéMON"
     local line = result.counter.line or (me .. " countered!")
@@ -518,7 +529,7 @@ local function queueReactCounterStrike(battle, result, ctx)
             hostCall("armFieldChip", battle, "player", "COUNTER")
             if hostCall("isFieldBattle", battle) then
                 hostCall("fieldReact", battle, "player", "counter", {
-                    category = "physical",
+                    category = category,
                     moveId = moveId,
                     moveType = move and move.type,
                 })
@@ -538,7 +549,12 @@ local function queueReactCounterStrike(battle, result, ctx)
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
             arFx = true,
-            arFieldCue = { side = "enemy", kind = "hit", category = "physical", clash = true },
+            arFieldCue = {
+                side = "enemy",
+                kind = "hit",
+                category = category,
+                clash = not ranged,
+            },
         fn = function()
             local target = battle.enemy
             if not target or not target.mon or (target.mon.hp or 0) <= 0 then
@@ -598,6 +614,38 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
         }
     end
 
+    if result.counter then
+        local moveId = hostCall("pickCounterStrikeMove", battle, result.counter.kind,
+            battle.player, pending and pending.ctx and pending.ctx.move)
+        local moves = battle.data and battle.data.moves
+        local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
+            and moves[moveId]
+            or (moveId and { id = moveId, category = "physical", type = "NORMAL" })
+            or nil
+        local category = tostring((move and move.category) or "physical"):lower()
+        if category ~= "special" then
+            category = "physical"
+        end
+        result.counter.moveId = moveId
+        result.counter.moveType = move and move.type
+        result.counter.category = category
+        result.counter.ranged = hostCall("isRangedCounter", battle, {
+            moveId = moveId,
+            moveType = result.counter.moveType,
+            category = category,
+        }) == true
+    end
+
+    local outcome = result.action or action
+    if result.counter and result.counter.ranged then
+        outcome = "dodge_shot"
+    elseif result.forceMiss then
+        outcome = "dodge"
+    elseif tostring(action) == "dodge" then
+        outcome = "dodge_fail"
+    end
+    hostCall("releaseReactHold", battle, outcome)
+
     -- Dodge / cover / brace FX before the foe's swing (or instead of it).
     if type(host.playFocusReactFx) == "function" then
         host.playFocusReactFx(battle, result.action or action, result)
@@ -633,7 +681,14 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                 -- Incoming close-the-gap walk must not punch after a dodge.
                 local user = pending.ctx.user
                 battle._arWhiffCloseStrike = (user and user.isPlayer) and "player" or "enemy"
-                hostCall("cancelCloseStrike", battle, battle._arWhiffCloseStrike)
+                local holdCharge = hostCall("isFieldBattle", battle)
+                    and result.counter and result.counter.ranged
+                    and hostCall("closeGapPending", battle, battle._arWhiffCloseStrike)
+                if holdCharge then
+                    hostCall("deferCancelCloseStrike", battle, battle._arWhiffCloseStrike, 0.42)
+                else
+                    hostCall("cancelCloseStrike", battle, battle._arWhiffCloseStrike)
+                end
                 -- Clear hitMod so a later hit isn't zeroed.
                 if RD() then
                     RD().state(battle).hitMod = nil
@@ -1143,6 +1198,7 @@ function EffectRegistry.runDamaging(battle, ctx, record)
         state.pickOfferedThisTurn = true
         battle._arPickOfferedThisTurn = true
         battle._arAwaitingReact = true
+        hostCall("beginReactHold", battle)
         -- Pin the engine's attack anim so finishCalloutPick resumes after it
         -- (not before endOfTurn). Without this, REACT! landed after the swing.
         do
