@@ -47,11 +47,15 @@ return function(Cues)
         end
         local battle = session._battle
         local t = H.now(session)
+        Cues.tickHeldReact(session, Grid)
+        Cues.tickTossLand(session, Grid)
+        local waiting = Cues.heldReactPending(session)
         -- FIRE / clash shot was latched on the HUD click; run it here so
         -- performMove cannot mutate sprites after this frame's pose.
+        -- Dodge/brace vs a charge waits until they are in your face.
         do
             local resume = battle and battle._arResumeReactPick
-            if type(resume) == "function" then
+            if type(resume) == "function" and not waiting then
                 battle._arResumeReactPick = nil
                 local okR, errR = pcall(resume)
                 if not okR then
@@ -82,6 +86,10 @@ return function(Cues)
                     -- REACT! / other menus: keep the walk parked.
                 elseif ent._closeGapMinAt and t < ent._closeGapMinAt then
                     -- Slow wind-up so FIRE NOW has a beat to read.
+                elseif waiting then
+                    -- Dodge/brace is waiting for this arrival; do not punch first.
+                elseif battle and battle._arWhiffCloseStrike == side then
+                    -- Successful dodge: let the cancel land, do not swing.
                 elseif Cues.inMeleeReach(ent, foe) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.punch")
                 elseif ent._closeStrikeArmedAt
@@ -93,7 +101,9 @@ return function(Cues)
             if ent and ent._pendingCloseStrike then
                 -- Still closing; do not walk home yet.
             elseif ent and ent._returnAt and t >= ent._returnAt then
-                if Cues.pendingMultiHitFollowUp(session, session._battle, side) then
+                if ent.anim == "toss" or ent.anim == "tossed" then
+                    ent._returnAt = t + 0.08
+                elseif Cues.pendingMultiHitFollowUp(session, session._battle, side) then
                     ent._returnAt = t + 0.12
                 else
                     ent._returnAt = nil

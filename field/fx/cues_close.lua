@@ -99,13 +99,19 @@ return function(Cues)
         local jump = (pending and pending.jump) or ent._attackJump
         local held = session._pendingCloseHit
         local finishing = held and held.opts and held.opts.finishing == true
-        if finishing and side == "player" then
+        if Cues.isTossMove(pending) then
+            H.playTossPair(session, side)
+            if finishing and side == "player" then
+                H.finishingFocus(session, side, held.opts)
+            end
+            ent._returnAt = H.now(session) + Cues.TOSS_DUR
+        elseif finishing and side == "player" then
             H.finishingFocus(session, side, held.opts)
+            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
         else
             H.playAnim(ent, jump and "jump" or "attack")
+            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
         end
-        local punch = jump and 0.56 or 0.48
-        ent._returnAt = H.now(session) + punch
         -- Shove now that occupancy is adjacent. damage_dealt during the walk
         -- was stashed; a replay after this is skipped by shouldSkipEvent.
         Cues.flushCloseHit(session, Grid)
@@ -146,6 +152,9 @@ return function(Cues)
             return true
         end
         if battle and battle._arPendingBraceCounter then
+            return true
+        end
+        if Cues.tossAirPending(session) then
             return true
         end
         local p, e = session.playerMon, session.enemyMon

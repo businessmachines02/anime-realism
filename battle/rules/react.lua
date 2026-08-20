@@ -561,11 +561,13 @@ local function queueReactCounterStrike(battle, result, ctx)
                 return
             end
             if hostCall("isFieldBattle", battle) then
-                hostCall("fieldReact", battle, "player", "counter", {
-                    category = category,
-                    moveId = moveId,
-                    moveType = move and move.type,
-                })
+                if moveId then
+                    hostCall("fieldReact", battle, "player", "counter", {
+                        category = category,
+                        moveId = moveId,
+                        moveType = move and move.type,
+                    })
+                end
             elseif move then
                 hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
                     isCalled = true,

@@ -284,9 +284,22 @@ local function moveId(move)
   return tostring(move.id or move.index or ""):upper()
 end
 
+-- Gen 1 type-split is physical; these still fly. Match field/fx/fx_catalog.lua.
+local PROJECTILE_SPECIAL = {
+  SWIFT = true,
+  GUST = true,
+  NIGHT_SHADE = true,
+  TRI_ATTACK = true,
+  BONEMERANG = true,
+  ROCK_THROW = true,
+}
+
 local function moveIsSpecial(move)
   if not move then
     return false
+  end
+  if PROJECTILE_SPECIAL[moveId(move)] then
+    return true
   end
   if move.category == "special" then
     return true

@@ -583,6 +583,15 @@ function Projectiles.isTravelFx(opts)
   return TRAVEL_STYLES[named.style] == true
 end
 
+--- Gen 1 category may be physical; these still fly (Swift, Gust, …).
+function Projectiles.isProjectileSpecial(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  if (Catalog.PROJECTILE_SPECIAL or {})[moveId] then
+    return true
+  end
+  return Projectiles.isTravelFx(opts)
+end
+
 -- Jaws / punches / slams close the gap even when the Gen1 type split marks
 -- the move special (Bite is often Dark; Fire Punch is Fire).
 function Projectiles.isContactFx(opts)
@@ -2933,45 +2942,60 @@ local function drawContact(g, p, x, y, t)
   end
 
   if glitz == "toss" then
-    local lift = 0
-    if t < 0.18 then
-      lift = 0
+    -- Ground-locked FX while the real sprites grab, rise, and slam.
+    local fade = 1
+    if t > 0.88 then
+      fade = 1 - (t - 0.88) / 0.12
+    end
+    local height = 0
+    if t < 0.08 then
+      height = 3 * (t / 0.08)
+    elseif t < 0.38 then
+      local u = (t - 0.08) / 0.30
+      height = 3 + (1 - (1 - u) * (1 - u)) * 58
+    elseif t < 0.52 then
+      height = 61
+    elseif t < 0.74 then
+      local u = (t - 0.52) / 0.22
+      height = 61 * (1 - u * u)
+    else
+      local u = (t - 0.74) / 0.26
+      height = math.abs(math.sin(u * math.pi)) * 8 * (1 - u)
+    end
+    local air = math.min(1, height / 61)
+    local shadow = 0.55 + 0.45 * (1 - air)
+    g.setColor(0.08, 0.08, 0.10, 0.40 * shadow * fade)
+    g.ellipse("fill", x - 4, y + 4, 8 * shadow, 3.2 * shadow)
+    g.ellipse("fill", x + 5, y + 4, 7.4 * shadow, 3.0 * shadow)
+    if t < 0.14 then
       g.setColor(c[1], c[2], c[3], fade)
       g.setLineWidth(2)
-      g.circle("line", x, y, 4 + t * 8)
+      g.circle("line", x, y, 4 + t * 10)
       for i = 1, 4 do
-        local a = i * 1.57 + t * 6
+        local a = i * 1.57 + t * 8
         g.setColor(1, 1, 1, 0.7 * fade)
         g.circle("fill", x + math.cos(a) * 5, y + math.sin(a) * 3, 1.2)
       end
-    elseif t < 0.52 then
-      local u = (t - 0.18) / 0.34
-      lift = u * u * (3 - 2 * u) * 32
-    elseif t < 0.60 then
-      lift = 32 + math.sin((t - 0.52) * 40) * 1.2
-    else
-      local u = math.min(1, (t - 0.60) / 0.18)
-      lift = (1 - u * u) * 32
     end
-    local hold = 1
-    if t > 0.88 then
-      hold = 1 - (t - 0.88) / 0.12
-    end
-    if t < 0.78 then
-      drawMonSilhouette(g, x, y - lift, 1.05, c, hold)
-      g.setColor(c[1], c[2], c[3], 0.22 * hold)
-      g.ellipse("fill", x, y + 4, 6 + (1 - lift / 32) * 3, 2.2)
+    if t > 0.08 and t < 0.55 then
+      for i = 1, 5 do
+        local ox = (i - 3) * 3.2
+        local top = y - 6 - height * 0.85
+        g.setColor(1, 1, 1, (0.35 - air * 0.1) * fade)
+        g.setLineWidth(1.2)
+        g.line(x + ox, y - 2, x + ox * 0.4, top)
+      end
     end
     if t > 0.70 then
       local slam = math.min(1, (t - 0.70) / 0.30)
-      g.setColor(c[1], c[2], c[3], 0.4 * (1 - slam * 0.5) * hold)
-      g.ellipse("fill", x, y + 3, 8 + slam * 10, 3.4 + slam * 2)
-      g.setColor(1, 1, 1, 0.7 * (1 - slam) * hold)
+      g.setColor(c[1], c[2], c[3], 0.4 * (1 - slam * 0.5) * fade)
+      g.ellipse("fill", x, y + 3, 8 + slam * 12, 3.4 + slam * 2.4)
+      g.setColor(1, 1, 1, 0.7 * (1 - slam) * fade)
       g.circle("fill", x, y, 2.6)
       for i = 1, 6 do
         local a = i * (math.pi * 2 / 6)
-        local dist = 4 + slam * 10
-        g.setColor(c[1], c[2], c[3], (0.85 - slam * 0.5) * hold)
+        local dist = 4 + slam * 12
+        g.setColor(c[1], c[2], c[3], (0.85 - slam * 0.5) * fade)
         g.setLineWidth(1.8)
         g.line(x, y,
           x + math.cos(a) * dist,
@@ -2979,7 +3003,7 @@ local function drawContact(g, p, x, y, t)
       end
       for i = 1, 5 do
         local a = i * 1.256 + slam * 2
-        g.setColor(0.72, 0.58, 0.32, (0.6 - slam * 0.4) * hold)
+        g.setColor(0.72, 0.58, 0.32, (0.6 - slam * 0.4) * fade)
         g.circle("fill",
           x + math.cos(a) * (5 + slam * 6),
           y + 3 + math.sin(a) * 2,
@@ -4899,7 +4923,6 @@ function Projectiles.contact(session, side, opts)
   if not glitz or fx.style ~= "contact" then
     glitz = TYPE_CONTACT[fx.moveType] or "slash"
   end
-  local toss = glitz == "toss"
   local dash = glitz == "dash"
   local from = (side == "player") and session.playerMon or session.enemyMon
   local ox, oy = center(session, from)
@@ -4911,6 +4934,8 @@ function Projectiles.contact(session, side, opts)
       dirX, dirY = dx / len, dy / len
     end
   end
+  -- Contact FX sit on the target cell. Toss dust stays on the landing
+  -- spot so it is not pinned to the sprites while they are in the air.
   local hit = spawn(session, {
     kind = "effect",
     style = "contact",
@@ -4920,8 +4945,6 @@ function Projectiles.contact(session, side, opts)
     delay = dash and 0.10 or nil,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType],
-    pinTip = toss or nil,
-    followSide = toss and ((side == "player") and "enemy" or "player") or nil,
   })
   if hit then
     hit.dirX, hit.dirY = dirX, dirY

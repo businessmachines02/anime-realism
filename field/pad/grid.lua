@@ -2,8 +2,9 @@
 --
 -- The pad (u, v) is the real position. Pixels are just the drawing lerp
 -- (Coords.padToPx). Occupancy (grid.occ) and walkability (from Survey)
--- decide whether a step is legal. Trainers may step aside when a mon
--- lands on or beside them.
+-- decide whether a step is legal. Trainers walk to the outer rim of a
+-- ~4×4 around the opening; they only step aside when a mon occupies
+-- their cell.
 --
 -- u runs player → foe. v is the dodge / knock axis.
 --
@@ -990,6 +991,86 @@ function Grid.idleWander(grid, ent, side, foeEnt)
     end
   end
   return false
+end
+
+--- True when (u, v) sits on the opening fight line between the two mons
+--- (inclusive of each mon home). Trainers should not idle here.
+function Grid.onFightLine(grid, u, v)
+  local home = grid and grid.home
+  local p = home and home.player
+  local e = home and home.enemy
+  if not (p and e and p.u ~= nil and e.u ~= nil) then
+    return false
+  end
+  if p.v == e.v then
+    local lo, hi = math.min(p.u, e.u), math.max(p.u, e.u)
+    return v == p.v and u >= lo and u <= hi
+  end
+  if p.u == e.u then
+    local lo, hi = math.min(p.v, e.v), math.max(p.v, e.v)
+    return u == p.u and v >= lo and v <= hi
+  end
+  local minU, maxU = math.min(p.u, e.u), math.max(p.u, e.u)
+  local minV, maxV = math.min(p.v, e.v), math.max(p.v, e.v)
+  if u < minU or u > maxU or v < minV or v > maxV then
+    return false
+  end
+  return math.abs((u - p.u) * (e.v - p.v) - (v - p.v) * (e.u - p.u)) <= 1
+end
+
+--- Chebyshev radius of the trainer rim around the opening mid (~4×4).
+Grid.TRAINER_RIM = 2
+
+--- Outer-perimeter seat around the opening fight. Stays inside a ~4×4 of
+--- the start so a wide pad does not send them to the far map edge.
+function Grid.trainerWatchPad(grid, side, ignoreId)
+  local home = grid and grid.home
+  local p = home and home.player
+  local e = home and home.enemy
+  if not (p and e and p.u ~= nil and e.u ~= nil) then
+    return nil
+  end
+  local midU = math.floor((p.u + e.u) / 2)
+  local midV = math.floor((p.v + e.v) / 2)
+  local sx = grid.sx or 1
+  local sy = grid.sy or 0
+  local rim = Grid.TRAINER_RIM or 2
+  local preferLat = (side == "player") and 1 or -1
+  local sizeU = grid.sizeU or 0
+  local sizeV = grid.sizeV or 0
+  local bestU, bestV, bestScore
+  for u = 0, sizeU - 1 do
+    for v = 0, sizeV - 1 do
+      local du, dv = u - midU, v - midV
+      local dist = math.max(math.abs(du), math.abs(dv))
+      if dist >= rim and dist <= rim + 1
+        and not Grid.onFightLine(grid, u, v)
+        and Grid.isFree(grid, u, v, ignoreId) then
+        local along = du * sx + dv * sy
+        local lat = du * (-sy) + dv * sx
+        local ownHalf = (side == "player" and along <= 0)
+          or (side ~= "player" and along >= 0)
+        if ownHalf then
+          local score = dist == rim and 20 or 8
+          if math.abs(lat) >= 1 then
+            score = score + 10
+          end
+          if lat * preferLat > 0 then
+            score = score + 8
+          end
+          if along ~= 0 and math.abs(lat) >= 1 then
+            score = score + 4
+          end
+          score = score + math.abs(along)
+          if not bestScore or score > bestScore then
+            bestScore = score
+            bestU, bestV = u, v
+          end
+        end
+      end
+    end
+  end
+  return bestU, bestV
 end
 
 return Grid

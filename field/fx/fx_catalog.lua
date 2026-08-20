@@ -24,6 +24,18 @@ Catalog.TYPE_COLORS = {
   FAIRY = { 0.94, 0.58, 0.78 },
 }
 
+-- Gen 1 type-split marks these physical; they still fly, so FIELD / REACT
+-- treat them as specials (no close-the-gap, no melee counter from across
+-- the pad). Contact punches stay physical via MOVE_FX style = "contact".
+Catalog.PROJECTILE_SPECIAL = {
+  SWIFT = true,
+  GUST = true,
+  NIGHT_SHADE = true,
+  TRI_ATTACK = true,
+  BONEMERANG = true,
+  ROCK_THROW = true,
+}
+
 -- Named move overrides (style on effect/move; glitz tunes the paint).
 Catalog.MOVE_FX = {
   HYPER_BEAM = { style = "beam", glitz = "hyper", duration = 0.72 },
@@ -222,7 +234,7 @@ Catalog.MOVE_FX = {
   CLAMP = { style = "contact", glitz = "pinch" },
   CRABHAMMER = { style = "contact", glitz = "impact" },
   WATERFALL = { style = "stream", glitz = "bubble" },
-  SEISMIC_TOSS = { style = "contact", glitz = "toss", duration = 0.72 },
+  SEISMIC_TOSS = { style = "contact", glitz = "toss", duration = 1.08 },
   FIRE_PUNCH = {
     style = "contact",
     glitz = "firepunch",

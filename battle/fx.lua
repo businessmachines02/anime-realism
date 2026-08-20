@@ -247,7 +247,21 @@ local GEN1_SPECIAL = {
     ICE = true, PSYCHIC = true, DRAGON = true,
 }
 
+-- Gen 1 type-split is physical; these still fly. Match field/fx/fx_catalog.lua.
+local PROJECTILE_SPECIAL = {
+    SWIFT = true,
+    GUST = true,
+    NIGHT_SHADE = true,
+    TRI_ATTACK = true,
+    BONEMERANG = true,
+    ROCK_THROW = true,
+}
+
 local function defIsSpecial(def, mv)
+    local id = canonMoveId((def and def.id) or (mv and (mv.id or mv.name)))
+    if id and PROJECTILE_SPECIAL[id] then
+        return true
+    end
     local cat = tostring((def and def.category) or (mv and mv.category) or ""):lower()
     if cat == "special" then
         return true
@@ -324,22 +338,60 @@ function Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
     if type(battler) ~= "table" then
         battler = battle and battle.player
     end
-    local function incomingPhysical()
+    local function incomingOpts()
         if type(incoming) ~= "table" then
+            return nil
+        end
+        return {
+            moveId = incoming.id or incoming.moveId,
+            moveType = incoming.type or incoming.moveType,
+            category = incoming.category,
+        }
+    end
+    local function incomingMelee()
+        local opts = incomingOpts()
+        if not opts then
             return false
         end
-        local cat = tostring(incoming.category or ""):lower()
+        local id = canonMoveId(opts.moveId)
+        if id and PROJECTILE_SPECIAL[id] then
+            return false
+        end
+        local melee = hostCall("isMeleeAttack", battle, opts)
+        if melee ~= nil then
+            return melee == true
+        end
+        local cat = tostring(opts.category or ""):lower()
         if cat == "physical" then
             return true
         end
         if cat == "special" or cat == "status" then
             return false
         end
-        local typ = tostring(incoming.type or ""):upper()
+        local typ = tostring(opts.moveType or ""):upper()
         if typ == "" then
             return false
         end
         return not GEN1_SPECIAL[typ]
+    end
+    local function incomingRanged()
+        local opts = incomingOpts()
+        if not opts then
+            return false
+        end
+        local id = canonMoveId(opts.moveId)
+        if id and PROJECTILE_SPECIAL[id] then
+            return true
+        end
+        local ranged = hostCall("isRangedCounter", battle, opts)
+        if ranged ~= nil then
+            return ranged == true
+        end
+        local cat = tostring(opts.category or ""):lower()
+        if cat == "special" then
+            return true
+        end
+        return false
     end
     local byKind = {
         dodge = { "QUICK_ATTACK", "TACKLE", "POUND", "SCRATCH", "DOUBLE_KICK" },
@@ -350,6 +402,7 @@ function Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
         "THUNDERBOLT", "THUNDERSHOCK", "EMBER", "FLAMETHROWER",
         "WATER_GUN", "BUBBLEBEAM", "SURF", "PSYBEAM", "PSYCHIC",
         "ICE_BEAM", "AURORABEAM", "MEGA_DRAIN", "SOLARBEAM",
+        "SWIFT",
     }
     local flavor = byKind[kind] or byKind.brace
     local physical, specials, any = {}, {}, {}
@@ -389,9 +442,17 @@ function Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
         end
         return nil
     end
-    if kind == "dodge" and incomingPhysical() then
+    -- Charge in your face: physical rebound so the counter pose reads.
+    -- Far special / projectile: only a shot back — no melee jab across the pad.
+    if kind == "dodge" and incomingMelee() then
+        return firstKnown(flavor) or physical[1]
+            or firstKnown(specialFlavor) or specials[1] or any[1]
+    end
+    if incomingRanged() then
         return firstKnown(specialFlavor) or specials[1]
-            or firstKnown(flavor) or physical[1] or any[1]
+    end
+    if kind == "dodge" then
+        return firstKnown(flavor) or physical[1] or any[1]
     end
     return firstKnown(flavor) or physical[1] or any[1]
 end

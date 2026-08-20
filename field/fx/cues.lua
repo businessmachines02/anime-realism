@@ -100,6 +100,62 @@ function H.playAnim(ent, name)
     end
 end
 
+Cues.TOSS_DUR = 1.08
+
+function Cues.isTossMove(opts)
+    return H.cueMoveId(opts) == "SEISMIC_TOSS"
+end
+
+function Cues.tossAirPending(session)
+    if not session then
+        return false
+    end
+    local function air(ent)
+        return ent and (ent.anim == "toss" or ent.anim == "tossed")
+    end
+    return air(session.playerMon) or air(session.enemyMon)
+end
+
+--- Knockback / hit pose wait until Seismic Toss slams back down.
+function Cues.tickTossLand(session, Grid)
+    local pending = session and session._pendingTossHit
+    if not pending then
+        return false
+    end
+    if Cues.tossAirPending(session) then
+        return false
+    end
+    session._pendingTossHit = nil
+    local opts = pending.opts or {}
+    opts.via = "toss-land"
+    Grid = Grid or (session._deps and session._deps.Grid)
+    return Cues.apply(session, pending.side, "hit", Grid, nil, session._battle, opts)
+        == true
+end
+
+function H.playTossPair(session, side)
+    local atk = H.sideEnt(session, side)
+    local def = H.foeOf(session, side)
+    H.playAnim(atk, "toss")
+    H.playAnim(def, "tossed")
+    H.punchIn(session, side, {
+        focus = "mid",
+        hold = Cues.TOSS_DUR,
+        lift = 30,
+    })
+end
+
+function H.playMeleeStrike(session, side, ent, opts, jump)
+    opts = opts or {}
+    if Cues.isTossMove(opts) then
+        H.playTossPair(session, side)
+        return Cues.TOSS_DUR
+    end
+    local leaping = jump or (ent and ent._attackJump)
+    H.playAnim(ent, leaping and "jump" or "attack")
+    return leaping and 0.56 or 0.48
+end
+
 -- Punch the camera in. Optical Zoom.offset recrops voxel, so we pan +
 -- time-scale. Clash is the full counter beat (glow, hair, heavy hit).
 function H.punchIn(session, side, spec)
@@ -322,6 +378,10 @@ end
 -- when Damage.isSpecial(type) is true.
 function Cues.isMeleeAttack(opts, Projectiles)
     opts = opts or {}
+    if Projectiles and type(Projectiles.isProjectileSpecial) == "function"
+        and Projectiles.isProjectileSpecial(opts) then
+        return false
+    end
     if Projectiles and type(Projectiles.isTravelFx) == "function"
         and Projectiles.isTravelFx(opts) then
         return false
@@ -825,6 +885,10 @@ function Cues.isRangedCounter(opts, Projectiles)
         and Projectiles.isContactFx(opts) then
         return false
     end
+    if Projectiles and type(Projectiles.isProjectileSpecial) == "function"
+        and Projectiles.isProjectileSpecial(opts) then
+        return true
+    end
     if Projectiles and type(Projectiles.isTravelFx) == "function"
         and Projectiles.isTravelFx(opts) then
         return true
@@ -1022,6 +1086,47 @@ function Cues.inMeleeReach(ent, foe)
     return false
 end
 
+--- Dodge/brace wait for the charger to arrive. Occupancy can already be
+--- adjacent while feet are still two tiles out.
+function Cues.shouldHoldReactPose(session, side, kind, opts)
+    kind = tostring(kind or "")
+    if kind ~= "dodge" and kind ~= "brace" then
+        return false
+    end
+    opts = opts or {}
+    if opts.via == "held-react" or H.cueForce(opts) then
+        return false
+    end
+    local defender = H.sideEnt(session, side)
+    local charger = H.foeOf(session, side)
+    if not (defender and charger and charger._pendingCloseStrike) then
+        return false
+    end
+    return not Cues.inMeleeReach(charger, defender)
+end
+
+function Cues.heldReactPending(session)
+    return session and session._heldReact ~= nil
+end
+
+--- Play a stashed dodge/brace once the charger is in melee.
+function Cues.tickHeldReact(session, Grid)
+    local held = session and session._heldReact
+    if not held then
+        return false
+    end
+    local defender = H.sideEnt(session, held.side)
+    local charger = H.foeOf(session, held.side)
+    if not Cues.inMeleeReach(charger, defender) then
+        return false
+    end
+    session._heldReact = nil
+    local opts = held.opts or {}
+    opts.via = "held-react"
+    return Cues.apply(session, held.side, held.kind, Grid or held.Grid,
+        held.nudgeCamera, held.battle or session._battle, opts) == true
+end
+
 function H.padSnap(ent)
     if not ent then
         return "nil"
@@ -1114,12 +1219,13 @@ function H.playMeleeContact(session, side, ent, opts, jump)
     if Audio and type(Audio.playMove) == "function" then
         pcall(Audio.playMove, battle, opts.moveId, side == "player")
     end
-    H.playAnim(ent, (jump or ent._attackJump) and "jump" or "attack")
+    H.playMeleeStrike(session, side, ent, opts, jump or ent._attackJump)
     local mid = H.cueMoveId(opts)
     if mid then
         H.markStruck(ent, mid)
     end
-    ent._returnAt = H.now(session) + 0.42
+    local hang = Cues.isTossMove(opts) and Cues.TOSS_DUR or 0.42
+    ent._returnAt = H.now(session) + hang
     ent._withdrawAfterStrike = true
 end
 
@@ -1144,6 +1250,18 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     end
     kind = tostring(kind or "attack")
     opts = opts or {}
+    if Cues.shouldHoldReactPose(session, side, kind, opts) then
+        session._heldReact = {
+            side = side,
+            kind = kind,
+            opts = opts,
+            Grid = Grid,
+            nudgeCamera = nudgeCamera,
+            battle = battle,
+        }
+        H.note(session, battle, "cue hold", side, kind, "until charger is near")
+        return true
+    end
     local flags = { "via=" .. tostring(opts.via or "-") }
     local force = H.cueForce(opts)
     if force then

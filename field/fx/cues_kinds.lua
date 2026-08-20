@@ -96,11 +96,11 @@ return function(Cues)
                 side == "player")
         end
         if stepped then
-            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
+            ent._returnAt = H.now(session) + H.playMeleeStrike(session, side, ent, opts, jump)
         else
-            ent._returnAt = nil
+            H.playMeleeStrike(session, side, ent, opts, jump)
+            ent._returnAt = Cues.isTossMove(opts) and (H.now(session) + Cues.TOSS_DUR) or nil
         end
-        H.playAnim(ent, jump and "jump" or "attack")
     end
 
     local function playMeleeApproach(session, side, ent, foe, Grid, g, opts, battle)
@@ -332,8 +332,23 @@ return function(Cues)
         opts = opts or {}
         local shot = session._dodgeCounterShot
         local mid = H.cueMoveId(opts)
+        local Projectiles = session._deps and session._deps.Projectiles
+        local ranged = Cues.isRangedCounter({
+            moveId = opts.moveId,
+            moveType = opts.moveType,
+            category = opts.category,
+        }, Projectiles)
         if shot and shot.side == side and (not mid or shot.moveId == mid) then
             session._dodgeCounterShot = nil
+            H.playAnim(ent, "cast")
+            return true
+        end
+        if ranged then
+            Cues.fireDodgeCounterShot(session, side, {
+                counterMoveId = opts.moveId,
+                counterMoveType = opts.moveType,
+                counterCategory = opts.category or "special",
+            })
             H.playAnim(ent, "cast")
             return true
         end
@@ -381,6 +396,13 @@ return function(Cues)
         local category = H.normCategory(opts.category)
         local clash = opts.clash == true or opts.finishing == true
             or session._clashPunch == true
+
+        if opts.via ~= "toss-land" and not clash
+            and (ent.anim == "tossed" or ent.anim == "toss"
+                or (foe and (foe.anim == "toss" or foe.anim == "tossed"))) then
+            session._pendingTossHit = { side = side, opts = opts }
+            return true
+        end
 
         if type(nudgeCamera) == "function" and battle and not clash then
             nudgeCamera(battle, side, 0.35)
