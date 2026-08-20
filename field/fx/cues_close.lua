@@ -136,6 +136,9 @@ return function(Cues)
         if Cues.awaitingReact(battle) then
             return false
         end
+        if battle and battle._arPendingBraceCounter then
+            return true
+        end
         local p, e = session.playerMon, session.enemyMon
         return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
     end

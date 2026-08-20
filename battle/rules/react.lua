@@ -522,6 +522,16 @@ local function queueReactCounterStrike(battle, result, ctx)
 
     local me = hostCall("playerMonName", battle) or "POKéMON"
     local line = result.counter.line or (me .. " countered!")
+    local deferClash = hostCall("isFieldBattle", battle)
+        and (kind == "brace" or kind == "entrench")
+    if deferClash then
+        -- Rebound after the incoming hit lands; do not clash on the pick.
+        battle._arPendingBraceCounter = {
+            category = category,
+            moveId = moveId,
+            moveType = move and move.type,
+        }
+    end
 
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
@@ -532,6 +542,13 @@ local function queueReactCounterStrike(battle, result, ctx)
             end
             hostCall("pushNotice", battle, line, { kind = "counter" })
             hostCall("armFieldChip", battle, "player", "COUNTER")
+            if battle._arBraceCounterPlayed then
+                battle._arBraceCounterPlayed = nil
+                return
+            end
+            if battle._arPendingBraceCounter then
+                return
+            end
             if hostCall("isFieldBattle", battle) then
                 hostCall("fieldReact", battle, "player", "counter", {
                     category = category,
@@ -644,7 +661,7 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     local outcome = result.action or action
     if result.fireNow then
         outcome = "fire"
-    elseif result.counter and result.counter.ranged then
+    elseif result.forceMiss and result.counter and result.counter.ranged then
         outcome = "dodge_shot"
     elseif result.forceMiss then
         outcome = "dodge"

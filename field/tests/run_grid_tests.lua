@@ -1601,6 +1601,50 @@ function tests.counter_clash_punches_in()
   truthy(enemy._heavyHit, "clash knock is heavy")
 end
 
+function tests.brace_counter_waits_for_the_incoming_hit()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {
+    _arPendingBraceCounter = {
+      category = "physical", moveId = "TACKLE", moveType = "NORMAL",
+    },
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 90,
+    _deps = { Projectiles = Projectiles },
+    _battle = battle,
+  }
+  Cues.tickBraceCounter(session, Grid)
+  eq(player.lastAnim, nil, "brace-counter does not clash on the pick")
+  truthy(Cues.shouldParkEngineQueue(session), "engine waits for the rebound")
+  Cues.apply(session, "player", "hit", Grid, nil, battle, {
+    category = "physical", moveId = "SCRATCH",
+  })
+  eq(player.lastAnim, "hit", "incoming hit still plays")
+  Cues.tickBraceCounter(session, Grid)
+  eq(player.lastAnim, "hit", "clash waits a beat after contact")
+  session._now = 90.4
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "counter", "rebound plays after the hit")
+  eq(battle._arPendingBraceCounter, nil, "pending brace-counter clears")
+  truthy(not Cues.shouldParkEngineQueue(session), "engine resumes after the clash")
+end
+
 function tests.clash_letterbox_spans_world_view()
   local w, h, edge, alpha = Lifecycle.clashLetterboxSize(320, 288)
   eq(w, 320, "vignette is as wide as the world canvas")
@@ -2073,6 +2117,7 @@ function tests.cues_and_dedupe()
   player.lastAnim = nil
   truthy(Cues.apply(session, "player", "miss", Grid, nil, nil), "miss cue")
   eq(player.lastAnim, "miss", "accuracy miss plays a slip-past")
+  eq(enemy.lastAnim, "dodge", "the target sidesteps a miss")
   truthy(Cues.shouldSkipEvent(session, "player", "miss"), "dedupe miss")
 
   session._now = 14.2
@@ -2594,6 +2639,7 @@ function tests.accuracy_miss_plays_whiff_and_chip()
   player.basePx, player.basePy = player.targetPx, player.targetPy
   Cues.tickReturns(session, Grid)
   eq(player.lastAnim, "miss", "melee arrival plays a miss, not a punch")
+  eq(enemy.lastAnim, "dodge", "the foe hops aside on a miss")
   truthy(not player._pendingCloseStrike, "miss consumes the pending strike")
   eq(battle._arStatusChips.player.text, "MISS", "MISS chip sits on the attacker")
   eq(Projectiles.miss(session, "player").style, "puff",
@@ -2714,6 +2760,9 @@ function tests.pump_does_not_lunge_while_accuracy_awaiting()
         side = "player", kind = "attack",
         category = "physical", moveId = "KARATE_CHOP", moveType = "FIGHTING",
       },
+      arOverlapReact = {
+        { side = "enemy", kind = "dodge" },
+      },
     },
   }
   local session = {
@@ -2726,10 +2775,11 @@ function tests.pump_does_not_lunge_while_accuracy_awaiting()
     _deps = { Projectiles = Projectiles },
     _battle = battle,
   }
-  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
-    "awaiting accuracy does not pump the lunge")
+  truthy(Cues.pumpCurrent(session, battle, Grid, nil),
+    "awaiting accuracy still plays the overlap dodge")
   eq(player.lastAnim, nil, "no punch before the roll")
   eq(player._pendingCloseStrike, nil, "close-gap is not armed")
+  eq(enemy.lastAnim, "dodge", "foe dodges while the swing waits on accuracy")
   eq(battle.current._arFieldCueDone, true, "toast is consumed so it cannot double")
 end
 

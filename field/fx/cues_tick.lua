@@ -47,6 +47,7 @@ return function(Cues)
         end
         local battle = session._battle
         local t = H.now(session)
+        Cues.tickBraceCounter(session, Grid)
         local whiff = battle and battle._arWhiffCloseStrike
         if whiff then
             local after = battle._arWhiffCloseAfter

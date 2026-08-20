@@ -660,6 +660,34 @@ function Cues.awaitingReact(battle)
     return battle and battle._arAwaitingReact == true
 end
 
+--- Brace/entrench counter: clash after the incoming hit, not on the pick.
+function Cues.tickBraceCounter(session, Grid)
+    local battle = session and session._battle
+    local pending = battle and battle._arPendingBraceCounter
+    if not pending then
+        return false
+    end
+    local t = H.now(session)
+    if not pending.armedAt then
+        pending.armedAt = t
+    end
+    if pending.fireAt then
+        if t < pending.fireAt then
+            return false
+        end
+    elseif (t - pending.armedAt) < 1.35 then
+        return false
+    end
+    battle._arPendingBraceCounter = nil
+    battle._arBraceCounterPlayed = true
+    return Cues.apply(session, "player", "counter", Grid, nil, battle, {
+        category = pending.category,
+        moveId = pending.moveId,
+        moveType = pending.moveType,
+        via = "brace-counter",
+    }) == true
+end
+
 --- Incoming special/travel used as a dodge-counter (not a punch/bite).
 function Cues.isRangedCounter(opts, Projectiles)
     opts = opts or {}

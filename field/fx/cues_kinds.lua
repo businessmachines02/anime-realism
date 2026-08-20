@@ -342,6 +342,10 @@ return function(Cues)
             return false
         end
         opts = opts or {}
+        if battle and battle._arPendingBraceCounter and side == "player"
+            and not battle._arPendingBraceCounter.fireAt then
+            battle._arPendingBraceCounter.fireAt = H.now(session) + 0.34
+        end
         local foe = H.foeOf(session, side)
         local g = session.grid
         local category = H.normCategory(opts.category)
@@ -453,6 +457,15 @@ return function(Cues)
             Projectiles.miss(session, side)
         end
         H.playAnim(ent, "miss")
+        -- The target hops aside so a miss still reads as a dodge, not a
+        -- quiet no-contact. Skip if they already sidestepped this beat.
+        local foe = H.foeOf(session, side)
+        if foe and foe.anim ~= "dodge" and not H.isExitPlaying(foe) then
+            if Grid and type(Grid.dodge) == "function" then
+                Grid.dodge(session.grid, foe, ent)
+            end
+            H.playAnim(foe, "dodge")
+        end
         ent._returnAt = H.now(session) + 0.44
         return true
     end)
