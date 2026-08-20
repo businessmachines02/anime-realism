@@ -1428,13 +1428,14 @@ function tests.powerful_moves_push_and_impact()
   eq(enemy.lastAnim, "hit", "heavy hit animation")
   truthy(enemy._heavyHit, "heavy hit flag set for sprite knockback")
   eq(enemy.padU, startU + 1, "powerful hit pushes one tile before rock")
-  eq(#(session.projectiles or {}), 2, "power hit + wall impact FX")
+  eq(#(session.projectiles or {}), 3, "power hit + wall impact + ground kick")
   local styles = {}
   for i = 1, #(session.projectiles or {}) do
     styles[session.projectiles[i].style] = true
   end
   truthy(styles.power_hit, "typed burst on the mon")
   truthy(styles.power_impact, "impact burst at the obstacle")
+  truthy(styles.ground_kick, "knockback kicks up the tile underfoot")
 
   Projectiles.clear(session)
   enemy.padU = 4
@@ -1455,9 +1456,33 @@ function tests.powerful_moves_push_and_impact()
     weakStyles[session.projectiles[i].style] = true
   end
   truthy(weakStyles.light_hit, "weak physical hit paints a spark on the target")
+  truthy(weakStyles.ground_kick, "weak hit still kicks up the tile underfoot")
   truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
   truthy((session._hitStopT or 0) > 0, "contact freezes a few frames")
   truthy((session._camShakeT or 0) > 0, "contact bumps the camera")
+
+  Projectiles.clear(session)
+  enemy.padU = 4
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  enemy._heavyHit = nil
+  enemy.lastAnim = nil
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    moveId = "TACKLE",
+    movePower = 35,
+    moveType = "NORMAL",
+    category = "physical",
+    crit = true,
+  }), "critical hit cue")
+  eq(enemy.lastAnim, "hit", "crit still flinches")
+  truthy(enemy._heavyHit, "crit knocks like a heavy hit")
+  local critStyles = {}
+  for i = 1, #(session.projectiles or {}) do
+    critStyles[session.projectiles[i].style] = true
+  end
+  truthy(critStyles.crit, "crit paints a comic starburst")
+  truthy(critStyles.ground_kick, "crit kicks up the tile underfoot")
+  truthy(not critStyles.light_hit, "crit replaces the light spark")
+  truthy(not critStyles.power_hit, "crit uses the starburst, not the typed ring")
 end
 
 function tests.counter_clash_punches_in()
@@ -3841,6 +3866,45 @@ function tests.fire_tongues_and_gust_paint()
   wing.age = 0.12
   wing:draw(0, 0)
   truthy(calls.arc > 0, "wing attack paints a flying crescent slash")
+
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local critPaint = Projectiles.critBurst(session, "enemy")
+  critPaint.age = 0.10
+  critPaint:draw(0, 0)
+  truthy(calls.polygon > 0, "crit paints a comic starburst")
+
+  session._battle.game.overworld.map = {
+    isWaterCell = function() return false end,
+    isGrassCell = function() return true end,
+  }
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local grassKick = Projectiles.groundKick(session, "enemy")
+  eq(grassKick.glitz, "grass", "grass tile kicks leaf blades")
+  grassKick.age = 0.16
+  grassKick:draw(0, 0)
+  truthy(calls.polygon > 0, "grass kick paints leaf blades")
+
+  session._battle.game.overworld.map = {
+    isWaterCell = function() return false end,
+    isGrassCell = function() return false end,
+    isIceCell = function() return true end,
+  }
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local snowKick = Projectiles.groundKick(session, "enemy")
+  eq(snowKick.glitz, "snow", "ice tile kicks snow")
+  snowKick.age = 0.16
+  snowKick:draw(0, 0)
+  truthy(calls.polygon > 0, "snow kick paints ice crystals")
+
+  session._battle.game.overworld.map = nil
+  grid.water = grid.water or {}
+  grid.water[Coords.key(enemy.padU, enemy.padV)] = true
+  calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
+  local waterKick = Projectiles.groundKick(session, "enemy")
+  eq(waterKick.glitz, "water", "water pad kicks spray")
+  waterKick.age = 0.16
+  waterKick:draw(0, 0)
+  truthy(calls.circle > 0, "water kick paints droplets")
   love = prevLove
 end
 
@@ -4963,6 +5027,48 @@ function tests.cover_surface_follows_tile()
 
   eq(Projectiles.coverSurface({ coverScene = "cave", grid = {} }, { padU = 0, padV = 0 }),
     "cave", "cave kit clusters stones")
+end
+
+function tests.hit_ground_follows_tile()
+  local ent = { padU = 1, padV = 1, cellX = 4, cellY = 5, px = 16, py = 32 }
+  local session = { grid = { water = {}, sizeU = 6, sizeV = 4 }, coverScene = "route" }
+  eq(Projectiles.hitGround(session, ent), "dust", "bare route dirt kicks dust")
+
+  session.grid.water[Coords.key(1, 1)] = true
+  eq(Projectiles.hitGround(session, ent), "water", "water pad kicks spray")
+  session.grid.water[Coords.key(1, 1)] = nil
+
+  local grassBattle = {
+    game = {
+      overworld = {
+        map = {
+          isWaterCell = function() return false end,
+          isGrassCell = function(_, x, y) return x == 4 and y == 5 end,
+        },
+      },
+    },
+  }
+  eq(Projectiles.hitGround(session, ent, grassBattle), "grass", "grass tile kicks blades")
+
+  local snowBattle = {
+    game = {
+      overworld = {
+        map = {
+          isWaterCell = function() return false end,
+          isGrassCell = function() return false end,
+          isIceCell = function(_, x, y) return x == 4 and y == 5 end,
+        },
+      },
+    },
+  }
+  eq(Projectiles.hitGround(session, ent, snowBattle), "snow", "ice tile kicks snow")
+
+  eq(Projectiles.hitGround({ coverScene = "gym", grid = {} }, { padU = 0, padV = 0 }),
+    "spark", "gym floor kicks sparks")
+  eq(Projectiles.hitGround({ coverScene = "water", grid = {} }, { padU = 0, padV = 0 }),
+    "sand", "beach kit kicks sand")
+  eq(Projectiles.hitGround({ coverScene = "cave", grid = {} }, { padU = 0, padV = 0 }),
+    "cave", "cave kit kicks pebbles")
 end
 
 function tests.seek_wall_cover_prefers_corner()

@@ -319,6 +319,7 @@ return function(Hooks)
                     moveId = ev.move and ev.move.id,
                     moveType = ev.move and ev.move.type,
                     movePower = ev.move and ev.move.power,
+                    crit = ev.crit == true,
                     via = "dmg",
                 }
 

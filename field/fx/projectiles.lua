@@ -246,6 +246,75 @@ function Projectiles.coverSurface(session, ent, battle)
   return "open"
 end
 
+local function mapIdOf(battle)
+  if battle and type(battle.currentMapId) == "function" then
+    local ok, id = pcall(battle.currentMapId, battle)
+    if ok then
+      return tostring(id or "")
+    end
+  end
+  return ""
+end
+
+local function mapTilesetOf(battle)
+  local raw = mapIdOf(battle)
+  if raw == "" then
+    return ""
+  end
+  local maps = battle and battle.game and battle.game.data and battle.game.data.maps
+  local def = maps and (maps[raw] or maps[raw:upper()])
+  return tostring((type(def) == "table" and def.tileset) or ""):upper()
+end
+
+local function probeMapFlag(map, name, wx, wy)
+  if not (map and wx ~= nil and type(map[name]) == "function") then
+    return false
+  end
+  local ok, flag = pcall(map[name], map, wx, wy)
+  return ok and flag == true
+end
+
+--- Debris flavor for a hit on this sprite (tile underfoot, then the fight kit).
+function Projectiles.hitGround(session, ent, battle)
+  battle = battle or (session and session._battle)
+  local surface = Projectiles.coverSurface(session, ent, battle)
+  if surface == "water" then
+    return "water"
+  end
+  if surface == "grass" then
+    return "grass"
+  end
+  local wx, wy = ent and ent.cellX, ent and ent.cellY
+  local grid = session and session.grid
+  if wx == nil and grid and ent and ent.padU ~= nil and type(Coords.padToWorld) == "function" then
+    wx, wy = Coords.padToWorld(grid, ent.padU, ent.padV)
+  end
+  local map = battle and battle.game and battle.game.overworld and battle.game.overworld.map
+  if probeMapFlag(map, "isIceCell", wx, wy) or probeMapFlag(map, "isSnowCell", wx, wy) then
+    return "snow"
+  end
+  local mapId = mapIdOf(battle):upper()
+  local tileset = mapTilesetOf(battle)
+  if tileset:find("ICE", 1, true) or mapId:find("ICE", 1, true)
+      or mapId:find("SEAFOAM", 1, true) then
+    return "snow"
+  end
+  if surface == "cave" then
+    return "cave"
+  end
+  local scene = tostring(session and session.coverScene or "")
+  if scene == "water" then
+    return "sand"
+  end
+  if scene == "gym" or scene == "indoor" or scene == "city" then
+    return "spark"
+  end
+  if scene == "mountain" then
+    return "cave"
+  end
+  return "dust"
+end
+
 local function battlerCoverHeld(session, battle, battler, isPlayer)
   if battler and (battler.cover == true or battler._arFieldCover == true) then
     return true
@@ -2884,6 +2953,191 @@ local function drawLightHit(g, p, x, y, t)
   drawContact(g, p, x, y, math.min(1, t * 1.15))
 end
 
+local function polyUnpack(pts)
+  local unpackFn = table.unpack or unpack
+  return unpackFn(pts)
+end
+
+--- Comic-book crit starburst (jagged yellow/orange with a thick red rim).
+local function drawCritBurst(g, p, x, y, t)
+  local fade = 1
+  if t > 0.62 then
+    fade = 1 - (t - 0.62) / 0.38
+  end
+  local pop = 0.55
+  if t < 0.16 then
+    local u = t / 0.16
+    pop = 0.35 + u * u * (3 - 2 * u) * 0.92
+  else
+    pop = 1.27 - math.min(0.22, (t - 0.16) * 0.55)
+  end
+  local rot = (p.seed or 0.4) + t * 0.35
+  local n = 10
+  local function star(scale, rLong, rShort)
+    local pts = {}
+    for i = 0, n - 1 do
+      local a = rot + i * (math.pi * 2 / n) - math.pi * 0.5
+      local jagged = 0.86 + 0.14 * math.sin(i * 2.4 + rot * 2)
+      local r = ((i % 2 == 0) and rLong or rShort) * scale * jagged
+      pts[#pts + 1] = x + math.cos(a) * r
+      pts[#pts + 1] = y + math.sin(a) * r * 0.92
+    end
+    return pts
+  end
+  if not g.polygon then
+    g.setColor(1.00, 0.42, 0.08, 0.7 * fade)
+    g.circle("fill", x, y, 10 * pop)
+    g.setColor(1.00, 0.92, 0.22, 0.9 * fade)
+    g.circle("fill", x, y, 4.5 * pop)
+    return
+  end
+  local shadow = star(pop, 17.5, 8.2)
+  for i = 1, #shadow, 2 do
+    shadow[i] = shadow[i] - 1.6
+    shadow[i + 1] = shadow[i + 1] + 1.8
+  end
+  g.setColor(0.12, 0.10, 0.10, 0.28 * fade)
+  g.polygon("fill", polyUnpack(shadow))
+  g.setColor(0.82, 0.08, 0.06, 0.96 * fade)
+  g.polygon("fill", polyUnpack(star(pop, 16.8, 7.6)))
+  g.setColor(1.00, 0.46, 0.08, 0.96 * fade)
+  g.polygon("fill", polyUnpack(star(pop * 0.78, 16.8, 7.6)))
+  g.setColor(1.00, 0.92, 0.22, 0.98 * fade)
+  g.polygon("fill", polyUnpack(star(pop * 0.46, 16.8, 7.6)))
+  g.setColor(1, 1, 0.88, 0.9 * fade)
+  g.circle("fill", x - 0.6, y - 0.8, 2.6 * pop)
+  -- Tiny flying shards.
+  for i = 1, 6 do
+    local a = rot + i * 1.05
+    local dist = (8 + i) * pop + t * 6
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.72
+    g.setColor(1.00, 0.38, 0.08, (0.7 - t * 0.4) * fade)
+    if g.polygon then
+      local s = 1.6 + (i % 2) * 0.5
+      g.polygon("fill",
+        px, py - s,
+        px + s * 0.55, py,
+        px, py + s * 0.45,
+        px - s * 0.55, py)
+    else
+      g.circle("fill", px, py, 1.2)
+    end
+  end
+end
+
+--- Kick-up debris from the tile under the struck mon (grass / snow / water / …).
+local function drawGroundKick(g, p, x, y, t, c, glitz)
+  local fade = 1
+  if t > 0.72 then
+    fade = 1 - (t - 0.72) / 0.28
+  end
+  local age = p.age or 0
+  local dx = p.dirX or 1
+  local dy = p.dirY or 0
+  local nx, ny = -dy, dx
+  glitz = glitz or "dust"
+  g.setColor(c[1], c[2], c[3], 0.22 * fade)
+  g.ellipse("fill", x, y + 1, 6 + t * 5, 2.2 + t * 1.2)
+
+  if glitz == "grass" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.35 + (i - 1) * 0.04)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (5 + i) + nx * side * (2 + (i % 3))
+      local py = y - math.sin(u * math.pi) * (5 + i * 0.4) + dy * u * 2
+      drawLeafBlade(g, px, py, age * 10 + i, 0.52 + (i % 3) * 0.08, c,
+        (0.9 - u * 0.35) * fade)
+    end
+    return
+  end
+
+  if glitz == "water" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.4 + (i % 4) * 0.05)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (1.6 + i * 0.35)
+      local py = y - math.sin(u * math.pi) * (6 + i * 0.5)
+      local r = 1.5 + (i % 3) * 0.45
+      g.setColor(c[1], c[2], c[3], (0.7 - u * 0.3) * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(1, 1, 1, 0.55 * fade * (1 - u))
+      g.circle("fill", px - r * 0.3, py - r * 0.35, r * 0.35)
+    end
+    g.setColor(0.55, 0.82, 1.00, 0.35 * fade)
+    g.ellipse("fill", x, y + 1, 7 + t * 6, 2.4)
+    return
+  end
+
+  if glitz == "snow" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.3 + (i - 1) * 0.04)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (2 + i * 0.3)
+      local py = y - math.sin(u * math.pi) * (5 + i * 0.35) - u * 2
+      drawIceCrystal(g, px, py, age * 8 + i, 0.7 + (i % 2) * 0.18, c,
+        (0.9 - u * 0.3) * fade)
+    end
+    g.setColor(0.92, 0.96, 1.00, 0.3 * fade)
+    g.ellipse("fill", x, y + 1, 6 + t * 4, 2)
+    return
+  end
+
+  if glitz == "cave" then
+    for i = 1, 7 do
+      local u = math.min(1, t * 1.25 + (i % 3) * 0.06)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (1.4 + i * 0.4)
+      local py = y - math.sin(u * math.pi) * (3 + i * 0.3)
+      local r = 1.3 + (i % 3) * 0.5
+      g.setColor(c[1], c[2], c[3], (0.75 - u * 0.3) * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(0.55, 0.42, 0.28, 0.4 * fade)
+      g.circle("fill", px - 0.3, py - 0.3, r * 0.4)
+    end
+    return
+  end
+
+  if glitz == "sand" then
+    for i = 1, 9 do
+      local a = i * 0.7 + t * 2
+      local dist = 3 + t * (7 + i % 3)
+      local px = x + math.cos(a) * dist * 0.7 + dx * t * 4
+      local py = y + math.sin(a) * dist * 0.35 - t * 3
+      g.setColor(c[1], c[2], c[3], (0.7 - t * 0.35) * fade)
+      g.circle("fill", px, py, 1.2 + (i % 2) * 0.4)
+    end
+    return
+  end
+
+  if glitz == "spark" then
+    for i = 1, 6 do
+      local a = i * 1.047 + t * 4
+      local dist = 3 + t * 8
+      g.setColor(1.00, 0.88, 0.35, (0.8 - t * 0.4) * fade)
+      g.setLineWidth(1.4)
+      g.line(x, y,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.5 - t * 2)
+      g.setColor(1, 1, 0.85, 0.7 * fade)
+      g.circle("fill", x + math.cos(a) * dist * 0.6, y - 1, 0.9)
+    end
+    return
+  end
+
+  -- Dust / dirt fallback.
+  for i = 1, 6 do
+    local a = i * 1.05 + t * 1.6
+    local dist = 3 + t * 8
+    local px = x + math.cos(a) * dist * 0.65 + dx * t * 3
+    local py = y - t * (5 + i % 3) + math.sin(a) * 1.4
+    g.setColor(c[1], c[2], c[3], (0.6 - t * 0.3) * fade)
+    g.circle("fill", px, py, 1.8 - t * 0.8)
+    g.setColor(1, 1, 1, 0.2 * fade)
+    g.circle("fill", px - 0.3, py - 0.4, 0.6)
+  end
+end
+
 
 local STYLE_PAINTERS = {}
 
@@ -3234,6 +3488,12 @@ Projectiles.registerStyle("contact", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
+end)
+Projectiles.registerStyle("crit", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawCritBurst(g, p, x, y, t)
+end)
+Projectiles.registerStyle("ground_kick", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawGroundKick(g, p, x, y, t, c, glitz)
 end)
 Projectiles.registerStyle("bonk", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Self-hit: impact ring plus popping stars.
@@ -4264,6 +4524,74 @@ function Projectiles.lightHit(session, side, opts)
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType] or TYPE_COLORS.NORMAL,
   })
+end
+
+local GROUND_KICK_COLORS = {
+  grass = { 0.38, 0.78, 0.28 },
+  water = { 0.32, 0.68, 1.00 },
+  snow = { 0.86, 0.94, 1.00 },
+  cave = { 0.58, 0.46, 0.32 },
+  sand = { 0.82, 0.66, 0.36 },
+  spark = { 1.00, 0.88, 0.32 },
+  dust = { 0.72, 0.64, 0.48 },
+}
+
+--- Comic-book starburst on a critical hit.
+function Projectiles.critBurst(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local roll = (love and love.math and love.math.random) or math.random
+  return spawn(session, {
+    kind = "effect",
+    style = "crit",
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.42,
+    arc = 0,
+    seed = roll() * math.pi * 2,
+    color = TYPE_COLORS.FIRE,
+    pinTip = true,
+    followSide = side,
+  })
+end
+
+--- Kick up the tile under the struck mon (grass, snow, water, dirt, …).
+function Projectiles.groundKick(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local glitz = Projectiles.hitGround(session, target, session and session._battle)
+  local from = (side == "player") and session.enemyMon or session.playerMon
+  local fx, fy = 1, 0
+  if from then
+    local ox, oy = center(session, from)
+    if ox then
+      local dx, dy = x - ox, y - oy
+      local len = math.sqrt(dx * dx + dy * dy)
+      if len > 0.1 then
+        fx, fy = dx / len, dy / len
+      end
+    end
+  end
+  local p = spawn(session, {
+    kind = "effect",
+    style = "ground_kick",
+    glitz = glitz,
+    sx = x, sy = y + 5, ex = x + fx * 6, ey = y + 3,
+    duration = 0.40,
+    arc = 4,
+    color = GROUND_KICK_COLORS[glitz] or GROUND_KICK_COLORS.dust,
+  })
+  if p then
+    p.dirX, p.dirY = fx, fy
+  end
+  return p
 end
 
 function Projectiles.status(session, side, opts)

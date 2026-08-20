@@ -344,10 +344,13 @@ return function(Cues)
         local Projectiles = session._deps and session._deps.Projectiles
         local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
             and Projectiles.isPowerfulMove(opts)
-        H.impactKick(session, { powerful = powerful, clash = clash })
-        if clash or powerful then
+        local crit = opts.crit == true
+        H.impactKick(session, { powerful = powerful or crit, clash = clash })
+        if clash or powerful or crit then
             local obstacle = Grid.obstacleBehind(g, ent, foe, clash and 1 or 2)
-            if not session._clashHitFx and Projectiles and Projectiles.powerHit then
+            if crit and Projectiles and type(Projectiles.critBurst) == "function" then
+                Projectiles.critBurst(session, side, opts)
+            elseif not session._clashHitFx and Projectiles and Projectiles.powerHit then
                 Projectiles.powerHit(session, side, opts)
             end
             session._clashHitFx = nil
@@ -356,11 +359,17 @@ return function(Cues)
                 Projectiles.wallImpact(session, obstacle, opts)
             end
             ent._heavyHit = true
+            if Projectiles and type(Projectiles.groundKick) == "function" then
+                Projectiles.groundKick(session, side, opts)
+            end
             H.playAnim(ent, "hit")
             return true
         end
         if Projectiles and type(Projectiles.lightHit) == "function" then
             Projectiles.lightHit(session, side, opts)
+        end
+        if Projectiles and type(Projectiles.groundKick) == "function" then
+            Projectiles.groundKick(session, side, opts)
         end
         local cat = category or session._lastAttackCategory or "physical"
         -- Both can shove; physical more often / more reliably.
