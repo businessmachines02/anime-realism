@@ -35,7 +35,7 @@ Every pose uses the same **four columns**. Stack more four-row blocks under walk
 
 ## What each animation is
 
-Draw every pose in all four facings (front, left, right, back). Each pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). Keep the Pokémon inside the 32-pixel cell; the game still slides them on the pad.
+Draw every pose in all four facings (front, left, right, back). Each pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MIN` / `FIT_BY_HEIGHT` in `bake_pmd.py`, never below 20px). The game still slides them on the pad.
 
 ### Walk
 
@@ -191,7 +191,7 @@ Preview (`followers/preview.html`) is for the four-column PNG kit. PMD Collab pa
 PMD Collab zips are **source**, not runtime. Unpack into `assets/followers/0005/`, then bake a kit the pad can actually draw:
 
 ```
-python3 assets/followers/bake_pmd.py 0005
+./assets/followers/run_bake.sh 0005
 ```
 
 That writes `follower_005.png` (4 columns × combat rows, extras after Idle/Faint). Field battle loads that PNG only — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).

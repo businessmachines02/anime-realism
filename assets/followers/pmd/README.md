@@ -3,10 +3,11 @@
 Unpack a [PMD Sprite Repository](https://sprites.pmdcollab.org/) zip, then **bake** it. The pad never loads `AnimData.xml` or `*-Anim.png` in a fight — those strips wedge the 3D field if they go through the follower slicer.
 
 ```
-python3 assets/followers/bake_pmd.py 0005
+./assets/followers/run_bake.sh 0005
+./assets/followers/run_bake.sh
 ```
 
-That writes `follower_005.png`. Drop-in `follower_XXX.png` still wins if you draw one by hand.
+That writes `follower_005.png`. The script creates `assets/followers/.venv` (Pillow) on first run if needed. Drop-in `follower_XXX.png` still wins if you draw one by hand.
 
 ## Folder
 
@@ -27,8 +28,8 @@ A hand-drawn `follower_005.png` still wins if present.
 Bake after unpacking:
 
 ```
-python3 assets/followers/bake_pmd.py 0005
-python3 assets/followers/bake_pmd.py
+./assets/followers/run_bake.sh 0005
+./assets/followers/run_bake.sh
 ```
 
 ## How to get a pack

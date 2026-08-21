@@ -26,6 +26,63 @@ COLS = 4
 BLOCK_ROWS = 4
 DEX_DIR = re.compile(r"^\d{3,4}$")
 
+# Occupancy: after trim, scale into the 32px cell (feet on the bottom).
+# Caps are never below FIT_MIN. Art smaller than its cap stays that size
+# unless FIT_UPSCALE is True (nearest-neighbor, can look chunky).
+FIT_MIN = 23
+FIT_MAX = 32
+FIT_UPSCALE = False
+
+# (height_m exclusive upper bound, max px). First match wins.
+# Add more steps for finer-grained variation, especially for smaller and larger Pokémon.
+# <0.5m → 21, <0.8m → 23, <1.0m → 24, <1.2m → 25, <1.4m → 27, <1.6m → 28, <2.0m → 29, <2.5m → 30, else FIT_MAX.
+FIT_BY_HEIGHT: list[tuple[float, int]] = [
+    (0.5, 21),
+    (0.8, 23),
+    (1.0, 24),
+    (1.2, 25),
+    (1.4, 27),
+    (1.6, 28),
+    (2.0, 29),
+    (2.5, 30),
+]
+# Dex → max px. Still clamped to [FIT_MIN, CELL].
+FIT_MAX_BY_DEX: dict[int, int] = {
+    3: 32,    # Venusaur - make a bit bigger
+    6: 29,    # Charizard - make a bit bigger
+    9: 29,    # Blastoise - make a bit bigger
+    19: 20,   # Rattata
+    37: 20,   # Vulpix
+    58: 20,   # Growlithe
+    133: 20,  # Eevee
+    134: 20,  # Vaporeon (1.0m would otherwise sit in the 24px band)
+    135: 20,  # Jolteon
+    136: 20,  # Flareon
+    196: 20,  # Espeon
+    197: 20,  # Umbreon
+}
+
+# Gen 1 Pokédex height in meters. Index 0 unused.
+HEIGHT_M = [
+    0,
+    0.7, 1.0, 2.4, 0.6, 1.1, 1.7, 0.5, 1.0, 1.6, 0.3,  # 1–10
+    0.7, 1.1, 0.3, 0.6, 1.0, 0.3, 1.1, 1.5, 0.3, 0.7,  # 11–20
+    0.3, 1.2, 2.0, 3.5, 0.4, 0.8, 0.6, 1.0, 0.4, 0.8,  # 21–30
+    1.3, 0.5, 0.9, 1.4, 0.6, 1.3, 0.6, 1.1, 0.5, 1.0,  # 31–40
+    0.8, 1.6, 0.5, 0.8, 1.2, 0.3, 1.0, 1.0, 1.5, 0.2,  # 41–50
+    0.7, 0.4, 1.0, 0.8, 1.7, 0.5, 1.0, 0.7, 1.9, 0.6,  # 51–60
+    1.0, 1.3, 0.9, 1.3, 1.5, 0.8, 1.5, 1.6, 0.7, 1.0,  # 61–70
+    1.7, 0.9, 1.6, 0.4, 1.0, 1.4, 1.0, 1.7, 1.2, 1.6,  # 71–80
+    0.3, 1.0, 0.8, 1.4, 1.8, 1.1, 1.7, 0.9, 1.2, 0.3,  # 81–90
+    1.5, 1.3, 1.6, 1.5, 8.8, 1.0, 1.6, 0.4, 1.3, 0.5,  # 91–100
+    1.2, 0.4, 2.0, 0.4, 1.0, 1.5, 1.4, 1.2, 0.6, 1.2,  # 101–110
+    1.0, 1.9, 1.1, 1.0, 2.2, 0.4, 1.2, 0.6, 1.3, 0.8,  # 111–120
+    1.1, 1.3, 1.5, 1.4, 1.1, 1.3, 1.5, 1.4, 0.9, 6.5,  # 121–130
+    2.5, 0.3, 0.3, 1.0, 0.8, 0.9, 0.8, 0.4, 1.0, 0.5,  # 131–140
+    1.3, 1.8, 2.1, 1.7, 1.6, 2.0, 1.8, 4.0, 2.2, 2.0,  # 141–150
+    0.4,  # 151 Mew
+]
+
 # Pad pose → PMD anim names. First sheet with 4+ directions wins; 1-dir
 # strips (Cringe, LeapForth) are last-resort so facings stay distinct.
 # Idle then Faint sit LAST so combat rows stay at the same Y. Extra
@@ -196,15 +253,34 @@ def trim_sprite(frame: Image.Image) -> Image.Image:
     return frame.crop(bbox)
 
 
-def fit_cell(frame: Image.Image) -> Image.Image:
+def fit_cap(dex: int | None) -> int:
+    if dex is not None and dex in FIT_MAX_BY_DEX:
+        cap = FIT_MAX_BY_DEX[dex]
+    else:
+        cap = FIT_MAX
+        h = HEIGHT_M[dex] if dex and 0 < dex < len(HEIGHT_M) else None
+        if h is not None:
+            cap = FIT_MAX
+            for limit, px in FIT_BY_HEIGHT:
+                if h < limit:
+                    cap = px
+                    break
+    return max(FIT_MIN, min(CELL, int(cap)))
+
+
+def fit_cell(frame: Image.Image, max_px: int | None = None) -> Image.Image:
     frame = trim_sprite(key_magenta(frame))
     cell = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
     fw, fh = frame.size
     if fw < 1 or fh < 1:
         return cell
-    scale = min(CELL / fw, CELL / fh, 1.0)
+    cap = CELL if max_px is None else max(1, min(CELL, int(max_px)))
+    limit = min(cap / fw, cap / fh)
+    scale = limit if FIT_UPSCALE else min(limit, 1.0)
     nw = max(1, int(round(fw * scale)))
     nh = max(1, int(round(fh * scale)))
+    nw = min(nw, CELL)
+    nh = min(nh, CELL)
     resized = frame if (nw == fw and nh == fh) else frame.resize(
         (nw, nh), Image.Resampling.NEAREST)
     # Feet on the bottom of the 32px cell, centered.
@@ -220,7 +296,7 @@ def slice_frame(sheet: Image.Image, col: int, row: int, fw: int, fh: int) -> Ima
     return sheet.crop((x, y, x + fw, y + fh))
 
 
-def bake_block(pack_dir: Path, anim: dict, dirs: int):
+def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None):
     png = pack_dir / f"{anim['source']}-Anim.png"
     if not png.is_file():
         return None
@@ -235,12 +311,12 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int):
             row = min(pmd_row, dirs - 1)
             for col, fi in enumerate(idxs):
                 fi = min(fi, cols - 1)
-                cell = fit_cell(slice_frame(sheet, fi, row, fw, fh))
+                cell = fit_cell(slice_frame(sheet, fi, row, fw, fh), max_px)
                 block.paste(cell, (col * CELL, face * CELL), cell)
         return block, dirs, cols, idxs, fw, fh
 
 
-def bake_dir(pack_dir: Path, out_path: Path) -> bool:
+def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
     xml_path = pack_dir / "AnimData.xml"
     if not xml_path.is_file():
         return False
@@ -248,6 +324,7 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
     blocks: list[Image.Image] = []
     by_pose: dict[str, Image.Image] = {}
     used = 0
+    max_px = fit_cap(dex)
     for pose, names in POSES:
         anim, dirs = pose_anim(
             pack_dir, by_name, names,
@@ -259,7 +336,7 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
             if pose == "idle" or pose == "faint":
                 continue
             break
-        baked = bake_block(pack_dir, anim, dirs)
+        baked = bake_block(pack_dir, anim, dirs, max_px)
         if not baked:
             if pose == "idle" or pose == "faint":
                 continue
@@ -275,7 +352,7 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
     if used >= 8:
         for pose, names, prefer, fallback in EXTRA_POSES:
             anim, dirs = pose_anim(pack_dir, by_name, names, prefer_named=prefer)
-            baked = bake_block(pack_dir, anim, dirs) if anim else None
+            baked = bake_block(pack_dir, anim, dirs, max_px) if anim else None
             if baked:
                 block, dirs, cols, idxs, fw, fh = baked
                 print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
@@ -343,9 +420,10 @@ def main(argv: list[str]) -> int:
         if not dex or int(dex) == 0:
             sys.stderr.write(f"skip {pack_dir}: no dex folder\n")
             continue
-        out = ROOT / f"follower_{int(dex):03d}.png"
-        print(f"bake {pack_dir} → {out.name}")
-        if not bake_dir(pack_dir, out):
+        dex_n = int(dex)
+        out = ROOT / f"follower_{dex_n:03d}.png"
+        print(f"bake {pack_dir} → {out.name} (fit≤{fit_cap(dex_n)})")
+        if not bake_dir(pack_dir, out, dex_n):
             ok = False
     return 0 if ok else 1
 
