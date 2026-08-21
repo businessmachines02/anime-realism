@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flatten a PMD Collab pack into the 4×24 field kit (follower_XXX.png).
+"""Flatten a PMD Collab pack into the 4×N field kit (follower_XXX.png).
 
 Battle never loads AnimData.xml or *-Anim.png. Unpack a SpriteBot zip, then:
 
@@ -28,6 +28,7 @@ DEX_DIR = re.compile(r"^\d{3,4}$")
 
 # Pad pose → PMD anim names. First sheet with 4+ directions wins; 1-dir
 # strips (Cringe, LeapForth) are last-resort so facings stay distinct.
+# Idle then Faint sit LAST so combat rows stay at the same Y.
 POSES = [
     ("walk", ("Walk", "Idle")),
     ("dodge", ("Hop", "Rotate", "LeapForth", "Walk")),
@@ -35,6 +36,8 @@ POSES = [
     ("physical", ("Attack", "Strike", "Swing", "Kick")),
     ("special", ("Shoot", "Charge", "SpAttack", "Strike")),
     ("hit", ("Pain", "Hurt", "Cringe")),
+    ("idle", ("Idle", "Walk")),
+    ("faint", ("Faint", "Sleep", "EventSleep", "Pain", "Hurt")),
 ]
 
 # Kit rows: front, left, right, back.
@@ -126,8 +129,13 @@ def pick_anim_frames(anim: dict, count: int) -> tuple[int, int, int, int]:
     return (start, peak, recover, settle)
 
 
-def pose_anim(pack_dir: Path, by_name: dict, names: tuple[str, ...]):
-    """First 4+ direction sheet in `names`; otherwise the best 1-dir fallback."""
+def pose_anim(pack_dir: Path, by_name: dict, names: tuple[str, ...],
+              prefer_named: bool = False):
+    """First 4+ direction sheet in `names`; otherwise the best 1-dir fallback.
+
+    `prefer_named`: take the first existing sheet even if it is 1-dir
+    (Faint/Idle should not lose to an 8-dir Hurt).
+    """
     fallback = None
     fallback_dirs = -1
     for name in names:
@@ -139,7 +147,7 @@ def pose_anim(pack_dir: Path, by_name: dict, names: tuple[str, ...]):
             continue
         with Image.open(png) as im:
             dirs = max(1, im.height // cand["height"])
-        if dirs >= 4:
+        if prefer_named or dirs >= 4:
             return cand, dirs
         if dirs > fallback_dirs:
             fallback = cand
@@ -202,11 +210,15 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
     blocks: list[Image.Image] = []
     used = 0
     for pose, names in POSES:
-        anim, dirs = pose_anim(pack_dir, by_name, names)
+        anim, dirs = pose_anim(
+            pack_dir, by_name, names,
+            prefer_named=(pose in ("idle", "faint")))
         if not anim:
             if pose == "walk":
                 sys.stderr.write(f"{pack_dir}: no Walk/Idle PNG\n")
                 return False
+            if pose == "idle" or pose == "faint":
+                continue
             break
         sheet = Image.open(pack_dir / f"{anim['source']}-Anim.png")
         fw, fh = anim["width"], anim["height"]

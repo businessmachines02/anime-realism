@@ -1,8 +1,8 @@
 -- Field battle — OW follower sprites as battlers + motion.
 --
--- Pad battlers prefer this mod's 4×24 combat kits
+-- Pad battlers prefer this mod's 4-column combat kits
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
--- rows play dodge / brace / physical / special / hit when present. FIELD
+-- rows play dodge / brace / physical / special / hit, then idle, then faint. FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
 -- fallback. Overworld followers behind the player stay on those packs.
 -- Never load PMD `AnimData.xml` or `*-Anim.png` here — those strips wedge
@@ -179,21 +179,25 @@ local function sheetFromPath(path, frames, walker)
 end
 
 -- Combat kit: 4 columns × N 4-row blocks, 32px cells, 128px wide.
--- Blocks (top → bottom): walk, dodge, brace, physical, special, hit.
+-- Blocks (top → bottom): walk, dodge, brace, physical, special, hit, idle, faint.
 Sprites.KIT_CELL = 32
 Sprites.KIT_COLS = 4
 Sprites.KIT_FACE = { down = 0, left = 1, right = 2, up = 3 }
+Sprites.KIT_IDLE_BLOCK = 6
+Sprites.KIT_FAINT_BLOCK = 7
 Sprites.KIT_BLOCK = {
-  walk = 0, idle = 0,
+  walk = 0,
+  idle = 6,
   dodge = 1, brace = 2,
   attack = 3, jump = 3, counter = 3, miss = 3, physical = 3,
   cast = 4, special = 4,
   hit = 5, selfhit = 5,
+  faint = 7,
 }
 
 local KIT_ANIM_DUR = {
   attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
-  cast = 0.42, brace = 0.40, selfhit = 0.46,
+  cast = 0.42, brace = 0.40, selfhit = 0.46, faint = 0.80,
 }
 
 function Sprites.kitCandidatePaths(mod, game, species)
@@ -271,13 +275,21 @@ end
 
 function Sprites.kitColForAnim(ent, anim, moving)
   anim = anim or "idle"
-  local block = Sprites.KIT_BLOCK[anim] or 0
-  if block == 0 then
+  if anim == "idle" and moving then
+    anim = "walk"
+  end
+  local blocks = (ent and (ent._kitBlocks or 1)) or 1
+  local block = Sprites.kitBlockForAnim(anim, blocks)
+  if anim == "walk" or (anim == "idle" and block == 0) then
     if moving then
       return math.floor((ent and ent._walkT or 0) * 8) % 4
     end
     -- Walk cols 0 and 2 are idle; cycle them so standing is not frozen.
     return (math.floor((ent and ent._idleT or 0) / 0.5) % 2) * 2
+  end
+  if anim == "idle" then
+    -- PMD Idle is a breathing loop, not a one-shot.
+    return math.floor((ent and ent._idleT or 0) / 0.28) % 4
   end
   local dur = KIT_ANIM_DUR[anim]
   if anim == "dodge" then
@@ -319,6 +331,19 @@ function Sprites.kitCellOrigin(ent, facing)
   return col * cell, row * cell
 end
 
+--- Facing handed to Dramatic Shape. GSC sheets draw right as a flip of
+--- left; kits already have a right row, so that extra mirror makes both
+--- battlers look the same way.
+function Sprites.billboardFacing(facing, kit)
+  if facing ~= "up" and facing ~= "down" and facing ~= "left" and facing ~= "right" then
+    facing = "down"
+  end
+  if kit and facing == "right" then
+    return "left"
+  end
+  return facing
+end
+
 local function syncKitPose(ent, moving)
   if not ent then
     return
@@ -326,6 +351,9 @@ local function syncKitPose(ent, moving)
   local anim = ent.anim or "idle"
   if (anim == "attack" or anim == "jump") and ent._pendingCloseStrike then
     anim = "idle"
+  end
+  if anim == "idle" and moving then
+    anim = "walk"
   end
   local blocks = ent._kitBlocks or (ent.sprite and ent.sprite.kitBlocks) or 1
   ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks)
@@ -1120,7 +1148,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     if self._kitCol then
       phase = (self._kitCol % 2 == 1) and 1 or 0
     end
-    return sprite, self.px, self.py, self.facing, phase, false
+    local poseFacing = Sprites.billboardFacing(self.facing, sprite and sprite.kit)
+    return sprite, self.px, self.py, poseFacing, phase, false
   end
 
   function ent:walkPhase()
@@ -1476,6 +1505,10 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     end
     local bobAmp = self.bobAmp or 3.2
     local bobSpeed = self.bobSpeed or 5.0
+    if Sprites.kitBlockForAnim("idle", self._kitBlocks or 1) > 0 then
+      -- Dedicated Idle strip already breathes; keep a tiny lift only.
+      bobAmp = bobAmp * 0.18
+    end
     if status == "FRZ" then
       bobAmp = bobAmp * 0.12
       bobSpeed = bobSpeed * 0.25
@@ -1908,23 +1941,30 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "faint" then
-      -- Stagger, then sink and shrink into the ground (opposite of recall).
-      local dur = 0.80
+      -- Stagger, then sink. Kit Faint plays the collapse; missing block
+      -- keeps the old shrink-into-the-ground read.
+      local dur = KIT_ANIM_DUR.faint
+      local kit = Sprites.usesKitPose(self, "faint")
       self.animT = (self.animT or 0) + dt
       local t = math.min(1, self.animT / dur)
-      local wobble = 0
-      if t < 0.25 then
-        local u = t / 0.25
-        wobble = math.sin(u * math.pi * 5) * (1 - u) * 4
+      if kit then
+        oy = oy + t * t * 6
+        self.drawScale = 1
+      else
+        local wobble = 0
+        if t < 0.25 then
+          local u = t / 0.25
+          wobble = math.sin(u * math.pi * 5) * (1 - u) * 4
+        end
+        local fall = 0
+        if t > 0.16 then
+          local u = (t - 0.16) / 0.84
+          fall = u * u
+        end
+        ox = ox + wobble
+        oy = oy + fall * 20
+        self.drawScale = math.max(0.06, 1 - fall)
       end
-      local fall = 0
-      if t > 0.16 then
-        local u = (t - 0.16) / 0.84
-        fall = u * u
-      end
-      ox = ox + wobble
-      oy = oy + fall * 20
-      self.drawScale = math.max(0.06, 1 - fall)
       if self.animT >= dur then
         self._faintDone = true
         self.hidden = true

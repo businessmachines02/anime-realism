@@ -7085,7 +7085,12 @@ function tests.kit_candidate_paths_prefer_dex_then_name()
 end
 
 function tests.kit_block_uses_combat_rows()
-  eq(Sprites.kitBlockForAnim("idle", 6), 0, "idle is walk")
+  eq(Sprites.kitBlockForAnim("idle", 6), 0, "idle is walk on a 6-block kit")
+  eq(Sprites.kitBlockForAnim("idle", 7), 6, "idle is the extra 7th block")
+  eq(Sprites.kitBlockForAnim("idle", 8), 6, "idle stays 7th when faint is present")
+  eq(Sprites.kitBlockForAnim("faint", 7), 0, "faint falls back without the 8th block")
+  eq(Sprites.kitBlockForAnim("faint", 8), 7, "faint is the extra 8th block")
+  eq(Sprites.kitBlockForAnim("walk", 7), 0, "walk stays the top block")
   eq(Sprites.kitBlockForAnim("dodge", 6), 1, "dodge block")
   eq(Sprites.kitBlockForAnim("brace", 6), 2, "brace block")
   eq(Sprites.kitBlockForAnim("attack", 6), 3, "physical block")
@@ -7107,6 +7112,10 @@ function tests.kit_pose_requires_combat_block()
     "walk-only kit keeps old hop")
   truthy(not Sprites.usesKitPose({ _kitBlocks = 6 }, "dodge"),
     "non-kit sheet keeps old hop")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 8 }, "faint"),
+    "8-block kit plays faint")
+  truthy(not Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 7 }, "faint"),
+    "no faint block keeps the shrink")
 end
 
 function tests.kit_dodge_keeps_slide_without_squash()
@@ -7137,10 +7146,16 @@ end
 function tests.kit_col_walk_and_combat()
   eq(Sprites.kitColForAnim({ _walkT = 0 }, "idle", false), 0, "idle column")
   eq(Sprites.kitColForAnim({ _idleT = 0.6 }, "idle", false), 2, "idle other stand")
+  eq(Sprites.kitColForAnim({ _walkT = 0.2, _kitBlocks = 7 }, "idle", true), 1,
+    "moving uses walk columns")
+  eq(Sprites.kitColForAnim({ _idleT = 0.3, _kitBlocks = 7 }, "idle", false), 1,
+    "dedicated idle loops all four frames")
   eq(Sprites.kitColForAnim({ _walkT = 0.2 }, "idle", true), 1, "walk step column")
   eq(Sprites.kitColForAnim({ animT = 0 }, "attack", false), 0, "physical start")
   eq(Sprites.kitColForAnim({ animT = 0.18 }, "attack", false), 2, "physical recover")
   eq(Sprites.kitColForAnim({ animT = 0.4 }, "cast", false), 3, "special settle")
+  eq(Sprites.kitColForAnim({ animT = 0.7, _kitBlocks = 8 }, "faint", false), 3,
+    "faint settles on the last column")
 end
 
 function tests.kit_cell_origin_uses_block_facing_and_col()
@@ -7152,6 +7167,17 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "down")
   eq(u, 0, "walk front origin x")
   eq(v, 0, "walk front origin y")
+  u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "right")
+  eq(v, 64, "walk right is its own row, not a flipped left")
+end
+
+function tests.kit_billboard_does_not_mirror_right()
+  eq(Sprites.billboardFacing("right", true), "left",
+    "kit right is drawn, not GSC-flipped")
+  eq(Sprites.billboardFacing("left", true), "left", "kit left stays left")
+  eq(Sprites.billboardFacing("down", true), "down", "kit down stays down")
+  eq(Sprites.billboardFacing("right", false), "right",
+    "GSC sheets still flip right")
 end
 
 function tests.kit_billboards_stay_outermost_after_wilds_wrap()
