@@ -1,20 +1,20 @@
 -- Field battle — layout helpers (axis, poses, foe find).
 --
--- Tight opening along the fight axis (mons adjacent, trainers one tile back):
---   player trainer @ mon-1, player mon, enemy mon (adjacent), foe trainer @ mon+1
+-- Opening along the fight axis (one empty cell between mons, trainers one
+-- tile back): player trainer, player mon, empty, enemy mon, foe trainer.
 -- Survey expands walkable cells beyond this for free movement during the fight.
 
 local Layout = {}
 
 -- Trainer stand-off behind each mon (pad cells along the fight axis).
 Layout.TRAINER_BACK = 1
--- Gap between mon centers: 1 = adjacent tiles.
-Layout.MON_GAP = 1
+-- Gap between mon centers: 1 = adjacent, 2 = one empty cell between.
+Layout.MON_GAP = 2
 -- Lateral (dodge) half-width of the opening formation.
 Layout.LATERAL = 1
 -- Legacy aliases (wild anchor / older callers).
 Layout.HALF = 2
-Layout.MON = 1
+Layout.MON = 2
 
 function Layout.copyPose(ent)
     if not ent then
@@ -152,10 +152,10 @@ function Layout.plan(px, py, fx, fy)
     local midY = math.floor((py + fy) / 2)
     local gap = math.max(1, Layout.MON_GAP or 1)
     local back = math.max(0, Layout.TRAINER_BACK or 1)
-    -- Mons sit on adjacent (or near) tiles around the midpoint.
-    -- gap=1 → player at mid, enemy at mid+1.
-    local monLo = math.floor((gap - 1) / 2)
-    local monHi = monLo + gap
+    -- Mons sit around the midpoint. gap=1 → player at mid, enemy at mid+1.
+    -- gap=2 → player at mid-1, enemy at mid+1 (one empty cell; trainers stay put).
+    local monLo = math.floor(gap / 2)
+    local monHi = math.ceil(gap / 2)
     local pMonX = midX - sx * monLo
     local pMonY = midY - sy * monLo
     local eMonX = midX + sx * monHi

@@ -731,6 +731,10 @@ return function(mod)
             if not move then
                 return false
             end
+            if ReactiveDefense and type(ReactiveDefense.isSpecialClashIncoming) == "function"
+                and ReactiveDefense.isSpecialClashIncoming(move) then
+                return true
+            end
             if move.category == "special" then
                 return true
             end
@@ -827,11 +831,6 @@ return function(mod)
             return r() < 0.20
         end
 
-        -- Light risk only — openings should feel rewarding, not coin-flippy.
-        local function rollCounterExtraMiss()
-            local r = (love and love.math and love.math.random) or math.random
-            return r() < S.COUNTER_EXTRA_MISS
-        end
         local function rollCounterSnapBack()
             local r = (love and love.math and love.math.random) or math.random
             return r() < S.COUNTER_SNAPBACK_CHANCE
@@ -910,7 +909,17 @@ return function(mod)
                     st.keepDodgeMissAnim = nil
                     st.dodgeMissName = nil
                     st.dodgeMissSide = nil
+                    st.queuedPlayerAction = ev.playerAction or battle._arQueuedPlayerAction
+                    st.queuedEnemyAction = ev.enemyAction
+                    st.skipQueuedPlayerAction = nil
+                    st.skipQueuedEnemyAction = nil
+                    st.fireNowMove = nil
                 end
+                battle._arAwaitCallout = nil
+                battle._arAwaitAgain = nil
+                battle._arAwaitAgainSide = nil
+                battle._arFireNowHit = nil
+                battle._arFireCarryThrough = nil
                 dev.log(battle, "TURN start",
                     string.format("keepCounter=%s youTmp=%s foeTmp=%s",
                         (st and st.mode == "counter") and "Y" or "N",
@@ -1165,18 +1174,29 @@ return function(mod)
             if not ctx then
                 return hit
             end
-            local move = ctx.move
             local user, target, battle = ctx.user, ctx.target, ctx.battle
-            if opt("momentum_counter") and move and (move.power or 0) > 0
-                and move.category ~= "status" and battle and user and target then
-                local state = momentumState(battle)
-                local countering = user.isPlayer and not target.isPlayer
-                    and state.mode == "counter" and not state.boosted
-                if hit and countering and rollCounterExtraMiss() then
-                    hit = false
+            -- Counter after a miss (REACT dodge proc included) always lands.
+            local guaranteed = React and type(React.isGuaranteedCounterHit) == "function"
+                and React.isGuaranteedCounterHit(battle, user, target)
+            if guaranteed then
+                hit = true
+            elseif hit and FieldBattleViewer
+                and type(FieldBattleViewer.applyFarShotAccuracy) == "function" then
+                -- Ranged specials from 5+ tiles pick up a light extra miss.
+                hit = FieldBattleViewer.applyFarShotAccuracy(battle, ctx, hit)
+            end
+            if battle and battle._arFireNow then
+                battle._arFireNowHit = hit and true or false
+                if not hit then
+                    -- Missed FIRE is a slow shot the charger runs through,
+                    -- not a slip-past / dodge hop.
+                    battle._arFireCarryThrough = true
+                    battle._arAccuracyMissSide = nil
                 end
             end
-            bookkeepAccuracyMiss(ctx, hit)
+            if not (battle and battle._arFireCarryThrough) then
+                bookkeepAccuracyMiss(ctx, hit)
+            end
             return hit
         end
 
@@ -1190,7 +1210,14 @@ return function(mod)
                 return
             end
             local kind = hit and pending.kind or "miss"
-            pcall(FieldBattleViewer.react, battle, pending.side, kind, pending.opts)
+            local opts = pending.opts or {}
+            if battle._arFireNow and not hit then
+                kind = pending.kind or "attack"
+                opts.slowShot = true
+                opts.fireCarry = true
+                battle._arFireCarryThrough = true
+            end
+            pcall(FieldBattleViewer.react, battle, pending.side, kind, opts)
         end
 
         local function predictMoveHit(battle, user, target, move)
@@ -1327,7 +1354,7 @@ return function(mod)
                         pending.coverSoak = false
                     end
                 end
-                if pending then
+                if pending and pending.side ~= "enemy" then
                     local mult = tonumber(pending.damageMult) or 1
                     if mult ~= 1 and dmg > 0 then
                         dmg = math.max(0, math.floor(dmg * mult + 0.5))
@@ -1337,6 +1364,27 @@ return function(mod)
                     end
                     rd.hitMod = nil
                 end
+            end
+
+            if ReactiveDefense and user and user.isPlayer and target and not target.isPlayer then
+                local rd = ReactiveDefense.state(battle)
+                local pending = rd and rd.hitMod
+                if pending and pending.side == "enemy" then
+                    local mult = tonumber(pending.damageMult) or 1
+                    if mult ~= 1 and dmg > 0 then
+                        dmg = math.max(0, math.floor(dmg * mult + 0.5))
+                    end
+                    if pending.forceMiss then
+                        dmg = 0
+                    end
+                    rd.hitMod = nil
+                end
+            end
+
+            local shotMult = battle and tonumber(battle._arFireShotMult)
+            if shotMult and shotMult > 0 and shotMult ~= 1 and type(dmg) == "number" and dmg > 0 then
+                battle._arFireShotMult = nil
+                dmg = math.max(1, math.floor(dmg * shotMult + 0.5))
             end
 
             local state = battle and React.peek(battle)
@@ -1762,18 +1810,155 @@ return function(mod)
         end
 
         -- Auto foe REACT once per turn when you attack (trainer battles).
-        -- Same Focus costs as the player; pick is weighted (commit / dodge / brace)
-        -- instead of special→dodge / physical→brace. Returns reactionText,
-        -- buffList, trackTempBuffs, failNarrator. Failed dodge still spends
-        -- Focus: trainer order bubble + "...but it was too slow!".
+        -- Same Focus costs as the player; pick is weighted (commit / dodge /
+        -- brace / FIRE). Returns reactionText, buffList, trackTempBuffs,
+        -- failNarrator, fieldCue. Failed dodge still spends Focus: trainer
+        -- order bubble + "...but it was too slow!". FIRE spends their later call.
+        local function foeFireWindow(battle, moveDef)
+            local FoeAi = Battle and Battle.FoeAi
+            if not (FoeAi and type(FoeAi.canFireNow) == "function") then
+                return false, {}
+            end
+            local shots = {}
+            if Fx and type(Fx.listFireNowMoves) == "function" then
+                shots = Fx.listFireNowMoves(battle, battle.enemy) or {}
+            end
+            local field = FieldBattleViewer
+                and type(FieldBattleViewer.isFieldBattle) == "function"
+                and FieldBattleViewer.isFieldBattle(battle)
+            local fireRange
+            if field and type(FieldBattleViewer.fireRangeOpen) == "function" then
+                fireRange = FieldBattleViewer.fireRangeOpen(battle)
+            end
+            local playerCharge = false
+            if field and type(FieldBattleViewer.playerChargeWindowOpen) == "function" then
+                playerCharge = FieldBattleViewer.playerChargeWindowOpen(battle) == true
+            end
+            local state = momentumState(battle)
+            local incomingMelee = true
+            if ReactiveDefense and type(ReactiveDefense.isSpecialClashIncoming) == "function" then
+                incomingMelee = not ReactiveDefense.isSpecialClashIncoming(moveDef)
+            end
+            local can = FoeAi.canFireNow(battle, moveDef, {
+                fieldBattle = field and true or false,
+                fireRangeOpen = fireRange,
+                playerChargeOpen = playerCharge,
+                shotCount = #shots,
+                alreadyActed = state.enemyActedThisTurn == true
+                    or state.skipQueuedEnemyAction == true,
+                statusLocked = enemyStatusLocked(battle),
+                incomingMelee = incomingMelee,
+            })
+            return can, shots
+        end
+
+        local function executeFoeFire(battle, moveDef, shots, foe, focusNow)
+            local FoeAi = Battle and Battle.FoeAi
+            local shot = FoeAi and type(FoeAi.pickFireShot) == "function"
+                and FoeAi.pickFireShot(shots) or (shots and shots[1])
+            if not shot then
+                return nil
+            end
+            local ok = ReactiveDefense and ReactiveDefense.spend(battle, false, "fire")
+            if not ok then
+                return nil
+            end
+            local foeSide = ReactiveDefense and ReactiveDefense.sideState(battle, false)
+            if foeSide then
+                foeSide.reactedThisTurn = true
+            end
+            local state = momentumState(battle)
+            state.skipQueuedEnemyAction = true
+            state.enemyActedThisTurn = true
+            local inst = shot.moveInst
+            if inst and type(inst.pp) == "number" and inst.pp > 0 then
+                inst.pp = inst.pp - 1
+            end
+            local reply = {
+                id = shot.moveId,
+                type = shot.moveType,
+                power = (shot.moveDef and shot.moveDef.power) or shot.power,
+                category = "special",
+                moveId = shot.moveId,
+                moveType = shot.moveType,
+            }
+            local cue = {
+                side = "enemy",
+                kind = "cast",
+                category = "special",
+                moveType = shot.moveType,
+                moveId = shot.moveId,
+            }
+            local line = pickFoeTrainerLine(
+                battle, S.TRAINER_FOE_FIRE_CALLS, S.FOE_FIRE_CALLS, foe)
+            local clashIncoming = ReactiveDefense
+                and type(ReactiveDefense.isSpecialClashIncoming) == "function"
+                and ReactiveDefense.isSpecialClashIncoming(moveDef)
+            if clashIncoming then
+                local verdict = ReactiveDefense.contestSpecialClash(
+                    battle, moveDef, reply, { replySide = "enemy" })
+                local rd = ReactiveDefense.state(battle)
+                if verdict == "win" then
+                    rd.hitMod = { side = "enemy", forceMiss = true }
+                    battle._arFireShotMult = ReactiveDefense.CLASH_WIN_SHOT_MULT
+                elseif verdict == "tie" then
+                    rd.hitMod = { side = "enemy", forceMiss = true }
+                else
+                    rd.hitMod = {
+                        side = "enemy",
+                        damageMult = ReactiveDefense.CLASH_LOSE_MULT,
+                    }
+                end
+                if FieldBattleViewer
+                    and type(FieldBattleViewer.playBeamClash) == "function" then
+                    FieldBattleViewer.playBeamClash(battle, { fireClash = verdict }, {
+                        move = moveDef,
+                        replyMove = reply,
+                        replySide = "enemy",
+                    })
+                end
+                if verdict == "win" and type(dev.fireQueuedSpecial) == "function" then
+                    dev.fireQueuedSpecial(battle, inst, "enemy")
+                end
+                dev.log(battle, "FOE fire",
+                    string.format("clash=%s focus=%d", tostring(verdict), focusNow))
+                return line, nil, false, nil, cue
+            end
+            if type(dev.fireQueuedSpecial) == "function" then
+                dev.fireQueuedSpecial(battle, inst, "enemy")
+            end
+            if battle._arFireNowHit then
+                if FieldBattleViewer
+                    and type(FieldBattleViewer.interruptCharge) == "function" then
+                    FieldBattleViewer.interruptCharge(battle, "player")
+                end
+            elseif ReactiveDefense then
+                ReactiveDefense.state(battle).hitMod = {
+                    side = "enemy",
+                    damageMult = ReactiveDefense.FIRE_CAST_MULT,
+                }
+            end
+            dev.log(battle, "FOE fire",
+                string.format("shot=%s hit=%s focus=%d",
+                    tostring(shot.moveId or "?"),
+                    battle._arFireNowHit and "Y" or "N",
+                    focusNow))
+            return line, nil, false, nil, cue
+        end
+
         local function tryFoeCoverReaction(battle, moveDef)
+            if React and type(React.isGuaranteedCounterHit) == "function"
+                and React.isGuaranteedCounterHit(battle,
+                    battle and battle.player, battle and battle.enemy) then
+                return nil
+            end
             if not trainerFoeReactionsOn(battle) or not moveDef then
                 return nil
             end
             if (moveDef.power or 0) <= 0 or moveDef.category == "status" then
                 return nil
             end
-            -- Frozen / asleep foes can't take dodge/brace orders.
+            -- Frozen / asleep foes can't take dodge/brace/FIRE orders.
             if enemyStatusLocked(battle) then
                 return nil
             end
@@ -1783,12 +1968,17 @@ return function(mod)
             end
             state.enemyReactedThisTurn = true
             local special = foeMoveIsSpecial(moveDef)
+            local canFire, shots = foeFireWindow(battle, moveDef)
             local action = "commit"
             if ReactiveDefense and type(ReactiveDefense.pickFoeReact) == "function" then
-                action = ReactiveDefense.pickFoeReact(battle, moveDef, special) or "commit"
+                action = ReactiveDefense.pickFoeReact(
+                    battle, moveDef, special, { canFireNow = canFire }) or "commit"
             end
             local foeSide = ReactiveDefense and ReactiveDefense.sideState(battle, false)
             local focusNow = foeSide and tonumber(foeSide.focus) or 0
+            if action == "fire" then
+                return executeFoeFire(battle, moveDef, shots, enemyMonName(battle), focusNow)
+            end
             if action ~= "dodge" and action ~= "brace" then
                 dev.log(battle, "FOE react",
                     string.format("commit focus=%d", focusNow))
@@ -2081,9 +2271,9 @@ return function(mod)
             return false
         end
 
-        fieldCueForFoeCover = function(foeBuffs, foeLine)
+        fieldCueForFoeCover = function(foeBuffs, foeLine, extra)
             if Fx then
-                return Fx.foeCoverCue(foeBuffs, foeLine)
+                return Fx.foeCoverCue(foeBuffs, foeLine, extra)
             end
             return { side = "enemy", kind = "dodge" }
         end
@@ -2154,12 +2344,15 @@ return function(mod)
                 and isNpcTrainerSpeech(text)
             if fieldFlowsText(battle) and fieldCue
                 and (kind == "dodge" or kind == "cover" or kind == "hide"
-                    or kind == "brace") then
+                    or kind == "brace" or kind == "cast") then
                 if foeOrder and attachOverlapReact(battle, {
                     side = fieldCue.side,
                     kind = kind,
                     text = text,
                     bubble = bubble,
+                    category = fieldCue.category,
+                    moveType = fieldCue.moveType,
+                    moveId = fieldCue.moveId,
                 }) then
                     return true
                 end
@@ -2449,6 +2642,7 @@ return function(mod)
         end
 
         -- True second strike after a counter (separate anim + damage roll).
+        -- Melee: extra swing of the same move. Special: a new CALL from the pool.
         -- Stripped record: never miss, single hit, no recoil/secondary re-fire.
         local function tryAgainStrike(battle, ctx, monName, foeSide)
             if not opt("momentum_counter") or not battle or not ctx then
@@ -2479,7 +2673,82 @@ return function(mod)
                 return false
             end
 
+            local offerCall = fieldFlowsText(battle)
+            if offerCall then
+                if FieldBattleViewer and type(FieldBattleViewer.againOffersCall) == "function" then
+                    offerCall = FieldBattleViewer.againOffersCall({
+                        category = move.category,
+                        moveId = move.id or move.moveId,
+                        moveType = move.type or move.moveType,
+                    }) == true
+                else
+                    offerCall = tostring(move.category or ""):lower() == "special"
+                end
+            end
+            local hasPool = false
+            do
+                local moves = user.curMoves
+                if type(moves) == "table" then
+                    for i = 1, #moves do
+                        local mv = moves[i]
+                        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+                            hasPool = true
+                            break
+                        end
+                    end
+                end
+            end
+
             state.againInProgress = true
+            if offerCall and not foeSide and hasPool then
+                dev.log(battle, "AGAIN!", "you call")
+                battle._arAwaitAgain = true
+                battle._arAwaitAgainSide = "player"
+                if FieldBattleViewer and type(FieldBattleViewer.beginAgainHold) == "function" then
+                    FieldBattleViewer.beginAgainHold(battle)
+                end
+                local callLine = pickFormatted(S.AGAIN_CALLS, monName or playerMonName(battle))
+                    or ((monName or "POKéMON") .. "!\nAgain!")
+                enqueueAutoAfter(battle, callLine, S.CALLOUT_AUTO_DELAY, "player")
+                battle.nextInsert = (battle.nextInsert or 0) + 1
+                table.insert(battle.queue, battle.nextInsert, {
+                    arFx = true,
+                    fn = function()
+                        if not battle._arAwaitAgain then
+                            return
+                        end
+                        battle._arAwaitCallout = true
+                        battle.phase = "moveSelect"
+                        battle._arFieldPreferMoves = true
+                        battle._arFieldCommandHold = nil
+                        local moves = battle.player and battle.player.curMoves
+                        local n = moves and #moves or 1
+                        battle.moveIndex = math.min(battle.moveIndex or 1, n)
+                        battle.moveSwapIndex = nil
+                        dev.log(battle, "AGAIN call", "special attacker picks the follow-up")
+                    end,
+                })
+                return true
+            end
+
+            local followInst = nil
+            if offerCall and foeSide and Fx and type(Fx.pickAgainCallMove) == "function" then
+                followInst = Fx.pickAgainCallMove(battle, user, move)
+            end
+            if followInst and type(followInst) == "table"
+                and tostring(followInst.id or ""):upper() ~= mid
+                and type(battle.performMove) == "function" then
+                dev.log(battle, "AGAIN!", "foe call")
+                local line = pickFoeTrainerLine(
+                    battle, S.TRAINER_FOE_AGAIN_CALLS, S.FOE_AGAIN_CALLS, monName or enemyMonName(battle))
+                enqueueAutoAfter(battle, line, S.CALLOUT_AUTO_DELAY, "foe")
+                battle._arAgainCalled = true
+                local ok = pcall(battle.performMove, battle, user, target, followInst, true)
+                battle._arAgainCalled = nil
+                state.againInProgress = false
+                return ok and true or false
+            end
+
             dev.log(battle, "AGAIN!", foeSide and "foe" or "you")
             local line
             if foeSide then
@@ -2798,6 +3067,54 @@ return function(mod)
             if Fx then
                 return Fx.play(battle, action, result)
             end
+        end
+
+        -- Fire a special during a close-gap charge (FIRE NOW).
+        -- Uses the picked special. Never the awaitIncoming placeholder.
+        -- `side` is "player" (default) or "enemy".
+        dev.fireQueuedSpecial = function(battle, moveInst, side)
+            if not (battle and battle.player and battle.enemy) then
+                return false
+            end
+            side = side or "player"
+            local isPlayer = side ~= "enemy"
+            local user = isPlayer and battle.player or battle.enemy
+            local target = isPlayer and battle.enemy or battle.player
+            local state = React.peek(battle)
+            local action = moveInst or (state and state.fireNowMove)
+            if state then
+                state.fireNowMove = nil
+                if isPlayer then
+                    state.skipQueuedPlayerAction = true
+                    state.playerActedThisTurn = true
+                else
+                    state.skipQueuedEnemyAction = true
+                    state.enemyActedThisTurn = true
+                end
+            end
+            if isPlayer then
+                battle._arAwaitCallout = nil
+            end
+            if type(action) == "table" and action.special then
+                action = nil
+            end
+            if type(action) ~= "table" or not (action.id or action.name) then
+                return false
+            end
+            if type(battle.performMove) ~= "function" then
+                return false
+            end
+            battle._arFireNow = true
+            battle._arFireNowHit = nil
+            battle._arFireCarryThrough = nil
+            battle._arFireNowCharger = isPlayer and "enemy" or "player"
+            local ok, err = pcall(battle.performMove, battle, user, target, action)
+            battle._arFireNow = nil
+            if not ok then
+                dev.log(battle, "ERR FIRE now", tostring(err))
+                return false
+            end
+            return true
         end
 
         -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
@@ -3656,6 +3973,11 @@ return function(mod)
                     end
                 end,
                 isDodgeFailNarrator = isDodgeFailNarrator,
+                isRangedCounter = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isRangedCounter) == "function" then
+                        return FieldBattleViewer.isRangedCounter(opts)
+                    end
+                end,
             })
         end
         if React then
@@ -3717,18 +4039,78 @@ return function(mod)
                     end
                 end,
                 tagFieldCue = tagFieldCue,
-                pickCounterStrikeMove = function(battle, kind, battler)
+                pickCounterStrikeMove = function(battle, kind, battler, incoming)
                     if Fx and type(Fx.pickCounterStrikeMove) == "function" then
-                        return Fx.pickCounterStrikeMove(battle, kind, battler)
+                        return Fx.pickCounterStrikeMove(battle, kind, battler, incoming)
+                    end
+                end,
+                listFireNowMoves = function(battle, battler)
+                    if Fx and type(Fx.listFireNowMoves) == "function" then
+                        return Fx.listFireNowMoves(battle, battler)
                     end
                 end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
                 signalAttackPresentation = signalAttackPresentation,
+                beginReactHold = function(battle)
+                    if FieldBattleViewer and type(FieldBattleViewer.beginReactHold) == "function" then
+                        return FieldBattleViewer.beginReactHold(battle)
+                    end
+                end,
+                releaseReactHold = function(battle, outcome)
+                    if FieldBattleViewer and type(FieldBattleViewer.releaseReactHold) == "function" then
+                        return FieldBattleViewer.releaseReactHold(battle, outcome)
+                    end
+                end,
+                isRangedCounter = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isRangedCounter) == "function" then
+                        return FieldBattleViewer.isRangedCounter(opts)
+                    end
+                end,
+                isMeleeAttack = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isMeleeAttack) == "function" then
+                        return FieldBattleViewer.isMeleeAttack(opts)
+                    end
+                end,
+                closeGapPending = function(battle, side)
+                    if FieldBattleViewer and type(FieldBattleViewer.closeGapPending) == "function" then
+                        return FieldBattleViewer.closeGapPending(battle, side)
+                    end
+                end,
+                chargeWindowOpen = function(battle)
+                    if FieldBattleViewer and type(FieldBattleViewer.chargeWindowOpen) == "function" then
+                        return FieldBattleViewer.chargeWindowOpen(battle)
+                    end
+                end,
+                fireRangeOpen = function(battle)
+                    if FieldBattleViewer and type(FieldBattleViewer.fireRangeOpen) == "function" then
+                        return FieldBattleViewer.fireRangeOpen(battle)
+                    end
+                end,
+                fireQueuedSpecial = function(battle, moveInst, side)
+                    if type(dev.fireQueuedSpecial) == "function" then
+                        return dev.fireQueuedSpecial(battle, moveInst, side)
+                    end
+                end,
+                playBeamClash = function(battle, result, ctx)
+                    if FieldBattleViewer and type(FieldBattleViewer.playBeamClash) == "function" then
+                        return FieldBattleViewer.playBeamClash(battle, result, ctx)
+                    end
+                end,
                 cancelCloseStrike = function(battle, side)
                     if FieldBattleViewer and type(FieldBattleViewer.cancelCloseStrike) == "function" then
                         return FieldBattleViewer.cancelCloseStrike(battle, side)
+                    end
+                end,
+                interruptCharge = function(battle, side)
+                    if FieldBattleViewer and type(FieldBattleViewer.interruptCharge) == "function" then
+                        return FieldBattleViewer.interruptCharge(battle, side)
+                    end
+                end,
+                deferCancelCloseStrike = function(battle, side, delay)
+                    if FieldBattleViewer and type(FieldBattleViewer.deferCancelCloseStrike) == "function" then
+                        return FieldBattleViewer.deferCancelCloseStrike(battle, side, delay)
                     end
                 end,
                 tryAgainStrike = tryAgainStrike,
@@ -4122,13 +4504,123 @@ return function(mod)
                 end
             end
 
+            local function isFieldFight(battle)
+                return FieldBattleViewer
+                    and type(FieldBattleViewer.isFieldBattle) == "function"
+                    and FieldBattleViewer.isFieldBattle(battle)
+            end
+
+            local origChooseMenu = BattleState.chooseMenu
+            if type(origChooseMenu) == "function" then
+                function BattleState.chooseMenu(self, choice)
+                    -- Going second: FIGHT means stand in. Call the move after REACT.
+                    if choice == "fight" and isFieldFight(self)
+                        and not self.safari and not self.demo and not self.ghost
+                        and React and type(React.playerLikelyGoesSecond) == "function"
+                        and React.playerLikelyGoesSecond(self)
+                        and not playerStatusLocked(self)
+                        and not playerIsEntrenched(self)
+                        and not playerInFocusCover(self)
+                        and not playerCanStay(self)
+                        and type(self.fightLockedAction) == "function"
+                        and not self:fightLockedAction(self.player)
+                        and type(self.playerHasPP) == "function"
+                        and self:playerHasPP() then
+                        local wait = React.awaitIncomingAction
+                            and React.awaitIncomingAction()
+                            or { special = "awaitIncoming" }
+                        self._arQueuedPlayerAction = wait
+                        local state = React.peek(self)
+                        if state then
+                            state.queuedPlayerAction = wait
+                        end
+                        dev.log(self, "AWAIT incoming", "slower side holds the call")
+                        self:resolveTurn(wait)
+                        return true
+                    end
+                    return origChooseMenu(self, choice)
+                end
+            end
+
+            local origChooseMove = BattleState.chooseMove
+            if type(origChooseMove) == "function" then
+                function BattleState.chooseMove(self, index)
+                    if self._arAwaitCallout then
+                        if self.phase ~= "moveSelect" then
+                            return nil, "move menu is not active"
+                        end
+                        local moves = self.player and self.player.curMoves
+                        local move = moves and moves[index]
+                        if not move then
+                            return nil, "invalid move slot"
+                        end
+                        self.moveIndex = index
+                        if self.player.disabledSlot == index then
+                            if type(self.say) == "function" then
+                                self:say(self:romText("_MoveDisabledText",
+                                    "The move is\ndisabled!"))
+                            end
+                            self.phase = "moveSelect"
+                            return true
+                        end
+                        if (move.pp or 0) <= 0 then
+                            if type(self.say) == "function" then
+                                self:say(self:romText("_MoveNoPPText",
+                                    "No PP left for\nthis move!"))
+                            end
+                            self.phase = "moveSelect"
+                            return true
+                        end
+                        local again = self._arAwaitAgain == true
+                        self._arAwaitCallout = nil
+                        self._arAwaitAgain = nil
+                        self._arAwaitAgainSide = nil
+                        if again then
+                            self._arAgainCalled = true
+                            local state = React.peek(self)
+                            if state then
+                                state.againInProgress = false
+                            end
+                            if FieldBattleViewer
+                                and type(FieldBattleViewer.releaseAgainHold) == "function" then
+                                FieldBattleViewer.releaseAgainHold(self, "call")
+                            end
+                            dev.log(self, "AGAIN pick",
+                                tostring(move.id or move.name or index))
+                        end
+                        self.playerMoveListIndex = index
+                        self.phase = "messages"
+                        self.nextInsert = 0
+                        self:executeAction(self.player, self.enemy, move)
+                        return true
+                    end
+                    return origChooseMove(self, index)
+                end
+            end
+
+            local origResolveTurn = BattleState.resolveTurn
+            if type(origResolveTurn) == "function" then
+                function BattleState.resolveTurn(self, action)
+                    -- turn_started does not carry the locked move; stash it here
+                    -- so FIRE NOW can switch off Tackle / onto Water Gun.
+                    self._arQueuedPlayerAction = action
+                    local state = React.peek(self)
+                    if state then
+                        state.queuedPlayerAction = action
+                    end
+                    return origResolveTurn(self, action)
+                end
+            end
+
             local origExecuteAction = BattleState.executeAction
             if type(origExecuteAction) == "function" then
                 function BattleState.executeAction(self, user, target, action)
                     -- Locked in a trench with no opening: can't swing — convert to STAY.
                     -- Exception: a real move pick is an intentional BREAK + attack
                     -- (FIELD PreferMoves used to skip ENTRENCH! and get eaten here).
-                    if user and user.isPlayer and action and action.special ~= "holdPosition" then
+                    if user and user.isPlayer and action
+                        and action.special ~= "holdPosition"
+                        and action.special ~= "awaitIncoming" then
                         local state = React.peek(self)
                         local isRealMove = action.id ~= nil or action.struggle == true
                         if state and state.temp and state.temp.deepCover then
@@ -4232,9 +4724,43 @@ return function(mod)
                         -- Cover / brace / entrench buffs stay (unless max just cleared).
                         return
                     end
+                    -- FIRE / COVER spent the later call: skip the queued swing.
+                    if user and not user.isPlayer then
+                        local state = React.peek(self)
+                        if state and state.skipQueuedEnemyAction then
+                            state.skipQueuedEnemyAction = nil
+                            dev.log(self, "FOE REACT spent", "skip later executeAction")
+                            return
+                        end
+                    end
                     -- After a dodge opening going second: use the counter move you picked.
                     if user and user.isPlayer then
                         local state = React.peek(self)
+                        if state and state.skipQueuedPlayerAction then
+                            state.skipQueuedPlayerAction = nil
+                            self._arAwaitCallout = nil
+                            dev.log(self, "REACT spent", "skip later executeAction")
+                            return
+                        end
+                        if action and action.special == "awaitIncoming" then
+                            if self.result then
+                                return
+                            end
+                            if not user.mon or user.mon.hp <= 0 then
+                                return
+                            end
+                            self.nextInsert = 0
+                            self._arAwaitCallout = true
+                            self.phase = "moveSelect"
+                            self._arFieldPreferMoves = true
+                            self._arFieldCommandHold = nil
+                            local moves = self.player and self.player.curMoves
+                            local n = moves and #moves or 1
+                            self.moveIndex = math.min(self.moveIndex or 1, n)
+                            self.moveSwapIndex = nil
+                            dev.log(self, "CALLOUT now", "slower side picks after the incoming")
+                            return
+                        end
                         if state and state.overridePlayerAction then
                             action = state.overridePlayerAction
                             state.overridePlayerAction = nil
@@ -4260,10 +4786,12 @@ return function(mod)
                             move = def
                         end
                     end
+                    local called = isCalled == true or self._arAgainCalled == true
                     signalAttackPresentation(self, user, target, move or moveInst, {
-                        isCalled = isCalled == true,
+                        isCalled = called,
                     })
-                    return origPerformMove(self, user, target, moveInst, isCalled)
+                    self._arAgainCalled = nil
+                    return origPerformMove(self, user, target, moveInst, called)
                 end
             end
         end
@@ -4368,6 +4896,11 @@ return function(mod)
                 willShowCounterPick = hud.willShowCounterPick,
                 resolveCoverOnPlayerAttack = resolveCoverOnPlayerAttack,
                 tryFoeCoverReaction = tryFoeCoverReaction,
+                isGuaranteedCounterHit = function(battle, user, target)
+                    if React and type(React.isGuaranteedCounterHit) == "function" then
+                        return React.isGuaranteedCounterHit(battle, user, target)
+                    end
+                end,
                 fieldCueForFoeCover = fieldCueForFoeCover,
                 enqueueReactWithAttack = enqueueReactWithAttack,
                 enqueueNpcFlavor = enqueueNpcFlavor,

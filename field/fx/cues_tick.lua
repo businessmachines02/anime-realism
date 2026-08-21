@@ -46,26 +46,54 @@ return function(Cues)
             return
         end
         local battle = session._battle
+        local t = H.now(session)
+        Cues.tickHeldReact(session, Grid)
+        Cues.tickTossLand(session, Grid)
+        local waiting = Cues.heldReactPending(session)
+        -- FIRE / clash shot was latched on the HUD click; run it here so
+        -- performMove cannot mutate sprites after this frame's pose.
+        -- Dodge/brace vs a charge waits until they are in your face.
+        do
+            local resume = battle and battle._arResumeReactPick
+            if type(resume) == "function" and not waiting then
+                battle._arResumeReactPick = nil
+                local okR, errR = pcall(resume)
+                if not okR then
+                    H.noteErr(session, battle, "resumeReactPick", errR)
+                end
+            end
+        end
+        Cues.tickBraceCounter(session, Grid)
         local whiff = battle and battle._arWhiffCloseStrike
         if whiff then
-            battle._arWhiffCloseStrike = nil
-            Cues.cancelCloseStrike(session, whiff, Grid)
+            local after = battle._arWhiffCloseAfter
+            if not (after and t < after) then
+                battle._arWhiffCloseStrike = nil
+                battle._arWhiffCloseAfter = nil
+                Cues.cancelCloseStrike(session, whiff, Grid)
+            end
         end
-        local t = H.now(session)
         for _, side in ipairs({ "player", "enemy" }) do
             local ent = H.sideEnt(session, side)
             if ent and ent._pendingCloseStrike then
                 local foe = H.foeOf(session, side)
+                Cues.tickCloseGapGait(ent, foe)
                 tryCloseGap(session, Grid, ent, foe, battle)
                 if ent._closeStrikeWait then
                     -- Cue just armed this tick (HUD confirm / announce). Walk first.
                     ent._closeStrikeWait = nil
                 elseif H.fieldMenuOpen(session._battle) then
                     -- REACT! / other menus: keep the walk parked.
+                elseif ent._closeGapMinAt and t < ent._closeGapMinAt then
+                    -- Slow wind-up so FIRE NOW has a beat to read.
+                elseif waiting then
+                    -- Dodge/brace is waiting for this arrival; do not punch first.
+                elseif battle and battle._arWhiffCloseStrike == side then
+                    -- Successful dodge: let the cancel land, do not swing.
                 elseif Cues.inMeleeReach(ent, foe) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.punch")
                 elseif ent._closeStrikeArmedAt
-                    and (t - ent._closeStrikeArmedAt) > 2.8
+                    and (t - ent._closeStrikeArmedAt) > Cues.closeGapPunchTimeout(ent)
                     and not H.fieldMenuOpen(session._battle) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.timeout")
                 end
@@ -73,7 +101,9 @@ return function(Cues)
             if ent and ent._pendingCloseStrike then
                 -- Still closing; do not walk home yet.
             elseif ent and ent._returnAt and t >= ent._returnAt then
-                if Cues.pendingMultiHitFollowUp(session, session._battle, side) then
+                if ent.anim == "toss" or ent.anim == "tossed" then
+                    ent._returnAt = t + 0.08
+                elseif Cues.pendingMultiHitFollowUp(session, session._battle, side) then
                     ent._returnAt = t + 0.12
                 else
                     ent._returnAt = nil

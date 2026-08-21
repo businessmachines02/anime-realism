@@ -428,6 +428,84 @@ local function faceFromDelta(dx, dy)
   return (dy or 0) >= 0 and "down" or "up"
 end
 
+-- Seismic Toss: both mons grab, shoot high, hang, then crash. Keep this
+-- in lockstep with Cues.TOSS_DUR / the toss contact FX.
+Sprites.TOSS_DUR = 1.08
+Sprites.TOSS_PEAK = 58
+
+local function tossHeight(t)
+  if t < 0.08 then
+    return 3 * (t / 0.08)
+  end
+  if t < 0.38 then
+    local u = (t - 0.08) / 0.30
+    local k = 1 - (1 - u) * (1 - u)
+    return 3 + k * Sprites.TOSS_PEAK
+  end
+  if t < 0.52 then
+    return Sprites.TOSS_PEAK + 3 + math.sin((t - 0.38) * 26) * 1.5
+  end
+  if t < 0.74 then
+    local u = (t - 0.52) / 0.22
+    return (Sprites.TOSS_PEAK + 3) * (1 - u * u)
+  end
+  local u = (t - 0.74) / 0.26
+  return math.abs(math.sin(u * math.pi)) * 8 * (1 - u)
+end
+
+--- ox/oy for toss (attacker) / tossed (carried). Ground stay on basePx/Py.
+local function tickToss(self, dt, towardX, towardY, carried)
+  self.animT = (self.animT or 0) + dt
+  local dur = Sprites.TOSS_DUR
+  local t = math.min(1, self.animT / dur)
+  local height = tossHeight(t)
+  local hx = ((self.basePx + (towardX or self.basePx)) * 0.5) - self.basePx
+  local hy = ((self.basePy + (towardY or self.basePy)) * 0.5) - self.basePy
+  local lock
+  if t < 0.08 then
+    lock = t / 0.08
+  elseif t < 0.78 then
+    lock = 1
+  else
+    lock = math.max(0, 1 - (t - 0.78) / 0.22)
+  end
+  local ox = hx * lock
+  local oy = hy * lock * 0.12 - height
+  if carried then
+    oy = oy + 2 * lock
+  else
+    oy = oy - 6 * lock
+  end
+  local peak = Sprites.TOSS_PEAK + 3
+  local air = math.min(1, height / math.max(1, peak))
+  self.drawScale = 1 - air * 0.22
+  if t > 0.74 and t < 0.90 then
+    local squash = 1 - (t - 0.74) / 0.16
+    self.drawScale = 1.04 + squash * 0.10
+  end
+  if t > 0.10 and t < 0.74 then
+    self._walkFrame = (math.floor(t * 14) % 2)
+  else
+    self._walkFrame = 0
+  end
+  if t > 0.52 and t < 0.76 then
+    self.facing = "down"
+  elseif math.abs(hx) > 0.4 or math.abs(hy) > 0.4 then
+    self.facing = faceFromDelta(hx, hy)
+  end
+  self._tossAir = true
+  self._tossHeight = height
+  if self.animT >= dur then
+    self.anim = "idle"
+    self.animT = 0
+    self.drawScale = 1
+    self._tossAir = nil
+    self._tossHeight = nil
+    self._walkFrame = 0
+  end
+  return ox, oy
+end
+
 local function tickDodgeBits(self, dt)
   local bits = self._dodgeBits
   if not bits then
@@ -859,6 +937,15 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         or self.anim == "aloft" or self.anim == "emerge_dig"
         or self.anim == "emerge_fly") then
       drawVanishTell(self, g, camX, camY)
+    elseif g and (self.anim == "toss" or self.anim == "tossed") then
+      local bx = (self.basePx or self.px or 0) - (camX or 0)
+      local by = (self.basePy or self.py or 0) - (camY or 0)
+      local air = math.min(1, (self._tossHeight or 0) / Sprites.TOSS_PEAK)
+      local pulse = 0.55 + 0.45 * (1 - air)
+      g.setColor(0.05, 0.07, 0.10, 0.42 * pulse)
+      g.ellipse("fill", bx, by + 4, 9 * pulse, 3.4 * pulse)
+      g.setColor(0.22, 0.16, 0.10, 0.22 * pulse)
+      g.ellipse("line", bx, by + 4, 10 * pulse, 3.8 * pulse)
     end
     local function drawBody()
       if self.drawer then
@@ -1031,6 +1118,11 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._arFieldDetached = nil
       self.drawScale = (kind == "emerge_fly") and 0.22 or 0.18
       self._vanishKind = (kind == "emerge_fly") and "fly" or "dig"
+    elseif kind == "toss" or kind == "tossed" then
+      self.hidden = false
+      self._tossAir = true
+      self._tossHeight = 0
+      self.drawScale = 1
     elseif kind == "buried" or kind == "aloft" then
       self.hidden = false
       self._fieldVanished = true
@@ -1097,6 +1189,11 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       return
     end
     dt = dt or (1 / 60)
+    local battler = self._battleBattler
+    local status = battler and battler.mon and battler.mon.status
+    if type(status) == "string" then
+      status = status:upper()
+    end
     -- Lerp base toward pad pixel target (occupancy stays on padU/padV).
     local tpx = self.targetPx
     local tpy = self.targetPy
@@ -1108,7 +1205,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
           or (type(self.py) == "number" and self.py)
           or 0
     end
-    if tpx ~= nil and tpy ~= nil then
+    local moving = false
+    if tpx ~= nil and tpy ~= nil and status ~= "FRZ" then
       local dx = tpx - self.basePx
       local dy = tpy - self.basePy
       local dist = math.sqrt(dx * dx + dy * dy)
@@ -1117,23 +1215,22 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         -- Leave _walkFrame alone so idle / cast can keep animating in place.
       else
         local gait = self.stepSpeed or 56
+        if status == "SLP" then
+          gait = math.max(16, gait * 0.42)
+        end
         local step = math.min(dist, gait * dt)
         self.basePx = self.basePx + dx / dist * step
         self.basePy = self.basePy + dy / dist * step
         self.facing = faceFromDelta(dx, dy)
         self._walkT = (self._walkT or 0) + dt * (gait / 56)
         self._walkFrame = (math.floor(self._walkT * 8) % 2)
+        moving = true
       end
     end
-    -- Land ↔ swim sheet when a Water-type steps onto surveyed water.
+    -- Land ↔ swim sheet when feet are on surveyed water (any species).
     Sprites.syncSurface(self)
     -- Always advance bob — independent of battle queue / waitFrames / UI.
     -- Major status lightly flavors the idle pose (freeze stills, para jitters).
-    local battler = self._battleBattler
-    local status = battler and battler.mon and battler.mon.status
-    if type(status) == "string" then
-      status = status:upper()
-    end
     local confused = battler and tonumber(battler.confusedTurns)
     if confused and confused <= 0 then
       confused = nil
@@ -1200,8 +1297,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     if anim == "idle" and not self._fainting then
       -- Overworld-style idle: one stable frame with a gentle vertical bob.
       -- Closing a gap keeps the walk cycle from the pad lerp above.
+      -- Sleepwalkers keep the step frames so the shuffle reads.
       self._idleT = (self._idleT or 0) + dt
-      if not self._pendingCloseStrike then
+      if not self._pendingCloseStrike and not (status == "SLP" and moving) then
         self._walkFrame = 0
       end
     end
@@ -1301,6 +1399,10 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._attackStepped = nil
         self._attackJump = nil
       end
+    elseif anim == "toss" or anim == "tossed" then
+      local dx, dy = tickToss(self, dt, towardX, towardY, anim == "tossed")
+      ox = ox + dx
+      oy = oy + dy
     elseif anim == "cast" then
       -- Special: stay on cell, still read as an action (rise + glow pulse).
       self.animT = (self.animT or 0) + dt
@@ -1565,7 +1667,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       local animNow = self.anim or "idle"
       if animNow ~= "recall" and animNow ~= "sendout" and animNow ~= "capture"
           and animNow ~= "vanish_dig" and animNow ~= "vanish_fly"
-          and animNow ~= "buried" and animNow ~= "aloft" then
+          and animNow ~= "buried" and animNow ~= "aloft"
+          and animNow ~= "toss" and animNow ~= "tossed" then
         local k = math.min(1, coverTuck)
         local surface = self._coverSurface or "open"
         if surface == "water" then
@@ -1603,7 +1706,9 @@ local function finalizeEntity(ent, battler, barLift, mod, game, species)
     ent._spriteGame = game
     ent._spriteSpecies = species
     ent._fieldSurface = "land"
-    ent.canSwim = Sprites.isWaterType(battler, game, species) and true or false
+    -- Combat mons may splash through surveyed water; the swim sheet
+    -- follows their feet, not their typing.
+    ent.canSwim = true
   end
   return ent
 end
@@ -1731,16 +1836,40 @@ function Sprites.applySurface(ent, surface)
   return true
 end
 
+--- True when this entity's occupancy or live feet sit on surveyed water.
+function Sprites.feetOnWater(ent)
+  if not ent then
+    return false
+  end
+  local g = ent._grid
+  if not (g and type(g.water) == "table" and Coords) then
+    return false
+  end
+  local function wet(u, v)
+    return u ~= nil and v ~= nil and g.water[Coords.key(u, v)] == true
+  end
+  if wet(ent.padU, ent.padV) then
+    return true
+  end
+  local px = ent.basePx or ent.px
+  local py = ent.basePy or ent.py
+  if type(px) == "number" and type(py) == "number" then
+    local cell = Coords.CELL or 16
+    local wx = math.floor(px / cell)
+    local wy = math.floor(py / cell)
+    local u, v = Coords.worldToPad(g, wx, wy)
+    if wet(u, v) then
+      return true
+    end
+  end
+  return false
+end
+
 function Sprites.syncSurface(ent)
   if not ent or ent._removed or ent.hidden then
     return
   end
-  local g = ent._grid
-  local onWater = false
-  if g and type(g.water) == "table" and ent.padU ~= nil and Coords then
-    onWater = g.water[Coords.key(ent.padU, ent.padV)] == true
-  end
-  local want = (onWater and ent.canSwim) and "water" or "land"
+  local want = Sprites.feetOnWater(ent) and "water" or "land"
   if want ~= ent._fieldSurface then
     Sprites.applySurface(ent, want)
   end

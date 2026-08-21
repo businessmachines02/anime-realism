@@ -8,6 +8,8 @@ function Hooks.installInput(FBV, mod, ctx)
     ctx = ctx or {}
     local isFieldBattle = ctx.isFieldBattle or function() return false end
     local focusEntrenched = ctx.focusEntrenched or function() return false end
+    local playerLikelyGoesSecond = ctx.playerLikelyGoesSecond
+        or function() return false end
 
     local function dumpAndThrow(battle, tag, err)
         if FBV.Log and type(FBV.Log.err) == "function" then
@@ -44,6 +46,9 @@ function Hooks.installInput(FBV, mod, ctx)
                     local entrenched = focusEntrenched(self)
                     local mustSwitch = Hooks.playerMustSwitch(self)
                     local foeDown = Hooks.foeIsDown(self)
+                    local awaitCallout = self._arAwaitCallout == true
+                    local slowerWait = (not awaitCallout)
+                        and playerLikelyGoesSecond(self) == true
 
                     -- Issue #6: fainted player cannot be stuck on the move diamond.
                     -- Delayed CLOSE THE GAP KOs must also drop the diamond so the
@@ -57,6 +62,11 @@ function Hooks.installInput(FBV, mod, ctx)
                             self.moveSwapIndex = nil
                         end
                     elseif foeDown then
+                        if self._arAwaitAgain then
+                            self._arAwaitCallout = nil
+                            self._arAwaitAgain = nil
+                            self._arAwaitAgainSide = nil
+                        end
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
                         if self.phase == "moveSelect" or self.phase == "mimicSelect" then
@@ -71,11 +81,28 @@ function Hooks.installInput(FBV, mod, ctx)
                     end
 
                     -- PAUSE = B (edge), only on the move diamond / sticky command.
-                    local pauseEdge = Hooks.fieldPausePressed(input, self)
+                    -- Delayed callout after going second cannot pause back to FIGHT.
+                    local pauseEdge = (not awaitCallout)
+                        and Hooks.fieldPausePressed(input, self)
                     if pauseEdge and Hooks.applyFieldPause(self) then
                         swallowPause = true
+                    elseif awaitCallout and not mustSwitch and not foeDown
+                        and not self.safari and not self.demo
+                        and self.player and self.player.curMoves
+                        and #(self.player.curMoves) > 0 then
+                        self.phase = "moveSelect"
+                        local n = #self.player.curMoves
+                        self.moveIndex = math.min(self.moveIndex or 1, n)
+                        self.moveSwapIndex = nil
+                        self._arFieldPreferMoves = true
+                        self._arFieldCommandHold = nil
+                    elseif slowerWait and self.phase == "menu" then
+                        -- Faster foe is about to move: stay on FIGHT/PKMN/BAG/RUN.
+                        self._arFieldPreferMoves = nil
+                        self._arFieldCommandHold = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
                         and not entrenched and not mustSwitch and not foeDown
+                        and not slowerWait
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
                         and #(self.player.curMoves) > 0 then
@@ -97,9 +124,20 @@ function Hooks.installInput(FBV, mod, ctx)
 
                     -- DIAMOND only: U/R/L/D picks that slot and confirms.
                     -- CLASSIC is a 2×2 cursor (move_grid_navigation) + A.
+                    -- REACT! owns the same D-pad while it is on the stack;
+                    -- do not also instant-confirm a move on that click.
+                    local stackedMenu = false
+                    do
+                        local stack = self.game and self.game.stack
+                        local top = stack and type(stack.top) == "function"
+                            and stack:top()
+                        stackedMenu = top ~= nil and top ~= self
+                    end
                     if type(FBV.moveHudStyle) == "function"
                         and FBV.moveHudStyle(mod) == "DIAMOND"
-                        and (self.phase == "moveSelect" or self.phase == "mimicSelect") then
+                        and (self.phase == "moveSelect" or self.phase == "mimicSelect")
+                        and not stackedMenu
+                        and not self._arAwaitingReact then
                         if input and type(input.wasPressed) == "function" then
                             local moves = self.phase == "mimicSelect"
                                 and (self.mimicMoves or {})
@@ -212,14 +250,14 @@ function Hooks.installInput(FBV, mod, ctx)
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
                     if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA
-                        and not mustSwitch and not foeDown then
+                        and not mustSwitch and not foeDown and not slowerWait then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
                     end
                     -- Also latch when COVER!/ENTRENCH! STRIKE/EMERGE/BREAK called
                     -- goMoveSelect (phase becomes moveSelect without our A).
                     if self.phase == "moveSelect" and not entrenched
-                        and not mustSwitch and not foeDown
+                        and not mustSwitch and not foeDown and not slowerWait
                         and (phaseBefore == "menu" or pressedA) then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil

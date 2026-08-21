@@ -5,6 +5,7 @@
 -- faint looks wrong.
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
+--   cast                           overlapping FIRE pose (shot is the attack cue)
 --   attack                         physicals walk in; specials cast in place
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
@@ -34,19 +35,29 @@ return function(Cues)
         if Projectiles and type(Projectiles.move) == "function" then
             local jump = type(Grid.pathObstructed) == "function"
                 and Grid.pathObstructed(g, ent, foe)
+            local slow = opts.slowShot == true or opts.fireCarry == true
+            if slow then
+                session._fireShotSlow = true
+            end
             Projectiles.move(session, side, {
                 category = category or "special",
                 jump = jump,
                 moveType = opts.moveType,
                 moveId = opts.moveId,
+                slowShot = slow,
             })
+            session._fireShotSlow = nil
         end
         H.playAnim(ent, "cast")
     end
 
     local function armCloseGap(session, side, ent, foe, Grid, g, opts, thisId, jump, closed, stepped, battle)
         ent._savedStepSpeed = ent.stepSpeed
-        ent.stepSpeed = Cues.closeGapSpeed(ent, battle or session._battle, side)
+        local Projectiles = session._deps and session._deps.Projectiles
+        Cues.armCloseGapGait(ent, battle or session._battle, side, foe, {
+            Projectiles = Projectiles,
+            now = H.now(session),
+        })
         ent._pendingCloseStrike = {
             moveType = opts.moveType,
             moveId = thisId,
@@ -55,7 +66,9 @@ return function(Cues)
         }
         -- Already next to the foe: punch on the next present tick, do not
         -- burn a "walk first" frame (that stall is most obvious on your mon).
-        ent._closeStrikeWait = not Cues.inMeleeReach(ent, foe)
+        -- If the player could FIRE NOW, keep a wind-up so the charge reads.
+        local fireWait = ent._closeGapMinAt ~= nil
+        ent._closeStrikeWait = (not Cues.inMeleeReach(ent, foe)) or fireWait
         ent._closeStrikeArmedAt = H.now(session)
         ent._returnAt = nil
         ent._withdrawAfterStrike = true
@@ -84,11 +97,11 @@ return function(Cues)
                 side == "player")
         end
         if stepped then
-            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
+            ent._returnAt = H.now(session) + H.playMeleeStrike(session, side, ent, opts, jump)
         else
-            ent._returnAt = nil
+            H.playMeleeStrike(session, side, ent, opts, jump)
+            ent._returnAt = Cues.isTossMove(opts) and (H.now(session) + Cues.TOSS_DUR) or nil
         end
-        H.playAnim(ent, jump and "jump" or "attack")
     end
 
     local function playMeleeApproach(session, side, ent, foe, Grid, g, opts, battle)
@@ -151,9 +164,11 @@ return function(Cues)
         if not ent then
             return false
         end
+        opts = opts or {}
         Grid.dodge(session.grid, ent, H.foeOf(session, side))
         -- Pose variety (type / speed / cycle) is picked inside play("dodge").
         H.playAnim(ent, "dodge")
+        Cues.fireDodgeCounterShot(session, side, opts)
         return true
     end)
 
@@ -189,6 +204,15 @@ return function(Cues)
             return false
         end
         H.playAnim(ent, "brace")
+        return true
+    end)
+
+    Cues.register("cast", function(session, side, kind, Grid, nudgeCamera, battle, opts)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        H.playAnim(ent, "cast")
         return true
     end)
 
@@ -316,6 +340,28 @@ return function(Cues)
             return false
         end
         opts = opts or {}
+        local shot = session._dodgeCounterShot
+        local mid = H.cueMoveId(opts)
+        local Projectiles = session._deps and session._deps.Projectiles
+        local ranged = Cues.isRangedCounter({
+            moveId = opts.moveId,
+            moveType = opts.moveType,
+            category = opts.category,
+        }, Projectiles)
+        if shot and shot.side == side and (not mid or shot.moveId == mid) then
+            session._dodgeCounterShot = nil
+            H.playAnim(ent, "cast")
+            return true
+        end
+        if ranged then
+            Cues.fireDodgeCounterShot(session, side, {
+                counterMoveId = opts.moveId,
+                counterMoveType = opts.moveType,
+                counterCategory = opts.category or "special",
+            })
+            H.playAnim(ent, "cast")
+            return true
+        end
         H.clashFocus(session, side, opts)
         H.playAnim(ent, "counter")
         return true
@@ -327,10 +373,50 @@ return function(Cues)
             return false
         end
         opts = opts or {}
+        if battle and battle._arPendingBraceCounter and side == "player"
+            and not battle._arPendingBraceCounter.fireAt then
+            battle._arPendingBraceCounter.fireAt = H.now(session) + 0.34
+        end
+        local finishing = opts.finishing == true
+        print("[ar] finishing: ", finishing)
+        if finishing then
+            local atkSide = (side == "player") and "enemy" or "player"
+            H.finishingFocus(session, atkSide, opts)
+        end
+        -- FIRE NOW that connected: knock the charger off the line.
+        if battle and battle._arFireNow then
+            local charger = battle._arFireNowCharger or "enemy"
+            if side == charger then
+                local foe = H.foeOf(session, side)
+                Cues.cancelCloseStrike(session, side, Grid)
+                if Grid and type(Grid.knockbackTiles) == "function" then
+                    Grid.knockbackTiles(session.grid, ent, foe, 2)
+                end
+                ent._heavyHit = true
+                local Projectiles = session._deps and session._deps.Projectiles
+                if Projectiles and type(Projectiles.powerHit) == "function" then
+                    Projectiles.powerHit(session, side, opts)
+                end
+                if Projectiles and type(Projectiles.groundKick) == "function" then
+                    Projectiles.groundKick(session, side, opts)
+                end
+                H.impactKick(session, { powerful = true })
+                H.playAnim(ent, "hit")
+                return true
+            end
+        end
         local foe = H.foeOf(session, side)
         local g = session.grid
         local category = H.normCategory(opts.category)
-        local clash = opts.clash == true or session._clashPunch == true
+        local clash = opts.clash == true or opts.finishing == true
+            or session._clashPunch == true
+
+        if opts.via ~= "toss-land" and not clash
+            and (ent.anim == "tossed" or ent.anim == "toss"
+                or (foe and (foe.anim == "toss" or foe.anim == "tossed"))) then
+            session._pendingTossHit = { side = side, opts = opts }
+            return true
+        end
 
         if type(nudgeCamera) == "function" and battle and not clash then
             nudgeCamera(battle, side, 0.35)
@@ -344,10 +430,13 @@ return function(Cues)
         local Projectiles = session._deps and session._deps.Projectiles
         local powerful = Projectiles and type(Projectiles.isPowerfulMove) == "function"
             and Projectiles.isPowerfulMove(opts)
-        H.impactKick(session, { powerful = powerful, clash = clash })
-        if clash or powerful then
+        local crit = opts.crit == true
+        H.impactKick(session, { powerful = powerful or crit, clash = clash })
+        if clash or powerful or crit then
             local obstacle = Grid.obstacleBehind(g, ent, foe, clash and 1 or 2)
-            if not session._clashHitFx and Projectiles and Projectiles.powerHit then
+            if crit and Projectiles and type(Projectiles.critBurst) == "function" then
+                Projectiles.critBurst(session, side, opts)
+            elseif not session._clashHitFx and Projectiles and Projectiles.powerHit then
                 Projectiles.powerHit(session, side, opts)
             end
             session._clashHitFx = nil
@@ -356,11 +445,17 @@ return function(Cues)
                 Projectiles.wallImpact(session, obstacle, opts)
             end
             ent._heavyHit = true
+            if Projectiles and type(Projectiles.groundKick) == "function" then
+                Projectiles.groundKick(session, side, opts)
+            end
             H.playAnim(ent, "hit")
             return true
         end
         if Projectiles and type(Projectiles.lightHit) == "function" then
             Projectiles.lightHit(session, side, opts)
+        end
+        if Projectiles and type(Projectiles.groundKick) == "function" then
+            Projectiles.groundKick(session, side, opts)
         end
         local cat = category or session._lastAttackCategory or "physical"
         -- Both can shove; physical more often / more reliably.
@@ -409,7 +504,35 @@ return function(Cues)
         if H.isExitPlaying(ent) then
             return true
         end
+        -- Dodge-counter / COUNTER! after a miss always connects. A leftover
+        -- "attack missed" tagged on the player must not slip-past that swing
+        -- or hop the foe as if they dodged the proc.
+        local shot = session._dodgeCounterShot
+        if side == "player" and (
+            (battle and (battle._arGuaranteedHit or battle._arCounterClash))
+            or (shot and shot.side == "player")
+        ) then
+            return true
+        end
         opts = opts or {}
+        -- Missed FIRE NOW: keep the shot pose, do not hop the charger aside.
+        if battle and (battle._arFireNow or battle._arFireCarryThrough) then
+            local Projectiles = session._deps and session._deps.Projectiles
+            session._fireShotSlow = true
+            if Projectiles and type(Projectiles.move) == "function" and opts.moveId then
+                Projectiles.move(session, side, {
+                    category = opts.category or "special",
+                    moveType = opts.moveType,
+                    moveId = opts.moveId,
+                    slowShot = true,
+                })
+            elseif Projectiles and type(Projectiles.miss) == "function" then
+                Projectiles.miss(session, side)
+            end
+            session._fireShotSlow = nil
+            H.playAnim(ent, "cast")
+            return true
+        end
         -- Accuracy miss: no punch, no HP. Convert a close-the-gap walk into
         -- a slip-past, then walk home.
         if ent._pendingCloseStrike then
@@ -429,6 +552,15 @@ return function(Cues)
             Projectiles.miss(session, side)
         end
         H.playAnim(ent, "miss")
+        -- The target hops aside so a miss still reads as a dodge, not a
+        -- quiet no-contact. Skip if they already sidestepped this beat.
+        local foe = H.foeOf(session, side)
+        if foe and foe.anim ~= "dodge" and not H.isExitPlaying(foe) then
+            if Grid and type(Grid.dodge) == "function" then
+                Grid.dodge(session.grid, foe, ent)
+            end
+            H.playAnim(foe, "dodge")
+        end
         ent._returnAt = H.now(session) + 0.44
         return true
     end)

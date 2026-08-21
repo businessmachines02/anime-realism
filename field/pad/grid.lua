@@ -2,8 +2,9 @@
 --
 -- The pad (u, v) is the real position. Pixels are just the drawing lerp
 -- (Coords.padToPx). Occupancy (grid.occ) and walkability (from Survey)
--- decide whether a step is legal. Trainers may step aside when a mon
--- lands on or beside them.
+-- decide whether a step is legal. Trainers walk to the outer rim of a
+-- ~4×4 around the opening; they only step aside when a mon occupies
+-- their cell.
 --
 -- u runs player → foe. v is the dodge / knock axis.
 --
@@ -28,13 +29,6 @@ end
 
 local function randomFn()
   return (love and love.math and love.math.random) or math.random
-end
-
-local function pickCell(list)
-  if not list or #list == 0 then
-    return nil
-  end
-  return list[randomFn()(1, #list)]
 end
 
 --- One cardinal step from a delta (the longer axis wins).
@@ -521,45 +515,56 @@ function Grid.closeGap(grid, ent, foeEnt)
   if bestU == nil then
     return false
   end
-  -- Stay near the foe after the strike; do not stash the opening cell.
+  -- Occupancy jumps to the approach cell; the sprite walks. Do not stash a
+  -- returnHome snap to the opening — withdraw recovers to the FIRE ring,
+  -- then idle roam uses the trainer lane.
   ent._returnU, ent._returnV = nil, nil
   return Grid.setPad(grid, ent, bestU, bestV)
 end
 
---- Randomly re-anchor to a free pad in the 3x3 area adjacent to the foe, or stay put if not possible.
+--- Step back to the two-tile FIRE ring after a punch. Home stays the opening
+--- lane: the next CALL decides whether they close again.
 function Grid.withdrawFromFoe(grid, ent, foeEnt)
   if not (grid and ent and foeEnt) then
     return false
   end
   local u, v = padOf(grid, ent)
   local foeU, foeV = padOf(grid, foeEnt)
-  local area3x3 = {}
-  for deltaU = -1, 1 do
-    for deltaV = -1, 1 do
-      local nextU, nextV = foeU + deltaU, foeV + deltaV
-      if Grid.isFree(grid, nextU, nextV, ent.id, ent) then
-        if not (nextU == u and nextV == v) then
-          area3x3[#area3x3 + 1] = { u = nextU, v = nextV }
+  local homeU = ent.homePadU
+  local homeV = ent.homePadV
+  if homeU == nil then
+    homeU, homeV = u, v
+  end
+  local prevDist = math.max(math.abs(u - foeU), math.abs(v - foeV))
+  local bestU, bestV, bestScore
+  for dist = 2, 1, -1 do
+    for deltaU = -dist, dist do
+      for deltaV = -dist, dist do
+        local isEdge = math.abs(deltaU) == dist or math.abs(deltaV) == dist
+        local candU, candV = foeU + deltaU, foeV + deltaV
+        if isEdge and not (candU == u and candV == v)
+            and Grid.isFree(grid, candU, candV, ent.id, ent) then
+          local newDist = math.max(math.abs(candU - foeU), math.abs(candV - foeV))
+          if newDist >= prevDist or dist == 2 then
+            local homeDist = math.abs(candU - homeU) + math.abs(candV - homeV)
+            -- Prefer the FIRE ring, then the opening lane, not a sideways camp.
+            local score = (newDist == 2 and 0 or 20) + homeDist
+            if not bestScore or score < bestScore then
+              bestU, bestV, bestScore = candU, candV, score
+            end
+          end
         end
       end
     end
+    if bestU ~= nil then
+      break
+    end
   end
-  local choice = pickCell(area3x3)
-  local function anchor(nextU, nextV)
-    ent.homePadU, ent.homePadV = nextU, nextV
-    ent._meleeAnchor = true
-    ent._returnU, ent._returnV = nil, nil
-  end
-  if not choice then
-    anchor(u, v)
+  ent._meleeAnchor = nil
+  if not bestU then
     return false
   end
-  if not Grid.setPad(grid, ent, choice.u, choice.v) then
-    anchor(u, v)
-    return false
-  end
-  anchor(choice.u, choice.v)
-  return true
+  return Grid.setPad(grid, ent, bestU, bestV)
 end
 
 function Grid.returnHome(grid, ent)
@@ -824,7 +829,7 @@ function Grid.seekWallCover(grid, ent, foeEnt)
 end
 
 -- ---------------------------------------------------------------------------
--- IDLE — roam near the foe after a close-in, or near home
+-- IDLE — roam near the opening lane. The next CALL closes or fires.
 -- ---------------------------------------------------------------------------
 
 local function shuffleDirs(dirs, rand)
@@ -835,57 +840,40 @@ local function shuffleDirs(dirs, rand)
   return dirs
 end
 
---- Idle roam in the 1–2 tile ring around the foe after a close-in strike.
-local function wanderNearFoe(grid, ent, foeEnt)
-  local u, v = padOf(grid, ent)
-  local foeU, foeV = padOf(grid, foeEnt)
-  local distToFoe = math.max(math.abs(u - foeU), math.abs(v - foeV))
-  local rand = randomFn()
-  local dirs = shuffleDirs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }, rand)
-
-  local function tryStep(okDist)
-    for i = 1, #dirs do
-      local nextU = u + dirs[i][1]
-      local nextV = v + dirs[i][2]
-      local dist = math.max(math.abs(nextU - foeU), math.abs(nextV - foeV))
-      if okDist(dist) and Grid.step(grid, ent, dirs[i][1], dirs[i][2]) then
-        return true
-      end
-    end
+--- Step one cell away from the foe when this mon wants space.
+function Grid.preferDistance(grid, ent, foeEnt)
+  if not (grid and ent and foeEnt) then
     return false
   end
-
-  if distToFoe > 2 then
-    return tryStep(function(dist)
-      return dist < distToFoe and dist >= 1
-    end)
+  local keep = tonumber(ent._keepAway) or 0
+  if keep < 0.28 then
+    return false
   end
-  if distToFoe < 1 then
-    return tryStep(function(dist)
-      return dist >= 1 and dist <= 2
-    end)
-  end
-  if distToFoe == 1 and rand() <= 0.55 then
-    if tryStep(function(dist) return dist == 2 end) then
-      return true
+  local u, v = padOf(grid, ent)
+  local foeU, foeV = padOf(grid, foeEnt)
+  local du, dv = u - foeU, v - foeV
+  local su, sv = 0, 0
+  if math.abs(du) >= math.abs(dv) and du ~= 0 then
+    su = du > 0 and 1 or -1
+  elseif dv ~= 0 then
+    sv = dv > 0 and 1 or -1
+  else
+    su = -(grid.sx or 1)
+    sv = -(grid.sy or 0)
+    if su == 0 and sv == 0 then
+      su = -1
     end
   end
-  if distToFoe == 2 and rand() <= 0.50 then
-    if tryStep(function(dist) return dist == 2 end) then
-      return true
-    end
+  if not Grid.step(grid, ent, su, sv) then
+    return false
   end
-  return tryStep(function(dist)
-    return dist >= 1 and dist <= 2
-  end)
+  ent.homePadU, ent.homePadV = ent.padU, ent.padV
+  return true
 end
 
 function Grid.idleWander(grid, ent, side, foeEnt)
   if not (grid and ent) then
     return false
-  end
-  if ent._meleeAnchor and foeEnt then
-    return wanderNearFoe(grid, ent, foeEnt)
   end
   local homeU, homeV = Grid.homePad(grid, side)
   if homeU == nil then
@@ -920,6 +908,14 @@ function Grid.idleWander(grid, ent, side, foeEnt)
     return tryStepTowardHome()
   end
 
+  if foeEnt and (tonumber(ent._keepAway) or 0) >= 0.28 then
+    local fu, fv = padOf(grid, foeEnt)
+    local distToFoe = math.max(math.abs(u - fu), math.abs(v - fv))
+    if distToFoe < 2 and Grid.preferDistance(grid, ent, foeEnt) then
+      return true
+    end
+  end
+
   -- Wander one step, but never beyond two cells from home.
   local dirs = shuffleDirs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }, rand)
   for i = 1, #dirs do
@@ -931,6 +927,86 @@ function Grid.idleWander(grid, ent, side, foeEnt)
     end
   end
   return false
+end
+
+--- True when (u, v) sits on the opening fight line between the two mons
+--- (inclusive of each mon home). Trainers should not idle here.
+function Grid.onFightLine(grid, u, v)
+  local home = grid and grid.home
+  local p = home and home.player
+  local e = home and home.enemy
+  if not (p and e and p.u ~= nil and e.u ~= nil) then
+    return false
+  end
+  if p.v == e.v then
+    local lo, hi = math.min(p.u, e.u), math.max(p.u, e.u)
+    return v == p.v and u >= lo and u <= hi
+  end
+  if p.u == e.u then
+    local lo, hi = math.min(p.v, e.v), math.max(p.v, e.v)
+    return u == p.u and v >= lo and v <= hi
+  end
+  local minU, maxU = math.min(p.u, e.u), math.max(p.u, e.u)
+  local minV, maxV = math.min(p.v, e.v), math.max(p.v, e.v)
+  if u < minU or u > maxU or v < minV or v > maxV then
+    return false
+  end
+  return math.abs((u - p.u) * (e.v - p.v) - (v - p.v) * (e.u - p.u)) <= 1
+end
+
+--- Chebyshev radius of the trainer rim around the opening mid (~4×4).
+Grid.TRAINER_RIM = 2
+
+--- Outer-perimeter seat around the opening fight. Stays inside a ~4×4 of
+--- the start so a wide pad does not send them to the far map edge.
+function Grid.trainerWatchPad(grid, side, ignoreId)
+  local home = grid and grid.home
+  local p = home and home.player
+  local e = home and home.enemy
+  if not (p and e and p.u ~= nil and e.u ~= nil) then
+    return nil
+  end
+  local midU = math.floor((p.u + e.u) / 2)
+  local midV = math.floor((p.v + e.v) / 2)
+  local sx = grid.sx or 1
+  local sy = grid.sy or 0
+  local rim = Grid.TRAINER_RIM or 2
+  local preferLat = (side == "player") and 1 or -1
+  local sizeU = grid.sizeU or 0
+  local sizeV = grid.sizeV or 0
+  local bestU, bestV, bestScore
+  for u = 0, sizeU - 1 do
+    for v = 0, sizeV - 1 do
+      local du, dv = u - midU, v - midV
+      local dist = math.max(math.abs(du), math.abs(dv))
+      if dist >= rim and dist <= rim + 1
+        and not Grid.onFightLine(grid, u, v)
+        and Grid.isFree(grid, u, v, ignoreId) then
+        local along = du * sx + dv * sy
+        local lat = du * (-sy) + dv * sx
+        local ownHalf = (side == "player" and along <= 0)
+          or (side ~= "player" and along >= 0)
+        if ownHalf then
+          local score = dist == rim and 20 or 8
+          if math.abs(lat) >= 1 then
+            score = score + 10
+          end
+          if lat * preferLat > 0 then
+            score = score + 8
+          end
+          if along ~= 0 and math.abs(lat) >= 1 then
+            score = score + 4
+          end
+          score = score + math.abs(along)
+          if not bestScore or score > bestScore then
+            bestScore = score
+            bestU, bestV = u, v
+          end
+        end
+      end
+    end
+  end
+  return bestU, bestV
 end
 
 return Grid

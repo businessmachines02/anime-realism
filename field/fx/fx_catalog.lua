@@ -24,6 +24,18 @@ Catalog.TYPE_COLORS = {
   FAIRY = { 0.94, 0.58, 0.78 },
 }
 
+-- Gen 1 type-split marks these physical; they still fly, so FIELD / REACT
+-- treat them as specials (no close-the-gap, no melee counter from across
+-- the pad). Contact punches stay physical via MOVE_FX style = "contact".
+Catalog.PROJECTILE_SPECIAL = {
+  SWIFT = true,
+  GUST = true,
+  NIGHT_SHADE = true,
+  TRI_ATTACK = true,
+  BONEMERANG = true,
+  ROCK_THROW = true,
+}
+
 -- Named move overrides (style on effect/move; glitz tunes the paint).
 Catalog.MOVE_FX = {
   HYPER_BEAM = { style = "beam", glitz = "hyper", duration = 0.72 },
@@ -49,7 +61,7 @@ Catalog.MOVE_FX = {
   EMBER = { style = "ember", glitz = "flame", duration = 0.54, arc = 13 },
   FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
   HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
-  WATER_GUN = { style = "orb", glitz = "bubble" },
+  WATER_GUN = { style = "stream", glitz = "jet", duration = 0.52 },
   BUBBLEBEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE_BEAM = { style = "stream", glitz = "bubble", duration = 0.46 },
   BUBBLE = { style = "orb", glitz = "bubble", arc = 12 },
@@ -175,8 +187,9 @@ Catalog.MOVE_FX = {
   STRENGTH = { style = "contact", glitz = "impact" },
   MEGA_PUNCH = { style = "contact", glitz = "impact" },
   MEGA_KICK = { style = "contact", glitz = "impact" },
-  QUICK_ATTACK = { style = "contact", glitz = "dash" },
-  EXTREMESPEED = { style = "contact", glitz = "dash" },
+  QUICK_ATTACK = { style = "contact", glitz = "dash", duration = 0.34 },
+  EXTREMESPEED = { style = "contact", glitz = "dash", duration = 0.40 },
+  EXTREME_SPEED = { style = "contact", glitz = "dash", duration = 0.40 },
   -- Weak / early physicals: still get a readable contact signature.
   POUND = { style = "contact", glitz = "slap" },
   SCRATCH = { style = "contact", glitz = "slash" },
@@ -221,7 +234,7 @@ Catalog.MOVE_FX = {
   CLAMP = { style = "contact", glitz = "pinch" },
   CRABHAMMER = { style = "contact", glitz = "impact" },
   WATERFALL = { style = "stream", glitz = "bubble" },
-  SEISMIC_TOSS = { style = "contact", glitz = "toss", duration = 0.72 },
+  SEISMIC_TOSS = { style = "contact", glitz = "toss", duration = 1.08 },
   FIRE_PUNCH = {
     style = "contact",
     glitz = "firepunch",

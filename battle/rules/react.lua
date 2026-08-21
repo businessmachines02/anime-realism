@@ -80,6 +80,10 @@ local function freshMomentum()
         boosted = false,
         enemyActedThisTurn = false,
         playerActedThisTurn = false,
+        skipQueuedPlayerAction = false,
+        skipQueuedEnemyAction = false,
+        queuedPlayerAction = nil,
+        fireNowMove = nil,
         pickOfferedThisTurn = false,
         awaitingPick = nil,
         pendingDamage = nil,
@@ -177,7 +181,10 @@ local function resetMomentum(battle)
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
     battle._arAwaitingReact = nil
+    battle._arAwaitAgain = nil
+    battle._arAwaitAgainSide = nil
     battle._arWhiffCloseStrike = nil
+    battle._arGuaranteedHit = nil
 end
 clearCalloutPickState = function(battle)
     if not battle then
@@ -236,41 +243,41 @@ local function flushPendingFoeReaction(battle)
     if not pending or not pending.moveDef then
         return
     end
-    local foeLine, foeBuffs, foeTrack, failNarr =
-        hostCall("tryFoeCoverReaction", battle, pending.moveDef)
-    if not foeLine and not failNarr then
-        return
-    end
-    hostCall("applyCalloutBuffs", battle, foeBuffs, foeTrack)
-    -- If the real move anim is already gone from the queue, shouting / sparkles
-    -- would land after damage/faint — keep the silent buffs only.
-    if not hostCall("indexOfMoveAnim", battle) then
-        return
-    end
-    -- Insert fail first, then order: each insertBeforeAnim lands before anim,
-    -- so later inserts sit earlier in the queue (order → fail → anim).
-    local delay = (S().CALLOUT_AUTO_DELAY or 55)
-    if failNarr then
-        local failItem = {
-            text = failNarr,
-            auto = true,
-            autoDelay = delay,
-        }
-        hostCall("tagFieldCue", failItem, "enemy", "hit")
-        hostCall("insertBeforeAnim", battle, failItem)
-        -- Order shout without a dodge pose — they were told to dodge and missed it.
-        if foeLine and not hostCall("enqueueNpcFlavor", battle, foeLine, delay) then
-            local item = {
-                text = foeLine,
+        local foeLine, foeBuffs, foeTrack, failNarr, foeCue =
+            hostCall("tryFoeCoverReaction", battle, pending.moveDef)
+        if not foeLine and not failNarr then
+            return
+        end
+        hostCall("applyCalloutBuffs", battle, foeBuffs, foeTrack)
+        -- If the real move anim is already gone from the queue, shouting / sparkles
+        -- would land after damage/faint — keep the silent buffs only.
+        if not hostCall("indexOfMoveAnim", battle) then
+            return
+        end
+        -- Insert fail first, then order: each insertBeforeAnim lands before anim,
+        -- so later inserts sit earlier in the queue (order → fail → anim).
+        local delay = (S().CALLOUT_AUTO_DELAY or 55)
+        if failNarr then
+            local failItem = {
+                text = failNarr,
                 auto = true,
                 autoDelay = delay,
             }
-            hostCall("markBubbleWait", item, "foe", true, battle)
-            hostCall("insertBeforeAnim", battle, item)
-        end
-    elseif foeLine then
-        local cue = hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
-        local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
+            hostCall("tagFieldCue", failItem, "enemy", "hit")
+            hostCall("insertBeforeAnim", battle, failItem)
+            -- Order shout without a dodge pose — they were told to dodge and missed it.
+            if foeLine and not hostCall("enqueueNpcFlavor", battle, foeLine, delay) then
+                local item = {
+                    text = foeLine,
+                    auto = true,
+                    autoDelay = delay,
+                }
+                hostCall("markBubbleWait", item, "foe", true, battle)
+                hostCall("insertBeforeAnim", battle, item)
+            end
+        elseif foeLine then
+            local cue = foeCue or hostCall("fieldCueForFoeCover", foeBuffs, foeLine)
+            local bubble = hostCall("isDodgeFailNarrator", foeLine) and "narrator" or "foe"
         if not hostCall("enqueueReactWithAttack", battle, foeLine, delay, bubble, cue) then
             local item = {
                 text = foeLine,
@@ -431,6 +438,8 @@ local function enqueueTrainerReactCall(battle, me, moveName, action)
             line = name .. "!\nBrace yourself!"
         elseif action == "commit" then
             line = name .. "!\nTake it!"
+        elseif action == "fire" then
+            line = name .. "!\nNow!"
         elseif action == "entrench" or action == "entrench_hold" then
             line = name .. "!\nHold the line!"
         elseif action == "entrench_break" then
@@ -471,6 +480,16 @@ local function queueReactCounterStrike(battle, result, ctx)
     if not (foe and foe.mon and (foe.mon.hp or 0) > 0) then
         return
     end
+    if result.counter.deferToCall then
+        local st = momentumState(battle)
+        st.mode = "counter"
+        st.boosted = false
+        hostCall("pushNotice", battle, result.counter.line or "Now call it!",
+            { kind = "counter" })
+        hostCall("armFieldChip", battle, "player", "COUNTER")
+        log(battle, "REACT counter", "defer→later call")
+        return
+    end
 
     -- Sit after the incoming hit's text/anim, before endOfTurn / executeAction.
     local q = battle.queue
@@ -497,15 +516,36 @@ local function queueReactCounterStrike(battle, result, ctx)
 
     local kind = result.counter.kind
     local user = battle.player
-    local moveId = hostCall("pickCounterStrikeMove", battle, kind, user)
+    local moveId = result.counter.moveId
+        or hostCall("pickCounterStrikeMove", battle, kind, user, ctx and ctx.move)
     local moves = battle.data and battle.data.moves
     local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
         and moves[moveId]
         or (moveId and { id = moveId, category = "physical", power = 40, type = "NORMAL" })
         or nil
+    local category = tostring((result.counter.category or (move and move.category) or "physical")):lower()
+    if category ~= "special" then
+        category = "physical"
+    end
+    local ranged = result.counter.ranged == true
+        or hostCall("isRangedCounter", battle, {
+            moveId = moveId,
+            moveType = move and move.type,
+            category = category,
+        }) == true
 
     local me = hostCall("playerMonName", battle) or "POKéMON"
     local line = result.counter.line or (me .. " countered!")
+    local deferClash = hostCall("isFieldBattle", battle)
+        and (kind == "brace" or kind == "entrench")
+    if deferClash then
+        -- Rebound after the incoming hit lands; do not clash on the pick.
+        battle._arPendingBraceCounter = {
+            category = category,
+            moveId = moveId,
+            moveType = move and move.type,
+        }
+    end
 
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
@@ -516,12 +556,21 @@ local function queueReactCounterStrike(battle, result, ctx)
             end
             hostCall("pushNotice", battle, line, { kind = "counter" })
             hostCall("armFieldChip", battle, "player", "COUNTER")
+            if battle._arBraceCounterPlayed then
+                battle._arBraceCounterPlayed = nil
+                return
+            end
+            if battle._arPendingBraceCounter then
+                return
+            end
             if hostCall("isFieldBattle", battle) then
-                hostCall("fieldReact", battle, "player", "counter", {
-                    category = "physical",
-                    moveId = moveId,
-                    moveType = move and move.type,
-                })
+                if moveId then
+                    hostCall("fieldReact", battle, "player", "counter", {
+                        category = category,
+                        moveId = moveId,
+                        moveType = move and move.type,
+                    })
+                end
             elseif move then
                 hostCall("signalAttackPresentation", battle, battle.player, battle.enemy, move, {
                     isCalled = true,
@@ -538,22 +587,99 @@ local function queueReactCounterStrike(battle, result, ctx)
     battle.nextInsert = (battle.nextInsert or 0) + 1
     table.insert(battle.queue, battle.nextInsert, {
             arFx = true,
-            arFieldCue = { side = "enemy", kind = "hit", category = "physical", clash = true },
+            arFieldCue = {
+                side = "enemy",
+                kind = "hit",
+                category = category,
+                clash = not ranged,
+            },
         fn = function()
             local target = battle.enemy
-            if not target or not target.mon or (target.mon.hp or 0) <= 0 then
-                return
-            end
-            if type(battle.applyDamage) ~= "function" then
+            if not target or not target.mon or (target.mon.hp or 0) <= 0
+                or type(battle.applyDamage) ~= "function" then
+                battle._arGuaranteedHit = nil
                 return
             end
             battle:applyDamage(target, dealt)
+            battle._arGuaranteedHit = nil
             if target.mon.hp <= 0 and type(battle.onFaint) == "function" then
                 battle:onFaint(target)
             end
         end,
     })
     log(battle, "REACT counter", tostring(kind or "?") .. "→" .. tostring(moveId or "-"))
+end
+
+local function replyMoveForFire(battle, state)
+    local inst = state and state.fireNowMove
+    local shots = listFireNowMoves(battle)
+    local shot = shots[1]
+    local qid = inst and tostring(inst.id or inst.name or ""):upper():gsub("%s+", "_")
+    if qid and qid ~= "" then
+        for i = 1, #shots do
+            if shots[i].moveId == qid then
+                shot = shots[i]
+                break
+            end
+        end
+    end
+    if not inst and shot then
+        inst = shot.moveInst
+        if state then
+            state.fireNowMove = inst
+        end
+    end
+    if not (inst or shot) then
+        return nil
+    end
+    return {
+        id = (shot and shot.moveId) or (inst and (inst.id or inst.name)),
+        name = (shot and shot.name) or (inst and (inst.name or inst.id)),
+        power = (shot and shot.moveDef and shot.moveDef.power) or (inst and inst.power),
+        type = (shot and shot.moveType) or (inst and inst.type),
+        category = "special",
+    }
+end
+
+local function spendFireNowTurn(battle, state)
+    local inst = state and state.fireNowMove
+    if inst and type(inst.pp) == "number" and inst.pp > 0 then
+        inst.pp = inst.pp - 1
+    end
+    if state then
+        state.skipQueuedPlayerAction = true
+        state.playerActedThisTurn = true
+        state.fireNowMove = nil
+    end
+end
+
+-- COVER / ENTRENCH / FIRE: that pick IS the slower action. Dodge / brace /
+-- commit still get the delayed call after the incoming lands.
+local function reactSpendsQueuedAction(action, result)
+    if result and result.fireNow then
+        return true
+    end
+    action = tostring(action or "")
+    return action == "cover" or action == "entrench" or action == "entrench_hold"
+end
+
+-- Going second: react, then call. A dodge/brace proc arms that later
+-- move as the counter instead of adding a third strike on the incoming.
+local function counterDefersToLaterCall(battle, state)
+    state = state or (battle and byBattle[battle])
+    if not (battle and state) then
+        return false
+    end
+    if state.playerActedThisTurn or state.skipQueuedPlayerAction then
+        return false
+    end
+    if type(state.queuedPlayerAction) == "table"
+        and state.queuedPlayerAction.special == "awaitIncoming" then
+        return true
+    end
+    -- Local Speed helper is declared later in this file; use the export.
+    return type(React.playerLikelyGoesSecond) == "function"
+        and React.playerLikelyGoesSecond(battle) == true
 end
 
 local function finishCalloutPick(battle, me, moveName, action, braceCall)
@@ -576,20 +702,36 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     -- Drop any leftover REACT! ui rows so the menu can't pop twice.
     scrubReactPickRows(battle)
 
-    enqueueTrainerReactCall(battle, me, moveName, action)
+    -- Log before callouts / resolve so a HUD-click abort still leaves a trail.
+    log(battle, "REACT pick", tostring(action or "?"))
 
-    if action == "entrench_break" and RD() then
-        local ok = RD().earlyExitEntrench(battle, true)
-        if ok then
-            hostCall("enqueueAutoAfter", battle, "Broke entrench!", (S().CALLOUT_AUTO_DELAY or 55), "player")
+    local okPick, errPick = pcall(function()
+        enqueueTrainerReactCall(battle, me, moveName, action)
+
+        if action == "fire" and pending and pending.ctx then
+            pending.ctx.replyMove = replyMoveForFire(battle, state)
         end
-        action = "commit"
+
+        if action == "entrench_break" and RD() then
+            local ok = RD().earlyExitEntrench(battle, true)
+            if ok then
+                hostCall("enqueueAutoAfter", battle, "Broke entrench!", (S().CALLOUT_AUTO_DELAY or 55), "player")
+            end
+            action = "commit"
+        end
+    end)
+    if not okPick then
+        log(battle, "ERR REACT pick", tostring(errPick))
     end
 
     local result = { lines = {}, damageMult = 1, forceMiss = false }
     if RD() and pending and pending.ctx then
-        result = RD().resolveIncoming(battle, action, braceCall, pending.ctx)
-            or result
+        local okRes, resolved = pcall(RD().resolveIncoming, battle, action, braceCall, pending.ctx)
+        if okRes and type(resolved) == "table" then
+            result = resolved
+        elseif not okRes then
+            log(battle, "ERR REACT resolve", tostring(resolved))
+        end
         RD().state(battle).hitMod = {
             damageMult = result.damageMult or 1,
             forceMiss = result.forceMiss == true,
@@ -597,9 +739,72 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
             coverDurMult = result.coverDurMult or 1,
         }
     end
+    -- FIRE / COVER / ENTRENCH spend this turn even if the shot is deferred
+    -- off the HUD click. Going second must not open the move diamond after.
+    if reactSpendsQueuedAction(action, result) then
+        state.skipQueuedPlayerAction = true
+        state.playerActedThisTurn = true
+        battle._arAwaitCallout = nil
+    end
+
+    if result.counter then
+        if counterDefersToLaterCall(battle, state) then
+            -- Slower side still has a call after this react. Arm that move
+            -- as the counter; do not jab/shoot on the incoming.
+            result.counter.deferToCall = true
+            state.mode = "counter"
+            state.boosted = false
+        else
+            -- Already spent the call (going first): the proc IS the extra hit.
+            battle._arGuaranteedHit = true
+        end
+        if not result.counter.deferToCall then
+            local moveId = hostCall("pickCounterStrikeMove", battle, result.counter.kind,
+                battle.player, pending and pending.ctx and pending.ctx.move)
+            local moves = battle.data and battle.data.moves
+            local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
+                and moves[moveId]
+                or (moveId and { id = moveId, category = "physical", type = "NORMAL" })
+                or nil
+            local category = tostring((move and move.category) or "physical"):lower()
+            if category ~= "special" then
+                category = "physical"
+            end
+            result.counter.moveId = moveId
+            result.counter.moveType = move and move.type
+            result.counter.category = category
+            result.counter.ranged = hostCall("isRangedCounter", battle, {
+                moveId = moveId,
+                moveType = result.counter.moveType,
+                category = category,
+            }) == true
+        end
+    end
+    -- REACT dodge skips origRunDamaging, so accuracy never stamps the
+    -- attacker. Default miss-line side is the player — that made the
+    -- dodge-counter look like it whiffed.
+    if result.forceMiss then
+        battle._arAccuracyMissSide = "enemy"
+    end
+
+    local outcome = result.action or action
+    if result.fireClash then
+        outcome = "clash"
+    elseif result.fireNow then
+        outcome = "fire"
+    elseif result.forceMiss and result.counter and result.counter.ranged
+        and not result.counter.deferToCall then
+        outcome = "dodge_shot"
+    elseif result.forceMiss then
+        outcome = "dodge"
+    elseif tostring(action) == "dodge" then
+        outcome = "dodge_fail"
+    end
+    pcall(hostCall, "releaseReactHold", battle, outcome)
 
     -- Dodge / cover / brace FX before the foe's swing (or instead of it).
-    if type(host.playFocusReactFx) == "function" then
+    -- FIRE NOW lets performMove paint the special; don't also sidestep.
+    if not result.fireNow and type(host.playFocusReactFx) == "function" then
         host.playFocusReactFx(battle, result.action or action, result)
     end
 
@@ -614,44 +819,106 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
         hostCall("pushNotice", battle, result.lines[i], { kind = "react" })
     end
 
+    local focusTxt = "-"
+    if RD() and type(RD().focusLabel) == "function" then
+        local okF, label = pcall(RD().focusLabel, battle, true)
+        if okF and label then
+            focusTxt = tostring(label)
+        end
+    end
     log(battle, "REACT " .. tostring(action),
         string.format("mult=%.2f miss=%s focus=%s",
             tonumber(result.damageMult) or 1,
             result.forceMiss and "Y" or "N",
-            RD() and RD().focusLabel(battle, true) or "-"))
+            focusTxt))
 
-    if pending and pending.ctx then
+    local function resumeReactPick()
+        if not (pending and pending.ctx) then
+            return
+        end
         battle.nextInsert = hostCall("resumeInsertIndex", battle)
-        local okDmg, errDmg = pcall(function()
-            if result.forceMiss then
-                if type(battle.cancelMoveAnim) == "function" then
-                    pcall(battle.cancelMoveAnim, battle)
-                end
-                if type(battle.waitNext) == "function" then
-                    pcall(battle.waitNext, battle, 20)
-                end
-                -- Incoming close-the-gap walk must not punch after a dodge.
-                local user = pending.ctx.user
-                battle._arWhiffCloseStrike = (user and user.isPlayer) and "player" or "enemy"
+        if result.forceMiss then
+            if type(battle.cancelMoveAnim) == "function" then
+                pcall(battle.cancelMoveAnim, battle)
+            end
+            if type(battle.waitNext) == "function" then
+                pcall(battle.waitNext, battle, 20)
+            end
+            -- Incoming close-the-gap walk must not punch after a dodge.
+            local user = pending.ctx.user
+            battle._arWhiffCloseStrike = (user and user.isPlayer) and "player" or "enemy"
+            local holdCharge = hostCall("isFieldBattle", battle)
+                and result.counter and result.counter.ranged
+                and not result.counter.deferToCall
+                and hostCall("closeGapPending", battle, battle._arWhiffCloseStrike)
+            if holdCharge then
+                hostCall("deferCancelCloseStrike", battle, battle._arWhiffCloseStrike, 0.42)
+            else
                 hostCall("cancelCloseStrike", battle, battle._arWhiffCloseStrike)
-                -- Clear hitMod so a later hit isn't zeroed.
+            end
+            if result.fireClash then
+                hostCall("playBeamClash", battle, result, pending.ctx)
+                if result.fireNowContinue then
+                    if result.fireShotMult then
+                        battle._arFireShotMult = result.fireShotMult
+                    end
+                    hostCall("fireQueuedSpecial", battle, state.fireNowMove)
+                    state.fireNowMove = nil
+                else
+                    spendFireNowTurn(battle, state)
+                end
+            end
+            -- Clear hitMod so a later hit isn't zeroed.
+            if RD() then
+                RD().state(battle).hitMod = nil
+            end
+        else
+            if result.fireClash then
+                hostCall("playBeamClash", battle, result, pending.ctx)
+                spendFireNowTurn(battle, state)
+            elseif result.fireNow then
+                hostCall("fireQueuedSpecial", battle, state.fireNowMove)
+                state.fireNowMove = nil
+            end
+            local foe = battle.enemy
+            local foeDown = foe and foe.mon and (foe.mon.hp or 0) <= 0
+            local fireHit = result.fireNow and battle._arFireNowHit == true
+            if result.fireNow and (fireHit or foeDown) then
+                -- Connecting FIRE knocks the charger off the line; skip the punch.
+                if foeDown then
+                    hostCall("cancelCloseStrike", battle, "enemy")
+                else
+                    hostCall("interruptCharge", battle, "enemy")
+                end
                 if RD() then
                     RD().state(battle).hitMod = nil
                 end
             else
+                -- Missed FIRE: charger carries through into the punch.
+                battle._arFireCarryThrough = nil
                 -- REACT menu / cover FX can outlive BC's original arm — re-arm now so
                 -- the foe's swing still gets the attack camera.
-                hostCall("signalAttackPresentation", 
+                hostCall("signalAttackPresentation",
                     battle, pending.ctx.user, pending.ctx.target, pending.ctx.move,
                     { presentationOnly = true })
                 origRunDamaging(battle, pending.ctx, pending.record)
             end
+        end
+        if not result.fireNow then
             queueReactCounterStrike(battle, result, pending.ctx)
-        end)
-        if not okDmg then
-            -- Keep suppressReactDefer latched for the rest of the turn;
-            -- turn_started / clearCalloutPickState clear it.
-            error(errDmg, 0)
+        end
+    end
+
+    if pending and pending.ctx then
+        -- FIELD: do not performMove / apply HP from the HUD click. That
+        -- mutates sprites after this frame's pose and native-aborts Love.
+        if hostCall("isFieldBattle", battle) then
+            battle._arResumeReactPick = resumeReactPick
+        else
+            local okDmg, errDmg = pcall(resumeReactPick)
+            if not okDmg then
+                log(battle, "ERR REACT resume", tostring(errDmg))
+            end
         end
     end
     -- Keep suppressReactDefer true until turn_started so sticky D-pad /
@@ -674,12 +941,183 @@ local function newCalloutPickModal(game, opts)
     }
 end
 
--- Serious hits: Focus menu — Dodge / Cover / Brace / Entrench / Commit.
+local function listFireNowMoves(battle)
+    local list = hostCall("listFireNowMoves", battle, battle and battle.player)
+    if type(list) == "table" then
+        return list
+    end
+    return {}
+end
+
+local function preferredFireNowMove(battle)
+    local shots = listFireNowMoves(battle)
+    if #shots == 0 then
+        return nil, shots, 1
+    end
+    local queued = battle and momentumState(battle).queuedPlayerAction
+    local qid = queued and tostring(queued.id or queued.name or ""):upper():gsub("%s+", "_")
+    if qid and qid ~= "" then
+        for i = 1, #shots do
+            if shots[i].moveId == qid then
+                return shots[i], shots, i
+            end
+        end
+    end
+    return shots[1], shots, 1
+end
+
+local function incomingIsRanged(battle, incoming)
+    if not incoming then
+        return false
+    end
+    return hostCall("isRangedCounter", battle, {
+        moveId = incoming.id or incoming.moveId,
+        moveType = incoming.type or incoming.moveType,
+        category = incoming.category,
+    }) == true
+end
+
+local function incomingIsMelee(battle, incoming)
+    if not incoming then
+        return false
+    end
+    local opts = {
+        moveId = incoming.id or incoming.moveId,
+        moveType = incoming.type or incoming.moveType,
+        category = incoming.category,
+    }
+    if hostCall("isMeleeAttack", battle, opts) == true then
+        return true
+    end
+    if incomingIsRanged(battle, incoming) then
+        return false
+    end
+    return tostring(incoming.category or ""):lower() == "physical"
+end
+
+local function canFireNow(battle, incoming)
+    if not hostCall("isFieldBattle", battle) then
+        return false
+    end
+    if hostCall("playerStatusLocked", battle) then
+        return false
+    end
+    local state = momentumState(battle)
+    if state.playerActedThisTurn or state.skipQueuedPlayerAction then
+        return false
+    end
+    local action = state.queuedPlayerAction
+    -- Item / switch / run / STAY already spent the turn. Waiting on the
+    -- incoming (no move locked yet) is still a FIRE window.
+    if type(action) == "table" and (action.struggle or action.item
+        or action.switch or action.run or action.special == "holdPosition") then
+        return false
+    end
+    if #listFireNowMoves(battle) == 0 then
+        return false
+    end
+    -- Two tiles (one empty cell). Adjacent is melee; farther is not yet a shot.
+    if hostCall("fireRangeOpen", battle) == false then
+        return false
+    end
+    -- Incoming special: meet it with a beam clash.
+    if incomingIsRanged(battle, incoming) then
+        if (incoming.power or 0) <= 0 then
+            return false
+        end
+        if tostring(incoming.category or ""):lower() == "status" then
+            return false
+        end
+        return true
+    end
+    -- Charge still pending, or a physical that has not reached melee yet.
+    if incomingIsMelee(battle, incoming)
+        or hostCall("chargeWindowOpen", battle) then
+        return true
+    end
+    return false
+end
+
+local function fireHintForMenu(battle, incoming)
+    local preferred, shots = preferredFireNowMove(battle)
+    if type(shots) == "table" and #shots > 1 then
+        if incomingIsRanged(battle, incoming) then
+            return "Clash now"
+        end
+        return "Pick a special"
+    end
+    if preferred then
+        return tostring(preferred.name or preferred.moveId or "Special now")
+    end
+    if incomingIsRanged(battle, incoming) then
+        return "Clash now"
+    end
+    return "Special now"
+end
+
+-- Serious hits: Focus menu — Dodge / Fire / Cover / Brace / Entrench / Commit.
+local function queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
+    local choices = {}
+    for i = 1, #shots do
+        local shot = shots[i]
+        choices[#choices + 1] = {
+            label = shot.label or shot.name or shot.moveId,
+            hint = shot.hint or "Special now",
+            id = "fire",
+            moveInst = shot.moveInst,
+        }
+    end
+    hostCall("insertBeforeAnim", battle, {
+        arReactPick = true,
+        arReactEpoch = momentumState(battle).reactEpoch,
+        ui = function()
+            local st = momentumState(battle)
+            if not st.pendingDamage or st.suppressReactDefer then
+                return {
+                    game = battle.game,
+                    update = function(self)
+                        if self.game and self.game.stack then
+                            self.game.stack:pop()
+                        end
+                    end,
+                    draw = function() end,
+                }
+            end
+            return newCalloutPickModal(battle.game, {
+                title = "FIRE!",
+                subtitle = me,
+                index = prefIdx or 1,
+                pad = #choices > 0 and #choices <= 4,
+                choices = choices,
+                cancelable = false,
+                onPick = function(choice)
+                    local st = momentumState(battle)
+                    st.fireNowMove = choice and choice.moveInst or shots[1] and shots[1].moveInst
+                    finishCalloutPick(battle, me, moveName, "fire", nil)
+                end,
+            })
+        end,
+    })
+end
+
 local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
     if not RD() then
         -- Fallback: commit through immediately.
         finishCalloutPick(battle, me, moveName, "commit", nil)
         return
+    end
+    local function beginFireNow(shots, prefIdx)
+        shots = shots or {}
+        if #shots == 0 then
+            finishCalloutPick(battle, me, moveName, "commit", nil)
+            return
+        end
+        if #shots == 1 then
+            momentumState(battle).fireNowMove = shots[1].moveInst
+            finishCalloutPick(battle, me, moveName, "fire", nil)
+            return
+        end
+        queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
     end
     local function openReactMenu()
         local pendingMove = nil
@@ -688,7 +1126,11 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
             pendingMove = st.pendingDamage and st.pendingDamage.ctx
                 and st.pendingDamage.ctx.move
         end
-        local actions = RD().menuActions(battle, pendingMove)
+        local fireNow = canFireNow(battle, pendingMove)
+        local actions = RD().menuActions(battle, pendingMove, {
+            canFireNow = fireNow,
+            fireHint = fireHintForMenu(battle, pendingMove),
+        })
         local choices = {}
         local index = 1
         for i = 1, #actions do
@@ -704,8 +1146,18 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
                 index = #choices
             end
         end
-        if #choices == 0 then
-            choices[1] = { label = "COMMIT", hint = "Take the hit", id = "commit" }
+        if #choices == 0
+            or (#choices == 1 and choices[1].id == "commit") then
+            finishCalloutPick(battle, me, moveName, "commit", nil)
+            return {
+                game = battle.game,
+                update = function(self)
+                    if self.game and self.game.stack then
+                        self.game.stack:pop()
+                    end
+                end,
+                draw = function() end,
+            }
         end
         return newCalloutPickModal(battle.game, {
             title = "REACT!",
@@ -725,6 +1177,11 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
                         braceCall = "status"
                     end
                     finishCalloutPick(battle, me, moveName, "brace", braceCall)
+                    return
+                end
+                if id == "fire" then
+                    local _, shots, prefIdx = preferredFireNowMove(battle)
+                    beginFireNow(shots, prefIdx)
                     return
                 end
                 finishCalloutPick(battle, me, moveName, id, nil)
@@ -999,6 +1456,12 @@ local function shouldDeferForCalloutPick(battle, ctx)
     if not shouldOfferCalloutPick(battle, move) then
         return false
     end
+    -- Drained Focus: COMMIT is the only row, so skip the HUD and take the hit.
+    if RD() and not RD().hasReactChoice(battle, move, {
+        canFireNow = canFireNow(battle, move),
+    }) then
+        return false
+    end
     local state = momentumState(battle)
     -- Already resolved this hit (finishCalloutPick → origRunDamaging), or
     -- a pick is already open / pending.
@@ -1076,7 +1539,83 @@ function React.newPickModal(game, opts)
 end
 
 function React.shouldOffer(battle, move)
-    return shouldOfferCalloutPick(battle, move)
+    if not shouldOfferCalloutPick(battle, move) then
+        return false
+    end
+    if RD() then
+        return RD().hasReactChoice(battle, move, {
+            canFireNow = canFireNow(battle, move),
+        }) == true
+    end
+    return true
+end
+
+function React.canFireNow(battle, incoming)
+    return canFireNow(battle, incoming)
+end
+
+local function battlerSpeed(battler)
+    if not battler then
+        return 0
+    end
+    if battler.curStats and battler.curStats.speed then
+        local ok, TurnOrder = pcall(require, "src.battle.TurnOrder")
+        if ok and TurnOrder and type(TurnOrder.effectiveSpeed) == "function" then
+            local okS, spe = pcall(TurnOrder.effectiveSpeed, battler)
+            if okS and type(spe) == "number" then
+                return spe
+            end
+        end
+    end
+    local stats = battler.curStats or battler.stats or {}
+    return tonumber(stats.speed or stats.spe) or 0
+end
+
+--- True when the player's Speed is strictly below the foe's (stages /
+--- paralysis included when TurnOrder is available). Ties still pick first.
+function React.playerLikelyGoesSecond(battle)
+    if not (battle and battle.player and battle.enemy) then
+        return false
+    end
+    return battlerSpeed(battle.player) < battlerSpeed(battle.enemy)
+end
+
+function React.spendsQueuedAction(action, result)
+    return reactSpendsQueuedAction(action, result)
+end
+
+function React.counterDefersToLaterCall(battle)
+    return counterDefersToLaterCall(battle, battle and byBattle[battle])
+end
+
+-- Player counter after a miss (REACT dodge proc, COUNTER! extra, or an
+-- armed opening) always connects. The foe does not sidestep it.
+function React.isGuaranteedCounterHit(battle, user, target)
+    if not (battle and user and user.isPlayer) then
+        return false
+    end
+    if target and target.isPlayer then
+        return false
+    end
+    if battle._arGuaranteedHit or battle._arCounterClash then
+        return true
+    end
+    local state = byBattle[battle]
+    if not state then
+        return false
+    end
+    if state.sameTurnCounterStrike then
+        return true
+    end
+    return state.mode == "counter" and not state.boosted
+end
+
+function React.isAwaitIncoming(action)
+    return type(action) == "table" and action.special == "awaitIncoming"
+end
+
+function React.awaitIncomingAction()
+    return { special = "awaitIncoming" }
 end
 
 
@@ -1138,11 +1677,15 @@ function EffectRegistry.runDamaging(battle, ctx, record)
         local move = ctx.move
         -- Cursor default only — menu always offers Focus options.
         local preferred = hostCall("foeMoveIsSpecial", move) and "dodge" or "brace"
+        if canFireNow(battle, move) then
+            preferred = "fire"
+        end
         state.awaitingPick = "react"
         state.pendingDamage = { ctx = ctx, record = record }
         state.pickOfferedThisTurn = true
         battle._arPickOfferedThisTurn = true
         battle._arAwaitingReact = true
+        hostCall("beginReactHold", battle)
         -- Pin the engine's attack anim so finishCalloutPick resumes after it
         -- (not before endOfTurn). Without this, REACT! landed after the swing.
         do

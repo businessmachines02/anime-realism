@@ -51,6 +51,10 @@ return function(Cues)
         ent._closeStrikeDeadline = nil
         ent._closeStrikeWait = nil
         ent._closeStrikeArmedAt = nil
+        ent._closeGapMinAt = nil
+        ent._closeGapCruise = nil
+        ent._closeGapStart = nil
+        ent._closeGapSpan = nil
     end
 
     function H.fireCloseStrike(session, side, ent, Grid)
@@ -93,9 +97,21 @@ return function(Cues)
             Projectiles.contact(session, side, pending)
         end
         local jump = (pending and pending.jump) or ent._attackJump
-        H.playAnim(ent, jump and "jump" or "attack")
-        local punch = jump and 0.56 or 0.48
-        ent._returnAt = H.now(session) + punch
+        local held = session._pendingCloseHit
+        local finishing = held and held.opts and held.opts.finishing == true
+        if Cues.isTossMove(pending) then
+            H.playTossPair(session, side)
+            if finishing and side == "player" then
+                H.finishingFocus(session, side, held.opts)
+            end
+            ent._returnAt = H.now(session) + Cues.TOSS_DUR
+        elseif finishing and side == "player" then
+            H.finishingFocus(session, side, held.opts)
+            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
+        else
+            H.playAnim(ent, jump and "jump" or "attack")
+            ent._returnAt = H.now(session) + (jump and 0.56 or 0.48)
+        end
         -- Shove now that occupancy is adjacent. damage_dealt during the walk
         -- was stashed; a replay after this is skipped by shouldSkipEvent.
         Cues.flushCloseHit(session, Grid)
@@ -132,6 +148,15 @@ return function(Cues)
         if Cues.awaitingReact(battle) then
             return false
         end
+        if Cues.awaitingCallout(battle) then
+            return true
+        end
+        if battle and battle._arPendingBraceCounter then
+            return true
+        end
+        if Cues.tossAirPending(session) then
+            return true
+        end
         local p, e = session.playerMon, session.enemyMon
         return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
     end
@@ -146,6 +171,27 @@ return function(Cues)
         H.restoreStepSpeed(ent)
         ent._withdrawAfterStrike = true
         ent._returnAt = H.now(session)
+        return true
+    end
+
+    --- FIRE NOW connected: stop the charge and shove the charger back.
+    function Cues.interruptCharge(session, side, Grid)
+        local ent = H.sideEnt(session, side)
+        if not ent then
+            return false
+        end
+        local wasCharging = ent._pendingCloseStrike ~= nil
+        Cues.cancelCloseStrike(session, side, Grid)
+        if not wasCharging then
+            return false
+        end
+        Grid = Grid or (session._deps and session._deps.Grid)
+        local foe = H.foeOf(session, side)
+        if Grid and type(Grid.knockbackTiles) == "function" then
+            Grid.knockbackTiles(session.grid, ent, foe, 2)
+        end
+        ent._heavyHit = true
+        H.playAnim(ent, "hit")
         return true
     end
 
@@ -180,8 +226,8 @@ return function(Cues)
         return settled
     end
 
-    --- Drop leftover close-gap punch clocks at turn start. Keep melee home /
-    --- `_meleeAnchor` so idle roam does not bounce back to the opening cell.
+    --- Drop leftover close-gap punch clocks at turn start. Opening home
+    --- stays the idle roam so the next CALL decides whether they close.
     function Cues.resetTurnSide(session, side, keep, _)
         local ent = H.sideEnt(session, side)
         if not ent or keep then
@@ -193,6 +239,7 @@ return function(Cues)
         H.restoreStepSpeed(ent)
         ent._returnAt = nil
         ent._withdrawAfterStrike = nil
+        ent._meleeAnchor = nil
         return true
     end
 
@@ -208,6 +255,28 @@ return function(Cues)
         local side = user.isPlayer and "player" or "enemy"
         local ent = H.sideEnt(session, side)
         return ent and ent._pendingCloseStrike and true or false
+    end
+
+    --- Hold the charger's punch HP. A FIRE NOW bolt into the charger lands now.
+    function Cues.shouldHoldApplyDamage(session, battle, target)
+        if not (session and battle) then
+            return false
+        end
+        if battle._arFireNow or battle._arCloseGapResuming then
+            return false
+        end
+        if not Cues.closeGapHoldActive(session) then
+            return false
+        end
+        local playerCharging = session.playerMon and session.playerMon._pendingCloseStrike
+        local enemyCharging = session.enemyMon and session.enemyMon._pendingCloseStrike
+        if enemyCharging and not playerCharging then
+            return target == battle.player
+        end
+        if playerCharging and not enemyCharging then
+            return target == battle.enemy
+        end
+        return true
     end
 
     --- Normalize one held `{ ctx, record }` or a list of them.

@@ -218,6 +218,11 @@ return function(env)
       and Cues.closeGapHoldActive(session)
   end
 
+  function FBV.shouldHoldApplyDamage(session, battle, target)
+    return Cues and type(Cues.shouldHoldApplyDamage) == "function"
+      and Cues.shouldHoldApplyDamage(session, battle, target)
+  end
+
   function FBV.shouldParkEngineQueue(session)
     return Cues and type(Cues.shouldParkEngineQueue) == "function"
       and Cues.shouldParkEngineQueue(session)
@@ -297,6 +302,103 @@ return function(env)
     if session and Cues and type(Cues.cancelCloseStrike) == "function" then
       return Cues.cancelCloseStrike(session, side, Grid)
     end
+  end
+
+  function FBV.interruptCharge(battle, side)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.interruptCharge) == "function" then
+      return Cues.interruptCharge(session, side, Grid)
+    end
+  end
+
+  function FBV.deferCancelCloseStrike(battle, side, delay)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.deferCancelCloseStrike) == "function" then
+      return Cues.deferCancelCloseStrike(session, side, delay)
+    end
+  end
+
+  function FBV.beginReactHold(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.beginReactHold) == "function" then
+      return Cues.beginReactHold(session, battle)
+    end
+  end
+
+  function FBV.releaseReactHold(battle, outcome)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.releaseReactHold) == "function" then
+      return Cues.releaseReactHold(session, outcome)
+    end
+  end
+
+  function FBV.beginAgainHold(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.beginAgainHold) == "function" then
+      return Cues.beginAgainHold(session, battle)
+    end
+  end
+
+  function FBV.releaseAgainHold(battle, outcome)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.releaseAgainHold) == "function" then
+      return Cues.releaseAgainHold(session, outcome)
+    end
+  end
+
+  function FBV.againOffersCall(opts)
+    if Cues and type(Cues.againOffersCall) == "function" then
+      return Cues.againOffersCall(opts, Projectiles)
+    end
+  end
+
+  function FBV.playBeamClash(battle, result, ctx)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.playBeamClash) == "function" then
+      return Cues.playBeamClash(session, Grid, result, ctx)
+    end
+  end
+
+  function FBV.isRangedCounter(opts)
+    if Cues and type(Cues.isRangedCounter) == "function" then
+      return Cues.isRangedCounter(opts, Projectiles)
+    end
+  end
+
+  function FBV.chargeWindowOpen(battle, side)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.chargeWindowOpen) == "function" then
+      return Cues.chargeWindowOpen(session, side)
+    end
+    return false
+  end
+
+  function FBV.playerChargeWindowOpen(battle)
+    return FBV.chargeWindowOpen(battle, "player")
+  end
+
+  function FBV.fireRangeOpen(battle)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.fireRangeOpen) == "function" then
+      return Cues.fireRangeOpen(session)
+    end
+  end
+
+  function FBV.applyFarShotAccuracy(battle, ctx, hit)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.applyFarShotAccuracy) == "function" then
+      return Cues.applyFarShotAccuracy(session, ctx, hit)
+    end
+    return hit
+  end
+
+  function FBV.closeGapPending(battle, side)
+    local session = Lifecycle.get(battle)
+    if not session then
+      return false
+    end
+    local ent = (side == "player") and session.playerMon or session.enemyMon
+    return ent and ent._pendingCloseStrike and true or false
   end
 
   function FBV.nudgeCamera(battle, side, seconds)
@@ -435,6 +537,13 @@ return function(env)
     return Lifecycle.shouldSkipEventReact(battle, side, kind, opts)
   end
 
+  function FBV.isFinishingBlow(user, target)
+    if Cues and type(Cues.isFinishingBlow) == "function" then
+      return Cues.isFinishingBlow(user, target)
+    end
+    return false
+  end
+
   function FBV.onFainted(battle, side)
     return Lifecycle.onFainted(battle, side)
   end
@@ -536,6 +645,9 @@ return function(env)
     local RD = packages and packages.battle and packages.battle.ReactiveDefense
     deps.ReactiveDefense = RD
     FBV.ReactiveDefense = RD
+    local React = packages and packages.battle and packages.battle.React
+    deps.React = React
+    FBV.React = React
     if packages and packages.log then
       FBV.setLog(packages.log)
     end

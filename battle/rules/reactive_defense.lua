@@ -26,6 +26,7 @@ RD.FOCUS_REGEN_REACT = 5
 RD.COST = {
   commit = 0, -- just take it the usual way
   dodge = 25,
+  fire = 15,
   cover = 20,
   cover_exit = 10,
   brace = 15,
@@ -51,6 +52,11 @@ RD.DODGE_COUNTER_CHANCE = 0.30
 RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2
 RD.DODGE_FAIL_MULT = 1.10
+RD.FIRE_CAST_MULT = 1.20
+-- Beam clash: ratio to shove the other shot aside. Below this is a deadlock.
+RD.CLASH_PUSH = 1.35
+RD.CLASH_LOSE_MULT = 0.55
+RD.CLASH_WIN_SHOT_MULT = 0.75
 
 RD.BRACE_WRONG_MULT = 1.18
 RD.BRACE_COUNTER_CHANCE = 0.35
@@ -179,6 +185,110 @@ local function specialStat(battler)
   return battleStat(battler, "special")
 end
 
+local function defenderTypes(battler)
+  if not battler then
+    return { "NORMAL" }
+  end
+  local types = battler.curTypes
+  if type(types) ~= "table" or #types == 0 then
+    types = battler.types
+  end
+  if type(types) ~= "table" or #types == 0 then
+    local mon = monOf(battler)
+    types = mon and mon.types
+  end
+  if type(types) ~= "table" or #types == 0 then
+    local def = battler.def
+    types = def and def.types
+  end
+  if type(types) == "table" and #types > 0 then
+    return types
+  end
+  return { "NORMAL" }
+end
+
+local function typeEffectiveness(moveType, defender)
+  moveType = tostring(moveType or ""):upper()
+  if moveType == "" then
+    return 1
+  end
+  local ok, TypeChart = pcall(require, "src.battle.TypeChart")
+  if ok and TypeChart and type(TypeChart.effectiveness) == "function" then
+    local okE, mult = pcall(TypeChart.effectiveness, moveType, defenderTypes(defender))
+    if okE and type(mult) == "number" then
+      if mult <= 0 then
+        return 0.25
+      end
+      return mult / 10
+    end
+  end
+  return 1
+end
+
+local function clashMovePower(battle, move)
+  if not move then
+    return 40
+  end
+  local power = tonumber(move.power)
+  if power and power > 0 then
+    return power
+  end
+  local id = tostring(move.id or move.name or ""):upper():gsub("%s+", "_")
+  local moves = battle and battle.data and battle.data.moves
+  local def = id ~= "" and type(moves) == "table" and moves[id]
+  return tonumber(def and def.power) or 40
+end
+
+local function clashMoveType(battle, move)
+  if not move then
+    return "NORMAL"
+  end
+  local typ = move.type or move.moveType
+  if typ and tostring(typ) ~= "" then
+    return tostring(typ):upper()
+  end
+  local id = tostring(move.id or move.name or ""):upper():gsub("%s+", "_")
+  local moves = battle and battle.data and battle.data.moves
+  local def = id ~= "" and type(moves) == "table" and moves[id]
+  return tostring(def and def.type or "NORMAL"):upper()
+end
+
+--- Who shoves whom when two specials meet. `reply` is the defender's shot.
+function RD.clashScore(battle, user, move, foe)
+  local power = clashMovePower(battle, move)
+  local spec = specialStat(user)
+  local mod = typeEffectiveness(clashMoveType(battle, move), foe)
+  return math.max(1, power) * spec * mod
+end
+
+--- `opts.replySide` is "player" (default) or "enemy". Win means the
+--- defender's reply overpowers the incoming shot.
+function RD.contestSpecialClash(battle, incoming, reply, opts)
+  if not (battle and incoming and reply) then
+    return "tie", 1
+  end
+  opts = opts or {}
+  local replySide = opts.replySide or "player"
+  local mineUser, mineFoe, theirsUser, theirsFoe
+  if replySide == "enemy" then
+    mineUser, mineFoe = battle.enemy, battle.player
+    theirsUser, theirsFoe = battle.player, battle.enemy
+  else
+    mineUser, mineFoe = battle.player, battle.enemy
+    theirsUser, theirsFoe = battle.enemy, battle.player
+  end
+  local mine = RD.clashScore(battle, mineUser, reply, mineFoe)
+  local theirs = RD.clashScore(battle, theirsUser, incoming, theirsFoe)
+  local ratio = mine / math.max(1, theirs)
+  if ratio >= (RD.CLASH_PUSH or 1.35) then
+    return "win", ratio
+  end
+  if ratio <= 1 / (RD.CLASH_PUSH or 1.35) then
+    return "lose", ratio
+  end
+  return "tie", ratio
+end
+
 local function moveId(move)
   if not move then
     return ""
@@ -186,9 +296,22 @@ local function moveId(move)
   return tostring(move.id or move.index or ""):upper()
 end
 
+-- Gen 1 type-split is physical; these still fly. Match field/fx/fx_catalog.lua.
+local PROJECTILE_SPECIAL = {
+  SWIFT = true,
+  GUST = true,
+  NIGHT_SHADE = true,
+  TRI_ATTACK = true,
+  BONEMERANG = true,
+  ROCK_THROW = true,
+}
+
 local function moveIsSpecial(move)
   if not move then
     return false
+  end
+  if PROJECTILE_SPECIAL[moveId(move)] then
+    return true
   end
   if move.category == "special" then
     return true
@@ -204,6 +327,16 @@ local function moveIsSpecial(move)
     end
   end
   return false
+end
+
+function RD.isSpecialClashIncoming(move)
+  if not move or (move.power or 0) <= 0 then
+    return false
+  end
+  if tostring(move.category or ""):lower() == "status" then
+    return false
+  end
+  return moveIsSpecial(move)
 end
 
 local function moveCategory(move)
@@ -368,56 +501,8 @@ function RD.dodgeSuccessChance(defender, attacker)
   return chance
 end
 
---- Trainer-foe REACT pick. Weighted, not a fixed special→dodge / physical→brace
---- split. Unaffordable options drop out so a drained foe has to Commit.
-function RD.pickFoeReact(battle, move, isSpecial)
-  if not battle or not RD.canReact(battle, false) or RD.isUnreactable(move) then
-    return "commit"
-  end
-  if isSpecial == nil then
-    isSpecial = moveIsSpecial(move)
-  end
-  local enemy = battle.enemy
-  local player = battle.player
-  local focus = (RD.sideState(battle, false).focus) or 0
-  local speGap = speedStat(enemy) - speedStat(player)
-  local bulk = isSpecial and specialStat(enemy) or defenseStat(enemy)
-
-  local function jitter(w)
-    return math.max(0, (w or 0) * (0.70 + rng() * 0.60))
-  end
-
-  local wCommit = jitter(30)
-  local wDodge = jitter(isSpecial and 32 or 16)
-  local wBrace = jitter(isSpecial and 16 or 32)
-  wDodge = wDodge + clamp(speGap * 0.12, -14, 16)
-  wBrace = wBrace + clamp((bulk - 70) * 0.08, -10, 14)
-  if focus <= 22 then
-    wCommit = wCommit + 20
-  end
-  if not RD.affordable(battle, false, "dodge") then
-    wDodge = 0
-  end
-  if not RD.affordable(battle, false, "brace") then
-    wBrace = 0
-  end
-  wDodge = math.max(0, wDodge)
-  wBrace = math.max(0, wBrace)
-  wCommit = math.max(0, wCommit)
-  local total = wCommit + wDodge + wBrace
-  if total <= 0 then
-    return "commit"
-  end
-  local roll = rng() * total
-  if roll < wCommit then
-    return "commit"
-  end
-  roll = roll - wCommit
-  if roll < wDodge then
-    return "dodge"
-  end
-  return "brace"
-end
+-- Trainer-foe picks live in rules/foe_ai.lua (FoeAi.attach installs
+-- RD.pickFoeReact). Tests that call the picker must load both files.
 
 function RD.braceReduction(defender, category)
   local bulk = (category == "special") and specialStat(defender) or defenseStat(defender)
@@ -560,6 +645,48 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
       side.emergeExposed = false
       result.lines[#result.lines + 1] = "Caught coming\nout of cover!"
     end
+    return result
+  end
+
+  if action == "fire" then
+    local ok, cost = RD.spend(battle, true, "fire")
+    if not ok then
+      result.action = "commit"
+      result.lines[#result.lines + 1] = "Not enough\nFocus!"
+      return RD.resolveIncoming(battle, "commit", nil, ctx)
+    end
+    result.focusSpent = cost
+    side.reactedThisTurn = true
+    result.fireNow = true
+    local incoming = ctx and ctx.move
+    local reply = ctx and ctx.replyMove
+    if RD.isSpecialClashIncoming(incoming) and reply then
+      local verdict, ratio = RD.contestSpecialClash(battle, incoming, reply)
+      result.fireClash = verdict
+      result.fireClashRatio = ratio
+      result.chip = "CLASH"
+      if verdict == "win" then
+        result.forceMiss = true
+        result.fireNowContinue = true
+        result.fireShotMult = RD.CLASH_WIN_SHOT_MULT
+        result.damageMult = 1
+        result.lines[#result.lines + 1] = "Overpowered it!"
+      elseif verdict == "tie" then
+        result.forceMiss = true
+        result.fireNowContinue = false
+        result.damageMult = 1
+        result.lines[#result.lines + 1] = "The attacks\ncanceled out!"
+      else
+        result.forceMiss = false
+        result.fireNowContinue = false
+        result.damageMult = RD.CLASH_LOSE_MULT
+        result.lines[#result.lines + 1] = "Couldn't\noverpower it!"
+      end
+      return result
+    end
+    result.damageMult = RD.FIRE_CAST_MULT
+    result.chip = "FIRE"
+    result.lines[#result.lines + 1] = "Struck in the\nmiddle of it!"
     return result
   end
 
@@ -768,7 +895,8 @@ function RD.endTurn(battle)
   end
 end
 
-function RD.menuActions(battle, move)
+function RD.menuActions(battle, move, opts)
+  opts = opts or {}
   local side = RD.sideState(battle, true)
   local actions = {}
   local function add(id, label, hint, costKey)
@@ -823,15 +951,33 @@ function RD.menuActions(battle, move)
   if not unreactable then
     add("dodge", "DODGE", "Evade or bust", "dodge")
   end
+  if opts.canFireNow then
+    add("fire", "FIRE", opts.fireHint or "Strike now", "fire")
+  end
   add("cover", side.cover and "STAY COVER" or "TAKE COVER",
     side.cover and "Hold position" or "Durability pool", "cover")
   if not unreactable then
     add("brace", "BRACE", "Match the hit", "brace")
   end
-  add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
+  -- FIRE takes the diamond's fourth slot; entrenching mid-lunge is the odd one out.
+  if not opts.canFireNow then
+    add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
+  end
   add("commit", "COMMIT", "Take the hit", "commit")
 
   return actions
+end
+
+--- True when the REACT HUD has a real pick (not just free COMMIT).
+function RD.hasReactChoice(battle, move, opts)
+  local actions = RD.menuActions(battle, move, opts)
+  for i = 1, #actions do
+    local id = actions[i] and actions[i].id
+    if id and id ~= "commit" then
+      return true
+    end
+  end
+  return false
 end
 
 function RD.focusLabel(battle, isPlayer)

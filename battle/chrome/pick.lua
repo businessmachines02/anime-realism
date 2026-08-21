@@ -53,6 +53,9 @@ local function shortReactLabel(choice)
     if name == "ENTRENCH" then
         return "ENTR"
     end
+    if name == "FIRE" then
+        return "FIRE"
+    end
     return name
 end
 
@@ -455,17 +458,21 @@ function Pick.newModal(game, opts)
                 byId[id] = choices[i]
             end
         end
-        if byId.dodge or byId.commit or byId.entrench then
+        if byId.dodge or byId.commit or byId.entrench or byId.fire then
             if byId.dodge then
                 byId.dodge.dir = "up"
             end
             if byId.cover then
                 byId.cover.dir = "left"
             end
-            if byId.brace then
+            if byId.fire then
+                byId.fire.dir = "right"
+            elseif byId.brace then
                 byId.brace.dir = "right"
             end
-            if byId.entrench then
+            if byId.fire and byId.brace then
+                byId.brace.dir = "down"
+            elseif byId.entrench then
                 byId.entrench.dir = "down"
             end
             if byId.commit then
@@ -557,7 +564,15 @@ function Pick.newModal(game, opts)
         Sound.play(self.game.data, "Press_AB")
         self.game.stack:pop()
         if self.onPick then
-            self.onPick(choice)
+            -- FIRE / dodge must not throw out of Menu:update — FIELD
+            -- swallows that as a native abort with no error screen.
+            local ok, err = pcall(self.onPick, choice)
+            if not ok then
+                local fn = host.log
+                if type(fn) == "function" then
+                    pcall(fn, nil, "ERR pick", tostring(err))
+                end
+            end
         end
     end
 

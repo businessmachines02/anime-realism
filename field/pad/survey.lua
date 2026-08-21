@@ -3,8 +3,8 @@
 -- Queried once at staging from the live map (collision / water / warps /
 -- blocking entities). Land walkables become grid.walkable; water cells become
 -- grid.water (Water-type mons only). The map itself is never edited.
--- EXTRA_U / HALF_V grow the fight envelope beyond the tight opening so mons
--- can expand out from adjacent start tiles during the battle.
+-- EXTRA_U / HALF_V grow the fight envelope beyond the opening so mons can
+-- expand out from their start tiles during the battle.
 --
 -- Formation cells from Layout.plan are snapped onto surveyed land tiles;
 -- illegal homes are never force-marked walkable (that parked mons under roofs).

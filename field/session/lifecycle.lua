@@ -29,7 +29,7 @@
 --   CAMERA             pan, mouse peek, keep action on screen
 --   BEGIN              survey the pad, spawn the cast, go Live
 --   MONS               send-out, switch, faint when HP hits 0, capture
---   IDLE / TRAINERS    roam in place; trainers step off the pad
+--   IDLE / TRAINERS    roam in place; trainers walk to the opening rim
 --   TURNS / CUES       turn start cleanup; fan a beat out to cues.lua
 --   TICK               every-frame present + logic work
 --   FINISH             restore entities, camera, voxel, followers
@@ -472,7 +472,8 @@ function Lifecycle.clashLetterboxSize(viewW, viewH)
 end
 
 function Lifecycle.drawClashLetterbox(session, battle)
-    if not (session and (session._clashPunch or (session._clashSlowT or 0) > 0)) then
+    if not (session and (session._clashPunch or session._reactHold
+        or (session._clashSlowT or 0) > 0)) then
         return
     end
     local g = love and love.graphics
@@ -950,9 +951,10 @@ function Lifecycle.focusCamera(battle, dt)
     local nudgeT = session.cameraNudgeT or 0
     if not looking and nudgeT > 0 and session.cameraNudgeX and session.cameraNudgeY then
         local punch = session._clashPunch == true
+        local react = session._reactHold == true
         -- Full lock on the clash while the hold is up; ease out in the last 0.4s.
-        local hold = punch and 0.45 or 0.35
-        local blend = math.min(1, nudgeT / hold) * (punch and 1 or 0.55)
+        local hold = (punch and 0.45) or (react and 0.55) or 0.35
+        local blend = math.min(1, nudgeT / hold) * ((punch and 1) or (react and 0.82) or 0.55)
         focusX = focusX * (1 - blend) + session.cameraNudgeX * blend
         focusY = focusY * (1 - blend) + session.cameraNudgeY * blend
         if punch then
@@ -1005,7 +1007,7 @@ function Lifecycle.focusCamera(battle, dt)
         local rate = Lifecycle.CAMERA_PAN_RATE
         if looking then
             rate = Lifecycle.CAMERA_LOOK_RATE
-        elseif session._clashPunch then
+        elseif session._clashPunch or session._reactHold then
             rate = Lifecycle.CAMERA_PAN_CLASH_RATE
         elseif nudgeT > 0 then
             rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
@@ -1702,9 +1704,43 @@ function Lifecycle.despawnMon(battle, side)
 end
 
 -- ---------------------------------------------------------------------------
--- IDLE / TRAINERS — between moves, mons may roam a cell; trainers step
--- aside so they are not standing on the pad.
+-- IDLE / TRAINERS — between moves, mons may roam a cell; trainers walk
+-- to the outer rim of a ~4×4 around the opening and stay there.
 -- ---------------------------------------------------------------------------
+local function monStatus(ent)
+    local battler = ent and ent._battleBattler
+    local status = battler and battler.mon and battler.mon.status
+    if type(status) == "string" then
+        return status:upper()
+    end
+    return nil
+end
+
+local function wanderBusy(ent, asleep)
+    if not ent then
+        return true
+    end
+    if ent._returnAt or ent._pendingCloseStrike or ent._withdrawAfterStrike then
+        return true
+    end
+    if ent._fieldVanished or ent._emerging then
+        return true
+    end
+    local anim = ent.anim or "idle"
+    if anim == "sendout" or anim == "recall" or anim == "faint" or anim == "capture"
+        or anim == "attack" or anim == "jump" or anim == "dodge" or anim == "counter"
+        or anim == "toss" or anim == "tossed"
+        or anim == "vanish_dig" or anim == "vanish_fly"
+        or anim == "emerge_dig" or anim == "emerge_fly"
+        or anim == "buried" or anim == "aloft" then
+        return true
+    end
+    if asleep then
+        return false
+    end
+    return anim ~= "idle"
+end
+
 local function tickIdleWander(session, Grid, ent, side, dt)
     if not ent or ent._removed or ent.hidden or ent._fainting then
         return
@@ -1713,8 +1749,12 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         ent.wanderTx, ent.wanderTy = nil, nil
         return
     end
-    local busy = ent.anim and ent.anim ~= "idle"
-    if busy or ent._returnAt or ent._pendingCloseStrike or ent._withdrawAfterStrike then
+    local status = monStatus(ent)
+    if status == "FRZ" then
+        return
+    end
+    local asleep = status == "SLP"
+    if wanderBusy(ent, asleep) then
         return
     end
     -- Still lerping to a cell target.
@@ -1726,20 +1766,27 @@ local function tickIdleWander(session, Grid, ent, side, dt)
             return
         end
     end
-    ent._wanderCD = (ent._wanderCD or (2.5 + rand() * 1.5)) - dt
+    local wait = asleep and (1.2 + rand() * 0.8) or (2.5 + rand() * 1.5)
+    ent._wanderCD = (ent._wanderCD or wait) - dt
     if ent._wanderCD > 0 then
         return
     end
-    -- Often just hold the lane; only sometimes take a step.
-    if rand() > 0.35 then
+    local Cues = session._deps and session._deps.Cues
+    if Cues and type(Cues.keepAwayBias) == "function" then
+        ent._keepAway = Cues.keepAwayBias(ent, session._battle, side)
+    end
+    local keep = tonumber(ent._keepAway) or 0
+    -- Awake mons often hold the lane. Hurt / glass cannons step away more.
+    -- Sleepwalkers take the step.
+    if not asleep and rand() > (0.35 + 0.45 * keep) then
         ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
     local foe = (side == "player") and session.enemyMon or session.playerMon
     if Grid.idleWander(session.grid, ent, side, foe) then
-        ent._wanderCD = 3.2 + rand() * 2.8
+        ent._wanderCD = asleep and (1.4 + rand() * 1.1) or (3.2 + rand() * 2.8)
     else
-        ent._wanderCD = 2.0 + rand() * 1.5
+        ent._wanderCD = asleep and (0.8 + rand() * 0.6) or (2.0 + rand() * 1.5)
     end
 end
 
@@ -1797,7 +1844,10 @@ local function stepTrainerClear(session, trainer, dt)
     trainer.py = pixelY + dy / dist * step
 end
 
--- When a battler shares / brushes a trainer cell, walk the trainer aside.
+-- When a battler occupies a trainer cell, walk the trainer aside.
+-- Adjacent is fine (rim seats sit next to the mons). Opening homes
+-- are always one tile behind, and treating that as a shove sent trainers
+-- wandering through the middle of the pad.
 local function keepTrainerClear(session, Grid, trainer, mon)
     if not (session and session.grid and Grid and trainer and mon) then
         return
@@ -1813,31 +1863,85 @@ local function keepTrainerClear(session, Grid, trainer, mon)
     if trainerU == nil or monU == nil then
         return
     end
-    local dist = math.abs(trainerU - monU) + math.abs(trainerV - monV)
-    if dist > 1 then
+    if not (trainerU == monU and trainerV == monV) then
         return
     end
     if not trainer._arFieldTrainerId then
         return
     end
-    local awayU, awayV = trainerU - monU, trainerV - monV
     local dirs = {
-        { awayU, awayV },
-        { 1,     0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+        { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 },
         { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 },
     }
     for i = 1, #dirs do
         local deltaU, deltaV = dirs[i][1], dirs[i][2]
-        if not (deltaU == 0 and deltaV == 0) then
-            if math.abs(deltaU) > 1 then deltaU = deltaU > 0 and 1 or -1 end
-            if math.abs(deltaV) > 1 then deltaV = deltaV > 0 and 1 or -1 end
-            local nextU, nextV = trainerU + deltaU, trainerV + deltaV
-            if Grid.isFree(session.grid, nextU, nextV, trainer._arFieldTrainerId) then
-                return beginTrainerStep(session, Grid, trainer, nextU, nextV, deltaU, deltaV)
-            end
+        local nextU, nextV = trainerU + deltaU, trainerV + deltaV
+        if Grid.isFree(session.grid, nextU, nextV, trainer._arFieldTrainerId)
+            and not (type(Grid.onFightLine) == "function"
+                and Grid.onFightLine(session.grid, nextU, nextV)) then
+            trainer._arTrainerWatchU, trainer._arTrainerWatchV = nil, nil
+            return beginTrainerStep(session, Grid, trainer, nextU, nextV, deltaU, deltaV)
         end
     end
     return false
+end
+
+--- Walk an engaged trainer to the outer rim of the opening ~4×4.
+local function tickTrainerWatch(session, Grid, trainer, side)
+    if not (session and session.grid and Grid and trainer) then
+        return
+    end
+    if trainer._removed or trainer._stepTX or not trainer._arFieldTrainerId then
+        return
+    end
+    if type(Grid.trainerWatchPad) ~= "function" then
+        return
+    end
+    local watchU, watchV = trainer._arTrainerWatchU, trainer._arTrainerWatchV
+    if watchU == nil then
+        watchU, watchV = Grid.trainerWatchPad(session.grid, side,
+            trainer._arFieldTrainerId)
+        trainer._arTrainerWatchU, trainer._arTrainerWatchV = watchU, watchV
+    elseif not Grid.isFree(session.grid, watchU, watchV, trainer._arFieldTrainerId) then
+        watchU, watchV = Grid.trainerWatchPad(session.grid, side,
+            trainer._arFieldTrainerId)
+        trainer._arTrainerWatchU, trainer._arTrainerWatchV = watchU, watchV
+    end
+    if watchU == nil then
+        return
+    end
+    local u, v = trainer.padU, trainer.padV
+    if u == nil or (u == watchU and v == watchV) then
+        return
+    end
+    local dirs = {}
+    local deltaU, deltaV = watchU - u, watchV - v
+    -- Leave the fight axis first so they do not walk into the middle.
+    if deltaV ~= 0 then
+        dirs[#dirs + 1] = { 0, deltaV > 0 and 1 or -1 }
+    end
+    if deltaU ~= 0 then
+        dirs[#dirs + 1] = { deltaU > 0 and 1 or -1, 0 }
+    end
+    local function tryDirs(allowCorridor)
+        for i = 1, #dirs do
+            local stepU, stepV = dirs[i][1], dirs[i][2]
+            local nextU, nextV = u + stepU, v + stepV
+            if Grid.isFree(session.grid, nextU, nextV, trainer._arFieldTrainerId)
+                and (allowCorridor
+                    or type(Grid.onFightLine) ~= "function"
+                    or not Grid.onFightLine(session.grid, nextU, nextV)
+                    or (nextU == watchU and nextV == watchV)) then
+                return beginTrainerStep(session, Grid, trainer, nextU, nextV,
+                    stepU, stepV)
+            end
+        end
+        return false
+    end
+    if tryDirs(false) then
+        return true
+    end
+    return tryDirs(true)
 end
 
 
@@ -1990,7 +2094,14 @@ function Lifecycle.onTurnStarted(battle)
         battle._arCloseGapApply = nil
         battle._arCloseGapResuming = nil
         battle._arAwaitingReact = nil
+        battle._arAwaitAgain = nil
+        battle._arAwaitAgainSide = nil
         battle._arWhiffCloseStrike = nil
+        battle._arWhiffCloseAfter = nil
+        session._reactHold = nil
+        session._reactReleaseT = nil
+        session._reactReleaseDur = nil
+        session._dodgeCounterShot = nil
     end
     if Cues and type(Cues.resetTurnSide) == "function" then
         Cues.resetTurnSide(session, "player", keepPlayer, Grid)
@@ -2008,6 +2119,7 @@ function Lifecycle.onTurnStarted(battle)
             ent._struckMoves = nil
             ent._returnAt = nil
             ent._withdrawAfterStrike = nil
+            ent._meleeAnchor = nil
         end
         clearPending(session.playerMon, keepPlayer)
         clearPending(session.enemyMon, keepEnemy)
@@ -2171,9 +2283,25 @@ function Lifecycle.tick(battle, dt, deps)
     deps = deps or session._deps
     dt = dt or (1 / 60)
     local wallDt = dt
+    if deps.Cues and type(deps.Cues.syncReactHold) == "function" then
+        pcall(deps.Cues.syncReactHold, session, battle)
+    end
     -- A few frozen frames on contact (not a cinematic). Clash slow-mo owns
-    -- the clock when a counter is already hanging.
-    if (session._hitStopT or 0) > 0 and (session._clashSlowT or 0) <= 0 then
+    -- the clock when a counter is already hanging. REACT hold freezes the
+    -- charge for the pick, then a short speed-up on the outcome.
+    if session._reactHold then
+        dt = wallDt * 0.22
+    elseif (session._reactReleaseT or 0) > 0 then
+        local dur = session._reactReleaseDur or 0.2
+        session._reactReleaseT = session._reactReleaseT - wallDt
+        if session._reactReleaseT <= 0 then
+            session._reactReleaseT = nil
+            session._reactReleaseDur = nil
+        else
+            local u = 1 - session._reactReleaseT / dur
+            dt = wallDt * (1.32 - 0.32 * u)
+        end
+    elseif (session._hitStopT or 0) > 0 and (session._clashSlowT or 0) <= 0 then
         session._hitStopT = session._hitStopT - wallDt
         if session._hitStopT <= 0 then
             session._hitStopT = nil
@@ -2242,7 +2370,7 @@ function Lifecycle.tick(battle, dt, deps)
         deps.Cues.syncSemiInvuln(session, deps.Grid)
     end
 
-    if session.cameraNudgeT and session.cameraNudgeT > 0 then
+    if session.cameraNudgeT and session.cameraNudgeT > 0 and not session._reactHold then
         local nudgeDt = session._clashPunch and wallDt or dt
         session.cameraNudgeT = math.max(0, session.cameraNudgeT - nudgeDt)
         if session.cameraNudgeT <= 0 then
@@ -2264,6 +2392,8 @@ function Lifecycle.tick(battle, dt, deps)
     tickIdleWander(session, deps.Grid, enemyMon, "enemy", dt)
 
     if overworld then
+        tickTrainerWatch(session, deps.Grid, overworld.player, "player")
+        tickTrainerWatch(session, deps.Grid, session.foe, "enemy")
         keepTrainerClear(session, deps.Grid, overworld.player, playerMon)
         keepTrainerClear(session, deps.Grid, overworld.player, enemyMon)
         keepTrainerClear(session, deps.Grid, session.foe, enemyMon)
@@ -2290,7 +2420,8 @@ function Lifecycle.tick(battle, dt, deps)
 
     -- Soft-pan every present tick so intro / nudge easing stays continuous.
     -- Clash punch-in uses wall time so the camera dives while action hangs.
-    Lifecycle.focusCamera(battle, (session._clashPunch or (session._camShakeT or 0) > 0) and wallDt or dt)
+    Lifecycle.focusCamera(battle, (session._clashPunch or session._reactHold
+        or (session._camShakeT or 0) > 0) and wallDt or dt)
 
     session._faceAcc = (session._faceAcc or 0) + dt
     if session._faceAcc >= 0.15 then
@@ -2330,10 +2461,12 @@ function Lifecycle.tick(battle, dt, deps)
                 ent.facing = dy >= 0 and "down" or "up"
             end
         end
-        if playerMon and enemyMon and (not playerMon.anim or playerMon.anim == "idle") then
+        if playerMon and enemyMon and (not playerMon.anim or playerMon.anim == "idle")
+            and monStatus(playerMon) ~= "SLP" then
             faceToward(playerMon, enemyMon)
         end
-        if enemyMon and playerMon and (not enemyMon.anim or enemyMon.anim == "idle") then
+        if enemyMon and playerMon and (not enemyMon.anim or enemyMon.anim == "idle")
+            and monStatus(enemyMon) ~= "SLP" then
             faceToward(enemyMon, playerMon)
         end
         -- Engaged trainers watch the duel: prefer facing each other; in wild

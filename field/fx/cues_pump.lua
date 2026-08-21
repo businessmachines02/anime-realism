@@ -158,6 +158,8 @@ return function(Cues)
         -- Overlap dodge/brace onto the live swing (including a close-gap walk, and
         -- late-attached reacts after the announce). After the punch, leftover
         -- queue reacts must not replay onto the foe's counter.
+        -- Hold the lunge for the accuracy roll, but still play the sidestep —
+        -- otherwise a miss never shows a dodge.
         local overlapped = false
         local attackEnt
         if cue and (cue.side == "player" or cue.side == "enemy") then
@@ -165,7 +167,7 @@ return function(Cues)
         end
         local punched = H.hasStruckThisTurn(attackEnt)
             and not (attackEnt and attackEnt._pendingCloseStrike)
-        if not punched and not holdForAccuracy then
+        if not punched then
             overlapped = Cues.pumpOverlapReacts(session, battle, Grid, nudgeCamera)
         end
         return applied or overlapped or called

@@ -246,6 +246,75 @@ function Projectiles.coverSurface(session, ent, battle)
   return "open"
 end
 
+local function mapIdOf(battle)
+  if battle and type(battle.currentMapId) == "function" then
+    local ok, id = pcall(battle.currentMapId, battle)
+    if ok then
+      return tostring(id or "")
+    end
+  end
+  return ""
+end
+
+local function mapTilesetOf(battle)
+  local raw = mapIdOf(battle)
+  if raw == "" then
+    return ""
+  end
+  local maps = battle and battle.game and battle.game.data and battle.game.data.maps
+  local def = maps and (maps[raw] or maps[raw:upper()])
+  return tostring((type(def) == "table" and def.tileset) or ""):upper()
+end
+
+local function probeMapFlag(map, name, wx, wy)
+  if not (map and wx ~= nil and type(map[name]) == "function") then
+    return false
+  end
+  local ok, flag = pcall(map[name], map, wx, wy)
+  return ok and flag == true
+end
+
+--- Debris flavor for a hit on this sprite (tile underfoot, then the fight kit).
+function Projectiles.hitGround(session, ent, battle)
+  battle = battle or (session and session._battle)
+  local surface = Projectiles.coverSurface(session, ent, battle)
+  if surface == "water" then
+    return "water"
+  end
+  if surface == "grass" then
+    return "grass"
+  end
+  local wx, wy = ent and ent.cellX, ent and ent.cellY
+  local grid = session and session.grid
+  if wx == nil and grid and ent and ent.padU ~= nil and type(Coords.padToWorld) == "function" then
+    wx, wy = Coords.padToWorld(grid, ent.padU, ent.padV)
+  end
+  local map = battle and battle.game and battle.game.overworld and battle.game.overworld.map
+  if probeMapFlag(map, "isIceCell", wx, wy) or probeMapFlag(map, "isSnowCell", wx, wy) then
+    return "snow"
+  end
+  local mapId = mapIdOf(battle):upper()
+  local tileset = mapTilesetOf(battle)
+  if tileset:find("ICE", 1, true) or mapId:find("ICE", 1, true)
+      or mapId:find("SEAFOAM", 1, true) then
+    return "snow"
+  end
+  if surface == "cave" then
+    return "cave"
+  end
+  local scene = tostring(session and session.coverScene or "")
+  if scene == "water" then
+    return "sand"
+  end
+  if scene == "gym" or scene == "indoor" or scene == "city" then
+    return "spark"
+  end
+  if scene == "mountain" then
+    return "cave"
+  end
+  return "dust"
+end
+
 local function battlerCoverHeld(session, battle, battler, isPlayer)
   if battler and (battler.cover == true or battler._arFieldCover == true) then
     return true
@@ -512,6 +581,15 @@ function Projectiles.isTravelFx(opts)
     return false
   end
   return TRAVEL_STYLES[named.style] == true
+end
+
+--- Gen 1 category may be physical; these still fly (Swift, Gust, …).
+function Projectiles.isProjectileSpecial(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  if (Catalog.PROJECTILE_SPECIAL or {})[moveId] then
+    return true
+  end
+  return Projectiles.isTravelFx(opts)
 end
 
 -- Jaws / punches / slams close the gap even when the Gen1 type split marks
@@ -1957,6 +2035,154 @@ local function drawFlameJet(g, x, y, ox, oy, t, age, c)
   end
 end
 
+--- Water Gun: pressurized squirt — a coherent ribbon that breaks into spray.
+local function drawWaterDrop(g, px, py, fx, fy, scale, c, alpha)
+  local nx, ny = -fy, fx
+  local tipX = px + fx * 2.4 * scale
+  local tipY = py + fy * 2.4 * scale
+  local tailX = px - fx * 1.3 * scale
+  local tailY = py - fy * 1.3 * scale
+  local leftX = px + nx * 0.85 * scale
+  local leftY = py + ny * 0.85 * scale
+  local rightX = px - nx * 0.85 * scale
+  local rightY = py - ny * 0.85 * scale
+  g.setColor(c[1], c[2], c[3], 0.82 * alpha)
+  g.polygon("fill", tipX, tipY, leftX, leftY, tailX, tailY, rightX, rightY)
+  g.setColor(0.88, 0.98, 1.00, 0.7 * alpha)
+  g.polygon("fill",
+    px + fx * 0.7 * scale, py + fy * 0.7 * scale - 0.25 * scale,
+    px + nx * 0.28 * scale, py + ny * 0.28 * scale,
+    px - fx * 0.15 * scale, py - fy * 0.15 * scale)
+end
+
+local function drawWaterRibbon(g, pts, widthAt, cr, cg, cb, alpha)
+  if not (g.polygon and pts and #pts >= 2) then
+    return
+  end
+  for i = 1, #pts - 1 do
+    local a, b = pts[i], pts[i + 1]
+    local wa, wb = widthAt(a.u), widthAt(b.u)
+    g.setColor(cr, cg, cb, alpha)
+    g.polygon("fill",
+      a.x + a.nx * wa, a.y + a.ny * wa,
+      b.x + b.nx * wb, b.y + b.ny * wb,
+      b.x - b.nx * wb, b.y - b.ny * wb,
+      a.x - a.nx * wa, a.y - a.ny * wa)
+  end
+end
+
+local function drawWaterJet(g, x, y, ox, oy, t, age, c)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  age = age or 0
+  local fade = 1
+  if t > 0.78 then
+    fade = 1 - (t - 0.78) / 0.22
+  end
+  local breakup = math.max(0, (t - 0.70) / 0.30)
+  local flow = age * 16.5
+  c = c or {}
+  local cr, cg, cb = c[1] or 0.2, c[2] or 0.58, c[3] or 1
+  local segs = 16
+  local pts = {}
+  for i = 0, segs do
+    local u = i / segs
+    -- Light turbulence that travels along the jet, not a hanging hose.
+    local wobble = math.sin(u * 10.5 - flow) * (0.45 + u * 1.15)
+        + math.sin(u * 23 - flow * 1.55 + 0.9) * (0.18 + u * 0.32)
+    local sag = u * u * 1.35
+    pts[i + 1] = {
+      u = u,
+      x = ox + dx * u + nx * wobble,
+      y = oy + dy * u + ny * wobble * 0.38 + sag,
+    }
+  end
+  for i = 1, #pts do
+    local a = pts[math.max(1, i - 1)]
+    local b = pts[math.min(#pts, i + 1)]
+    local tx, ty = b.x - a.x, b.y - a.y
+    local tl = math.sqrt(tx * tx + ty * ty)
+    if tl < 0.001 then
+      pts[i].nx, pts[i].ny = nx, ny
+    else
+      pts[i].nx, pts[i].ny = -ty / tl, tx / tl
+    end
+  end
+  local tip = pts[#pts]
+  local function widthAt(u)
+    local pulse = 0.88 + 0.12 * math.sin(u * 15 - flow * 1.25)
+    local w = (2.15 + (1 - u) * 1.55) * pulse * (1 - breakup * 0.45)
+    if u > 0.84 then
+      w = w + (u - 0.84) * (5.5 + breakup * 4)
+    end
+    return w
+  end
+  -- Outer wash, body, inner highlight — a volume of water, not beads.
+  drawWaterRibbon(g, pts, function(u) return widthAt(u) * 1.55 end,
+    cr * 0.42, cg * 0.62, math.min(1, cb * 1.05), 0.20 * fade)
+  drawWaterRibbon(g, pts, widthAt, cr, cg, cb, 0.58 * fade)
+  drawWaterRibbon(g, pts, function(u) return widthAt(u) * 0.38 end,
+    0.78, 0.94, 1.00, 0.42 * fade)
+  -- Speculars ride the top of the ribbon with the current.
+  for i = 2, #pts - 1, 2 do
+    local p = pts[i]
+    local lift = 0.55 + math.sin(p.u * 18 - flow * 1.8) * 0.35
+    g.setColor(0.92, 0.99, 1.00, (0.55 - p.u * 0.22) * fade)
+    g.ellipse("fill",
+      p.x + p.nx * lift * 0.6,
+      p.y + p.ny * lift * 0.6 - 0.35,
+      1.6 + (1 - p.u) * 0.8, 0.55)
+  end
+  -- Muzzle bloom where it leaves the caster.
+  g.setColor(cr, cg, cb, 0.40 * fade)
+  g.ellipse("fill", ox - fx * 1.2, oy - fy * 1.2, 4.2, 2.4)
+  g.setColor(0.88, 0.97, 1.00, 0.55 * fade)
+  g.ellipse("fill", ox, oy, 2.4, 1.3)
+  -- Spray peeling off the last third as elongated drops.
+  for i = 1, 9 do
+    local u = 0.42 + i * 0.06
+    local crest = math.sin(u * 10.5 - flow + i * 0.55)
+    if math.abs(crest) > 0.18 then
+      local idx = 1 + math.floor(u * segs + 0.5)
+      local p = pts[math.max(1, math.min(#pts, idx))]
+      local side = crest > 0 and 1 or -1
+      local off = (1.4 + (i % 3) * 0.7) * (0.45 + math.abs(crest))
+      drawWaterDrop(g,
+        p.x + p.nx * side * off,
+        p.y + p.ny * side * off * 0.45 + math.abs(crest) * 0.6,
+        fx, fy, 0.55 + (i % 3) * 0.12, c, 0.62 * fade)
+    end
+  end
+  -- Impact splash once the jet has arrived.
+  local splash = math.max(0, math.min(1, (t - 0.38) / 0.22))
+  if splash > 0.02 then
+    g.setColor(cr, cg, cb, 0.28 * fade * splash)
+    g.ellipse("fill", tip.x, tip.y + 1.2, 6.5 + splash * 3, 3.2)
+    g.setColor(0.86, 0.96, 1.00, 0.45 * fade * splash)
+    g.ellipse("fill", tip.x + fx * 1.4, tip.y - 0.8, 4.2, 1.6)
+    for i = 1, 8 do
+      local a = age * 13 + i * 0.82
+      local dist = (2.2 + (i % 4) * 1.6 + splash * 2.4)
+          * (0.7 + 0.3 * math.abs(math.sin(age * 8 + i)))
+      local bx = tip.x + math.cos(a) * dist + fx * 1.2
+      local by = tip.y + math.sin(a) * dist * 0.52 - math.abs(math.sin(a)) * 1.4
+      local hx, hy = math.cos(a) * 0.35 + fx, math.sin(a) * 0.2 + fy
+      local hl = math.sqrt(hx * hx + hy * hy)
+      if hl > 0.01 then
+        hx, hy = hx / hl, hy / hl
+      end
+      drawWaterDrop(g, bx, by, hx, hy, 0.62 + (i % 3) * 0.18, c,
+        (0.55 + splash * 0.25) * fade)
+    end
+  end
+end
+
 --- Fire Blast: traveling fireball, then a 大-shaped star of tongues.
 local function drawFireBlast(g, x, y, ox, oy, t, age, c, radius)
   local dx, dy = x - ox, y - oy
@@ -2621,11 +2847,16 @@ local function drawContact(g, p, x, y, t)
   end
 
   if glitz == "dash" then
+    local dx = p.dirX or 1
+    local dy = p.dirY or 0
+    g.setColor(1, 1, 1, 0.55 * fade)
+    g.circle("fill", x, y, 2.4 + t * 2)
     g.setColor(c[1], c[2], c[3], fade)
-    g.setLineWidth(3)
-    g.line(x - 10 + t * 4, y - 2, x + 6, y + 1)
-    g.setLineWidth(1)
-    g.line(x - 8 + t * 4, y + 3, x + 4, y + 4)
+    g.setLineWidth(2.6)
+    g.line(x - dx * 12, y - dy * 12, x + dx * 7, y + dy * 7)
+    g.setLineWidth(1.3)
+    g.line(x - dx * 9 + dy * 3, y - dy * 9 - dx * 2, x + dx * 5, y + dy * 5)
+    g.line(x - dx * 8 - dy * 3, y - dy * 8 + dx * 2, x + dx * 4, y + dy * 4)
     return
   end
 
@@ -2711,45 +2942,60 @@ local function drawContact(g, p, x, y, t)
   end
 
   if glitz == "toss" then
-    local lift = 0
-    if t < 0.18 then
-      lift = 0
+    -- Ground-locked FX while the real sprites grab, rise, and slam.
+    local fade = 1
+    if t > 0.88 then
+      fade = 1 - (t - 0.88) / 0.12
+    end
+    local height = 0
+    if t < 0.08 then
+      height = 3 * (t / 0.08)
+    elseif t < 0.38 then
+      local u = (t - 0.08) / 0.30
+      height = 3 + (1 - (1 - u) * (1 - u)) * 58
+    elseif t < 0.52 then
+      height = 61
+    elseif t < 0.74 then
+      local u = (t - 0.52) / 0.22
+      height = 61 * (1 - u * u)
+    else
+      local u = (t - 0.74) / 0.26
+      height = math.abs(math.sin(u * math.pi)) * 8 * (1 - u)
+    end
+    local air = math.min(1, height / 61)
+    local shadow = 0.55 + 0.45 * (1 - air)
+    g.setColor(0.08, 0.08, 0.10, 0.40 * shadow * fade)
+    g.ellipse("fill", x - 4, y + 4, 8 * shadow, 3.2 * shadow)
+    g.ellipse("fill", x + 5, y + 4, 7.4 * shadow, 3.0 * shadow)
+    if t < 0.14 then
       g.setColor(c[1], c[2], c[3], fade)
       g.setLineWidth(2)
-      g.circle("line", x, y, 4 + t * 8)
+      g.circle("line", x, y, 4 + t * 10)
       for i = 1, 4 do
-        local a = i * 1.57 + t * 6
+        local a = i * 1.57 + t * 8
         g.setColor(1, 1, 1, 0.7 * fade)
         g.circle("fill", x + math.cos(a) * 5, y + math.sin(a) * 3, 1.2)
       end
-    elseif t < 0.52 then
-      local u = (t - 0.18) / 0.34
-      lift = u * u * (3 - 2 * u) * 32
-    elseif t < 0.60 then
-      lift = 32 + math.sin((t - 0.52) * 40) * 1.2
-    else
-      local u = math.min(1, (t - 0.60) / 0.18)
-      lift = (1 - u * u) * 32
     end
-    local hold = 1
-    if t > 0.88 then
-      hold = 1 - (t - 0.88) / 0.12
-    end
-    if t < 0.78 then
-      drawMonSilhouette(g, x, y - lift, 1.05, c, hold)
-      g.setColor(c[1], c[2], c[3], 0.22 * hold)
-      g.ellipse("fill", x, y + 4, 6 + (1 - lift / 32) * 3, 2.2)
+    if t > 0.08 and t < 0.55 then
+      for i = 1, 5 do
+        local ox = (i - 3) * 3.2
+        local top = y - 6 - height * 0.85
+        g.setColor(1, 1, 1, (0.35 - air * 0.1) * fade)
+        g.setLineWidth(1.2)
+        g.line(x + ox, y - 2, x + ox * 0.4, top)
+      end
     end
     if t > 0.70 then
       local slam = math.min(1, (t - 0.70) / 0.30)
-      g.setColor(c[1], c[2], c[3], 0.4 * (1 - slam * 0.5) * hold)
-      g.ellipse("fill", x, y + 3, 8 + slam * 10, 3.4 + slam * 2)
-      g.setColor(1, 1, 1, 0.7 * (1 - slam) * hold)
+      g.setColor(c[1], c[2], c[3], 0.4 * (1 - slam * 0.5) * fade)
+      g.ellipse("fill", x, y + 3, 8 + slam * 12, 3.4 + slam * 2.4)
+      g.setColor(1, 1, 1, 0.7 * (1 - slam) * fade)
       g.circle("fill", x, y, 2.6)
       for i = 1, 6 do
         local a = i * (math.pi * 2 / 6)
-        local dist = 4 + slam * 10
-        g.setColor(c[1], c[2], c[3], (0.85 - slam * 0.5) * hold)
+        local dist = 4 + slam * 12
+        g.setColor(c[1], c[2], c[3], (0.85 - slam * 0.5) * fade)
         g.setLineWidth(1.8)
         g.line(x, y,
           x + math.cos(a) * dist,
@@ -2757,7 +3003,7 @@ local function drawContact(g, p, x, y, t)
       end
       for i = 1, 5 do
         local a = i * 1.256 + slam * 2
-        g.setColor(0.72, 0.58, 0.32, (0.6 - slam * 0.4) * hold)
+        g.setColor(0.72, 0.58, 0.32, (0.6 - slam * 0.4) * fade)
         g.circle("fill",
           x + math.cos(a) * (5 + slam * 6),
           y + 3 + math.sin(a) * 2,
@@ -2882,6 +3128,429 @@ local function drawLightHit(g, p, x, y, t)
     g.circle("fill", px - 0.3, py - 0.3, 0.55)
   end
   drawContact(g, p, x, y, math.min(1, t * 1.15))
+end
+
+local function polyUnpack(pts)
+  local unpackFn = table.unpack or unpack
+  return unpackFn(pts)
+end
+
+--- Comic-book crit starburst. Same jagged silhouette; fill/accents follow type.
+local CRIT_PALETTES = {
+  NORMAL = {
+    rim = { 0.82, 0.08, 0.06 },
+    mid = { 1.00, 0.46, 0.08 },
+    core = { 1.00, 0.92, 0.22 },
+    shard = { 1.00, 0.38, 0.08 },
+    accent = "comic",
+  },
+  FIRE = {
+    rim = { 0.86, 0.10, 0.04 },
+    mid = { 1.00, 0.42, 0.08 },
+    core = { 1.00, 0.90, 0.28 },
+    shard = { 1.00, 0.34, 0.08 },
+    accent = "flame",
+  },
+  ICE = {
+    rim = { 0.22, 0.52, 0.92 },
+    mid = { 0.55, 0.88, 1.00 },
+    core = { 0.96, 0.99, 1.00 },
+    shard = { 0.78, 0.94, 1.00 },
+    accent = "ice",
+  },
+  ELECTRIC = {
+    rim = { 0.90, 0.58, 0.04 },
+    mid = { 1.00, 0.88, 0.18 },
+    core = { 1.00, 1.00, 0.92 },
+    shard = { 1.00, 0.92, 0.35 },
+    accent = "bolt",
+  },
+  PSYCHIC = {
+    rim = { 0.70, 0.10, 0.58 },
+    mid = { 0.96, 0.40, 0.86 },
+    core = { 1.00, 0.86, 1.00 },
+    shard = { 0.94, 0.55, 0.92 },
+    accent = "psy",
+  },
+  DARK = {
+    rim = { 0.10, 0.04, 0.08 },
+    mid = { 0.28, 0.10, 0.24 },
+    core = { 0.58, 0.36, 0.70 },
+    shard = { 0.22, 0.08, 0.20 },
+    accent = "ink",
+  },
+  GHOST = {
+    rim = { 0.28, 0.12, 0.46 },
+    mid = { 0.52, 0.32, 0.72 },
+    core = { 0.86, 0.78, 1.00 },
+    shard = { 0.42, 0.22, 0.62 },
+    accent = "ink",
+  },
+  WATER = {
+    rim = { 0.08, 0.32, 0.78 },
+    mid = { 0.22, 0.62, 1.00 },
+    core = { 0.82, 0.94, 1.00 },
+    shard = { 0.40, 0.72, 1.00 },
+    accent = "comic",
+  },
+  GRASS = {
+    rim = { 0.12, 0.48, 0.14 },
+    mid = { 0.38, 0.82, 0.28 },
+    core = { 0.82, 1.00, 0.45 },
+    shard = { 0.42, 0.78, 0.22 },
+    accent = "comic",
+  },
+  POISON = {
+    rim = { 0.42, 0.08, 0.58 },
+    mid = { 0.72, 0.28, 0.82 },
+    core = { 0.94, 0.72, 1.00 },
+    shard = { 0.62, 0.22, 0.78 },
+    accent = "ink",
+  },
+  FIGHTING = {
+    rim = { 0.62, 0.10, 0.10 },
+    mid = { 0.88, 0.28, 0.16 },
+    core = { 1.00, 0.78, 0.42 },
+    shard = { 0.82, 0.22, 0.12 },
+    accent = "comic",
+  },
+  GROUND = {
+    rim = { 0.48, 0.28, 0.10 },
+    mid = { 0.78, 0.56, 0.28 },
+    core = { 0.96, 0.86, 0.52 },
+    shard = { 0.68, 0.48, 0.24 },
+    accent = "comic",
+  },
+  ROCK = {
+    rim = { 0.42, 0.34, 0.22 },
+    mid = { 0.70, 0.60, 0.38 },
+    core = { 0.92, 0.86, 0.62 },
+    shard = { 0.62, 0.52, 0.32 },
+    accent = "comic",
+  },
+  FLYING = {
+    rim = { 0.32, 0.48, 0.82 },
+    mid = { 0.62, 0.74, 0.96 },
+    core = { 0.94, 0.96, 1.00 },
+    shard = { 0.70, 0.82, 1.00 },
+    accent = "comic",
+  },
+  BUG = {
+    rim = { 0.38, 0.48, 0.08 },
+    mid = { 0.66, 0.78, 0.18 },
+    core = { 0.92, 1.00, 0.45 },
+    shard = { 0.58, 0.72, 0.16 },
+    accent = "comic",
+  },
+  DRAGON = {
+    rim = { 0.22, 0.12, 0.62 },
+    mid = { 0.48, 0.36, 0.90 },
+    core = { 0.86, 0.78, 1.00 },
+    shard = { 0.40, 0.28, 0.82 },
+    accent = "psy",
+  },
+  STEEL = {
+    rim = { 0.38, 0.42, 0.48 },
+    mid = { 0.72, 0.76, 0.82 },
+    core = { 0.96, 0.97, 1.00 },
+    shard = { 0.62, 0.66, 0.72 },
+    accent = "comic",
+  },
+  FAIRY = {
+    rim = { 0.78, 0.28, 0.52 },
+    mid = { 0.96, 0.58, 0.78 },
+    core = { 1.00, 0.90, 0.96 },
+    shard = { 0.94, 0.62, 0.80 },
+    accent = "psy",
+  },
+}
+
+local function drawCritBurst(g, p, x, y, t)
+  local fade = 1
+  if t > 0.62 then
+    fade = 1 - (t - 0.62) / 0.38
+  end
+  local pop = 0.55
+  if t < 0.16 then
+    local u = t / 0.16
+    pop = 0.35 + u * u * (3 - 2 * u) * 0.92
+  else
+    pop = 1.27 - math.min(0.22, (t - 0.16) * 0.55)
+  end
+  local pal = CRIT_PALETTES[tostring(p.glitz or "NORMAL"):upper()]
+      or CRIT_PALETTES.NORMAL
+  local rot = (p.seed or 0.4) + t * 0.35
+  local n = 10
+  local function star(scale, rLong, rShort)
+    local pts = {}
+    for i = 0, n - 1 do
+      local a = rot + i * (math.pi * 2 / n) - math.pi * 0.5
+      local jagged = 0.86 + 0.14 * math.sin(i * 2.4 + rot * 2)
+      local r = ((i % 2 == 0) and rLong or rShort) * scale * jagged
+      pts[#pts + 1] = x + math.cos(a) * r
+      pts[#pts + 1] = y + math.sin(a) * r * 0.92
+    end
+    return pts
+  end
+  local rim, mid, core, shard = pal.rim, pal.mid, pal.core, pal.shard
+  if not g.polygon then
+    g.setColor(mid[1], mid[2], mid[3], 0.7 * fade)
+    g.circle("fill", x, y, 10 * pop)
+    g.setColor(core[1], core[2], core[3], 0.9 * fade)
+    g.circle("fill", x, y, 4.5 * pop)
+    return
+  end
+  local shadow = star(pop, 17.5, 8.2)
+  for i = 1, #shadow, 2 do
+    shadow[i] = shadow[i] - 1.6
+    shadow[i + 1] = shadow[i + 1] + 1.8
+  end
+  g.setColor(0.12, 0.10, 0.10, 0.28 * fade)
+  g.polygon("fill", polyUnpack(shadow))
+  g.setColor(rim[1], rim[2], rim[3], 0.96 * fade)
+  g.polygon("fill", polyUnpack(star(pop, 16.8, 7.6)))
+  g.setColor(mid[1], mid[2], mid[3], 0.96 * fade)
+  g.polygon("fill", polyUnpack(star(pop * 0.78, 16.8, 7.6)))
+  g.setColor(core[1], core[2], core[3], 0.98 * fade)
+  g.polygon("fill", polyUnpack(star(pop * 0.46, 16.8, 7.6)))
+  g.setColor(1, 1, 0.92, 0.82 * fade)
+  g.circle("fill", x - 0.6, y - 0.8, 2.6 * pop)
+
+  local accent = pal.accent or "comic"
+  local age = p.age or t
+  if accent == "ice" then
+    for i = 1, 6 do
+      local a = rot + i * 1.05
+      local dist = (7 + i) * pop + t * 5
+      drawIceCrystal(g,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.72,
+        a + t * 4, 0.7 + (i % 2) * 0.18, shard, (0.85 - t * 0.35) * fade)
+    end
+  elseif accent == "bolt" then
+    for i = 1, 4 do
+      local a = rot + i * (math.pi * 0.5)
+      local dist = 12 * pop + t * 4
+      drawLightningBolt(g, x, y,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.7,
+        age + i * 0.15, mid, {
+          fade = fade,
+          segs = 4,
+          amp = 2.8,
+          glow = 3.2,
+          mid = 1.6,
+          core = 1.0,
+          forkLen = 3.4,
+          coreColor = core,
+        })
+    end
+  elseif accent == "psy" then
+    for i = 1, 3 do
+      local u = i / 3
+      g.setColor(mid[1], mid[2], mid[3], (0.55 - u * 0.15) * fade)
+      g.setLineWidth(1.6)
+      g.ellipse("line", x, y - 1, (6 + u * 8) * pop, (3.2 + u * 4) * pop)
+    end
+    for i = 1, 5 do
+      local a = rot * 2 + i * 1.256
+      g.setColor(core[1], core[2], core[3], 0.7 * fade)
+      g.circle("fill",
+        x + math.cos(a) * (5 + t * 6) * pop,
+        y + math.sin(a) * (5 + t * 6) * pop * 0.55,
+        1.2)
+    end
+  elseif accent == "ink" then
+    g.setColor(rim[1], rim[2], rim[3], 0.42 * fade)
+    g.ellipse("fill", x + 1, y + 2, 9 * pop, 6 * pop)
+    for i = 1, 5 do
+      local a = rot + i * 1.2
+      local dist = 4 + t * (6 + i)
+      g.setColor(mid[1], mid[2], mid[3], (0.65 - t * 0.3) * fade)
+      g.circle("fill",
+        x + math.cos(a) * dist * 0.7,
+        y + math.sin(a) * dist * 0.45 + t * 3,
+        1.8 + (i % 2) * 0.6)
+    end
+  elseif accent == "flame" then
+    for i = 1, 5 do
+      local a = rot + i * 1.256
+      drawFlameTongue(g,
+        x + math.cos(a) * 6 * pop,
+        y + math.sin(a) * 4.5 * pop,
+        a + math.pi * 0.5, 0.7, fade)
+    end
+  else
+    for i = 1, 6 do
+      local a = rot + i * 1.05
+      local dist = (8 + i) * pop + t * 6
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.72
+      g.setColor(shard[1], shard[2], shard[3], (0.7 - t * 0.4) * fade)
+      local s = 1.6 + (i % 2) * 0.5
+      g.polygon("fill",
+        px, py - s,
+        px + s * 0.55, py,
+        px, py + s * 0.45,
+        px - s * 0.55, py)
+    end
+  end
+end
+
+--- Speed-line smear caster → foe (Quick Attack / Extreme Speed).
+local function drawDashSmear(g, x, y, ox, oy, t, age, c, glitz)
+  local dx, dy = x - ox, y - oy
+  local len = math.sqrt(dx * dx + dy * dy)
+  local fx, fy = 1, 0
+  local nx, ny = 0, 1
+  if len > 0.1 then
+    fx, fy = dx / len, dy / len
+    nx, ny = -fy, fx
+  end
+  local fade = 1
+  if t > 0.68 then
+    fade = 1 - (t - 0.68) / 0.32
+  end
+  local extreme = glitz == "extreme"
+  g.setColor(1, 1, 1, 0.28 * fade)
+  g.setLineWidth(extreme and 5.5 or 4.2)
+  g.line(ox, oy, x, y)
+  g.setColor(c[1], c[2], c[3], 0.8 * fade)
+  g.setLineWidth(extreme and 2.2 or 1.6)
+  g.line(ox, oy, x, y)
+  local n = extreme and 7 or 5
+  for i = 1, n do
+    local along = 0.12 + (i - 1) * (0.72 / n)
+    local px = ox + dx * along
+    local py = oy + dy * along
+    local side = ((i % 2) * 2 - 1) * (2.0 + i * 0.4)
+    local lx = px + nx * side - fx * 7
+    local ly = py + ny * side * 0.45 - fy * 7
+    local reach = 7 + i * 1.2
+    g.setColor(1, 1, 1, (0.58 - i * 0.05) * fade)
+    g.setLineWidth(1.3)
+    g.line(lx, ly, lx + fx * reach, ly + fy * reach)
+  end
+  for i = 1, 3 do
+    local u = (i / 4) * math.min(1, t * 1.35 + 0.08)
+    local px = ox + dx * u - fx * (i * 2)
+    local py = oy + dy * u
+    drawMonSilhouette(g, px, py, 0.78 - i * 0.1, c, 0.32 * fade * (1 - u * 0.35))
+  end
+  g.setColor(1, 1, 1, 0.55 * fade)
+  g.circle("fill", x - fx * 2, y - fy * 2, extreme and 2.4 or 1.8)
+end
+
+--- Kick-up debris from the tile under the struck mon (grass / snow / water / …).
+local function drawGroundKick(g, p, x, y, t, c, glitz)
+  local fade = 1
+  if t > 0.72 then
+    fade = 1 - (t - 0.72) / 0.28
+  end
+  local age = p.age or 0
+  local dx = p.dirX or 1
+  local dy = p.dirY or 0
+  local nx, ny = -dy, dx
+  glitz = glitz or "dust"
+  g.setColor(c[1], c[2], c[3], 0.22 * fade)
+  g.ellipse("fill", x, y + 1, 6 + t * 5, 2.2 + t * 1.2)
+
+  if glitz == "grass" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.35 + (i - 1) * 0.04)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (5 + i) + nx * side * (2 + (i % 3))
+      local py = y - math.sin(u * math.pi) * (5 + i * 0.4) + dy * u * 2
+      drawLeafBlade(g, px, py, age * 10 + i, 0.52 + (i % 3) * 0.08, c,
+        (0.9 - u * 0.35) * fade)
+    end
+    return
+  end
+
+  if glitz == "water" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.4 + (i % 4) * 0.05)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (1.6 + i * 0.35)
+      local py = y - math.sin(u * math.pi) * (6 + i * 0.5)
+      local r = 1.5 + (i % 3) * 0.45
+      g.setColor(c[1], c[2], c[3], (0.7 - u * 0.3) * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(1, 1, 1, 0.55 * fade * (1 - u))
+      g.circle("fill", px - r * 0.3, py - r * 0.35, r * 0.35)
+    end
+    g.setColor(0.55, 0.82, 1.00, 0.35 * fade)
+    g.ellipse("fill", x, y + 1, 7 + t * 6, 2.4)
+    return
+  end
+
+  if glitz == "snow" then
+    for i = 1, 8 do
+      local u = math.min(1, t * 1.3 + (i - 1) * 0.04)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (2 + i * 0.3)
+      local py = y - math.sin(u * math.pi) * (5 + i * 0.35) - u * 2
+      drawIceCrystal(g, px, py, age * 8 + i, 0.7 + (i % 2) * 0.18, c,
+        (0.9 - u * 0.3) * fade)
+    end
+    g.setColor(0.92, 0.96, 1.00, 0.3 * fade)
+    g.ellipse("fill", x, y + 1, 6 + t * 4, 2)
+    return
+  end
+
+  if glitz == "cave" then
+    for i = 1, 7 do
+      local u = math.min(1, t * 1.25 + (i % 3) * 0.06)
+      local side = ((i % 2) * 2 - 1)
+      local px = x + dx * u * (4 + i) + nx * side * (1.4 + i * 0.4)
+      local py = y - math.sin(u * math.pi) * (3 + i * 0.3)
+      local r = 1.3 + (i % 3) * 0.5
+      g.setColor(c[1], c[2], c[3], (0.75 - u * 0.3) * fade)
+      g.circle("fill", px, py, r)
+      g.setColor(0.55, 0.42, 0.28, 0.4 * fade)
+      g.circle("fill", px - 0.3, py - 0.3, r * 0.4)
+    end
+    return
+  end
+
+  if glitz == "sand" then
+    for i = 1, 9 do
+      local a = i * 0.7 + t * 2
+      local dist = 3 + t * (7 + i % 3)
+      local px = x + math.cos(a) * dist * 0.7 + dx * t * 4
+      local py = y + math.sin(a) * dist * 0.35 - t * 3
+      g.setColor(c[1], c[2], c[3], (0.7 - t * 0.35) * fade)
+      g.circle("fill", px, py, 1.2 + (i % 2) * 0.4)
+    end
+    return
+  end
+
+  if glitz == "spark" then
+    for i = 1, 6 do
+      local a = i * 1.047 + t * 4
+      local dist = 3 + t * 8
+      g.setColor(1.00, 0.88, 0.35, (0.8 - t * 0.4) * fade)
+      g.setLineWidth(1.4)
+      g.line(x, y,
+        x + math.cos(a) * dist,
+        y + math.sin(a) * dist * 0.5 - t * 2)
+      g.setColor(1, 1, 0.85, 0.7 * fade)
+      g.circle("fill", x + math.cos(a) * dist * 0.6, y - 1, 0.9)
+    end
+    return
+  end
+
+  -- Dust / dirt fallback.
+  for i = 1, 6 do
+    local a = i * 1.05 + t * 1.6
+    local dist = 3 + t * 8
+    local px = x + math.cos(a) * dist * 0.65 + dx * t * 3
+    local py = y - t * (5 + i % 3) + math.sin(a) * 1.4
+    g.setColor(c[1], c[2], c[3], (0.6 - t * 0.3) * fade)
+    g.circle("fill", px, py, 1.8 - t * 0.8)
+    g.setColor(1, 1, 1, 0.2 * fade)
+    g.circle("fill", px - 0.3, py - 0.4, 0.6)
+  end
 end
 
 
@@ -3161,6 +3830,8 @@ Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
         or (glitz == "blob" and 10 or 8)
     if glitz == "flame" then
       drawFlameJet(g, x, y, ox, oy, t, age, c)
+    elseif glitz == "jet" then
+      drawWaterJet(g, x, y, ox, oy, t, age, c)
     elseif glitz == "bubble" then
       for i = 0, n do
         local u = i / n
@@ -3200,7 +3871,7 @@ Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
       g.setColor(1, 1, 1, 0.55)
       g.circle("fill", x, y, 2.2)
     end
-    if glitz ~= "flame" then
+    if glitz ~= "flame" and glitz ~= "jet" then
       drawMove(g, p, x, y)
     end
 end)
@@ -3234,6 +3905,15 @@ Projectiles.registerStyle("contact", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
+end)
+Projectiles.registerStyle("crit", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawCritBurst(g, p, x, y, t)
+end)
+Projectiles.registerStyle("dash_smear", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawDashSmear(g, x, y, ox, oy, t, p.age, c, glitz)
+end)
+Projectiles.registerStyle("ground_kick", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawGroundKick(g, p, x, y, t, c, glitz)
 end)
 Projectiles.registerStyle("bonk", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Self-hit: impact ring plus popping stars.
@@ -3677,6 +4357,13 @@ local function spawn(session, spec)
     followEnt = spec.followEnt,
     followPin = spec.followPin == true,
   }
+  if session._fireShotSlow then
+    p.duration = (p.duration or 0.36) * 1.75
+    if type(p.ex) == "number" and type(p.sx) == "number" then
+      p.ex = p.ex + (p.ex - p.sx) * 0.55
+      p.ey = (p.ey or 0) + ((p.ey or 0) - (p.sy or 0)) * 0.55
+    end
+  end
   local dx, dy = p.ex - p.sx, p.ey - p.sy
   local len = math.sqrt(dx * dx + dy * dy)
   if len > 0 then
@@ -3917,6 +4604,12 @@ end
 
 function Projectiles.move(session, side, opts)
   opts = opts or {}
+  local slow = opts.slowShot or opts.fireCarry or session._fireShotSlow
+  if slow then
+    session._fireShotSlow = true
+  else
+    session._fireShotSlow = nil
+  end
   local from = (side == "player") and session.playerMon or session.enemyMon
   local target = (side == "player") and session.enemyMon or session.playerMon
   local sx, sy = center(session, from)
@@ -4194,13 +4887,14 @@ function Projectiles.move(session, side, opts)
   end
 
   if fx.style == "stream" then
+    local jet = fx.glitz == "jet"
     return spawn(session, {
       kind = "effect",
       style = "stream",
       glitz = fx.glitz,
       sx = sx, sy = sy, ex = ex, ey = ey,
       duration = fx.duration or (jump and 0.44 or 0.38),
-      arc = jump and 10 or 2,
+      arc = jump and 10 or (jet and 0 or 2),
       color = fx.color,
       onDone = opts.onDone,
     })
@@ -4229,18 +4923,36 @@ function Projectiles.contact(session, side, opts)
   if not glitz or fx.style ~= "contact" then
     glitz = TYPE_CONTACT[fx.moveType] or "slash"
   end
-  local toss = glitz == "toss"
-  return spawn(session, {
+  local dash = glitz == "dash"
+  local from = (side == "player") and session.playerMon or session.enemyMon
+  local ox, oy = center(session, from)
+  local dirX, dirY = 1, 0
+  if ox then
+    local dx, dy = x - ox, y - oy
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len > 0.1 then
+      dirX, dirY = dx / len, dy / len
+    end
+  end
+  -- Contact FX sit on the target cell. Toss dust stays on the landing
+  -- spot so it is not pinned to the sprites while they are in the air.
+  local hit = spawn(session, {
     kind = "effect",
     style = "contact",
     glitz = glitz,
     sx = x, sy = y, ex = x, ey = y,
-    duration = fx.duration or 0.26,
+    duration = fx.duration or (dash and 0.32 or 0.26),
+    delay = dash and 0.10 or nil,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType],
-    pinTip = toss or nil,
-    followSide = toss and ((side == "player") and "enemy" or "player") or nil,
   })
+  if hit then
+    hit.dirX, hit.dirY = dirX, dirY
+  end
+  if dash then
+    Projectiles.dashSmear(session, side, opts)
+  end
+  return hit
 end
 
 function Projectiles.lightHit(session, side, opts)
@@ -4264,6 +4976,101 @@ function Projectiles.lightHit(session, side, opts)
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType] or TYPE_COLORS.NORMAL,
   })
+end
+
+local GROUND_KICK_COLORS = {
+  grass = { 0.38, 0.78, 0.28 },
+  water = { 0.32, 0.68, 1.00 },
+  snow = { 0.86, 0.94, 1.00 },
+  cave = { 0.58, 0.46, 0.32 },
+  sand = { 0.82, 0.66, 0.36 },
+  spark = { 1.00, 0.88, 0.32 },
+  dust = { 0.72, 0.64, 0.48 },
+}
+
+--- Comic-book starburst on a critical hit.
+function Projectiles.critBurst(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local roll = (love and love.math and love.math.random) or math.random
+  local moveType = tostring(opts.moveType or "NORMAL"):upper()
+  if moveType == "" then
+    moveType = "NORMAL"
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "crit",
+    glitz = moveType,
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.42,
+    arc = 0,
+    seed = roll() * math.pi * 2,
+    color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
+    pinTip = true,
+    followSide = side,
+  })
+end
+
+--- Speed-line smear on the attacker for Quick Attack / Extreme Speed.
+function Projectiles.dashSmear(session, side, opts)
+  opts = opts or {}
+  local from = (side == "player") and session.playerMon or session.enemyMon
+  local target = (side == "player") and session.enemyMon or session.playerMon
+  local sx, sy = center(session, from)
+  local ex, ey = center(session, target)
+  if not (sx and ex) then
+    return nil
+  end
+  local moveId = tostring(opts.moveId or ""):upper():gsub("%s+", "_")
+  local extreme = moveId == "EXTREMESPEED" or moveId == "EXTREME_SPEED"
+  return spawn(session, {
+    kind = "effect",
+    style = "dash_smear",
+    glitz = extreme and "extreme" or "dash",
+    sx = sx, sy = sy, ex = ex, ey = ey,
+    duration = extreme and 0.42 or 0.34,
+    arc = 0,
+    color = { 0.92, 0.94, 1.00 },
+  })
+end
+
+function Projectiles.groundKick(session, side, opts)
+  opts = opts or {}
+  local target = (side == "player") and session.playerMon or session.enemyMon
+  local x, y = center(session, target)
+  if not x then
+    return nil
+  end
+  local glitz = Projectiles.hitGround(session, target, session and session._battle)
+  local from = (side == "player") and session.enemyMon or session.playerMon
+  local fx, fy = 1, 0
+  if from then
+    local ox, oy = center(session, from)
+    if ox then
+      local dx, dy = x - ox, y - oy
+      local len = math.sqrt(dx * dx + dy * dy)
+      if len > 0.1 then
+        fx, fy = dx / len, dy / len
+      end
+    end
+  end
+  local p = spawn(session, {
+    kind = "effect",
+    style = "ground_kick",
+    glitz = glitz,
+    sx = x, sy = y + 5, ex = x + fx * 6, ey = y + 3,
+    duration = 0.40,
+    arc = 4,
+    color = GROUND_KICK_COLORS[glitz] or GROUND_KICK_COLORS.dust,
+  })
+  if p then
+    p.dirX, p.dirY = fx, fy
+  end
+  return p
 end
 
 function Projectiles.status(session, side, opts)
@@ -4490,6 +5297,68 @@ function Projectiles.clashBurst(session, side, opts)
     end
   end
   return Projectiles.powerHit(session, foeSide, opts)
+end
+
+--- Two specials meet in the middle. Short streaks + a burst at the midpoint.
+function Projectiles.beamClash(session, playerOpts, enemyOpts)
+  playerOpts = playerOpts or {}
+  enemyOpts = enemyOpts or {}
+  local atk = session and session.playerMon
+  local def = session and session.enemyMon
+  local ax, ay = center(session, atk)
+  local bx, by = center(session, def)
+  if not (ax and bx) then
+    return nil
+  end
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5
+  local function streak(sx, sy, opts)
+    local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
+    local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
+    local fx = resolveFx({
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+      category = "special",
+    })
+    return spawn(session, {
+      kind = "move",
+      style = (fx and fx.style ~= "contact" and fx.style) or "beam",
+      glitz = fx and fx.glitz,
+      sx = sx, sy = sy, ex = mx, ey = my,
+      duration = 0.28,
+      arc = 0,
+      color = (fx and fx.color) or color,
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+    })
+  end
+  streak(ax, ay, playerOpts)
+  streak(bx, by, enemyOpts)
+  local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local color = TYPE_COLORS[pType] or TYPE_COLORS.NORMAL
+  spawn(session, {
+    kind = "effect",
+    style = "clash_glow",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.72,
+    arc = 0,
+    color = color,
+  })
+  spawn(session, {
+    kind = "effect",
+    style = "clash_trail",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.48,
+    arc = 0,
+    color = color,
+  })
+  return spawn(session, {
+    kind = "effect",
+    style = "power_hit",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.36,
+    arc = 0,
+    color = color,
+  })
 end
 
 function Projectiles.powerHit(session, side, opts)
