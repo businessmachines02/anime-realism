@@ -47,6 +47,9 @@ return function(Cues)
         end
         local battle = session._battle
         local t = H.now(session)
+        if Grid and type(Grid.tickHaze) == "function" then
+            Grid.tickHaze(session.grid, t)
+        end
         Cues.tickHeldReact(session, Grid)
         Cues.tickTossLand(session, Grid)
         local waiting = Cues.heldReactPending(session)
@@ -77,6 +80,32 @@ return function(Cues)
             local ent = H.sideEnt(session, side)
             if ent and ent._pendingCloseStrike then
                 local foe = H.foeOf(session, side)
+                local onHaze = Grid and type(Grid.isHaze) == "function"
+                    and Grid.isHaze(session.grid, ent.padU, ent.padV)
+                local hazeAhead = Grid and type(Grid.firstHazeOnPath) == "function"
+                    and Grid.firstHazeOnPath(session.grid, ent, foe)
+                ent._hazeSlow = (onHaze or hazeAhead) and true or nil
+                if onHaze then
+                    if not ent._hazeChipped then
+                        ent._hazeChipped = true
+                        local target = battle and ((side == "player")
+                            and battle.player or battle.enemy)
+                        if battle and type(battle.applyDamage) == "function"
+                            and target then
+                            pcall(battle.applyDamage, battle, target, Cues.HAZE_CHIP or 4)
+                        elseif type(ent.hp) == "number" then
+                            ent.hp = math.max(0, ent.hp - (Cues.HAZE_CHIP or 4))
+                        end
+                    end
+                    local stuck = Grid.hazeAt and Grid.hazeAt(session.grid, ent.padU, ent.padV)
+                    if stuck and (tonumber(stuck.density) or 1) >= 2 then
+                        ent._hazeStuckAt = ent._hazeStuckAt or t
+                    else
+                        ent._hazeStuckAt = nil
+                    end
+                else
+                    ent._hazeStuckAt = nil
+                end
                 Cues.tickCloseGapGait(ent, foe)
                 tryCloseGap(session, Grid, ent, foe, battle)
                 if ent._closeStrikeWait then
@@ -92,6 +121,8 @@ return function(Cues)
                     -- Successful dodge: let the cancel land, do not swing.
                 elseif Cues.inMeleeReach(ent, foe) then
                     tryPunch(session, side, ent, Grid, battle, "tickReturns.punch")
+                elseif ent._hazeStuckAt then
+                    -- Thick smog: do not timeout-punch through the cloud.
                 elseif ent._closeStrikeArmedAt
                     and (t - ent._closeStrikeArmedAt) > Cues.closeGapPunchTimeout(ent)
                     and not H.fieldMenuOpen(session._battle) then
@@ -111,7 +142,7 @@ return function(Cues)
                     if ent._withdrawAfterStrike then
                         ent._withdrawAfterStrike = nil
                         if foe and type(Grid.withdrawFromFoe) == "function" then
-                            Grid.withdrawFromFoe(session.grid, ent, foe)
+                            Grid.withdrawFromFoe(session.grid, ent, foe, side)
                         end
                     else
                         Grid.returnHome(session.grid, ent)

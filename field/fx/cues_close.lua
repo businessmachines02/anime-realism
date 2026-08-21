@@ -55,6 +55,10 @@ return function(Cues)
         ent._closeGapCruise = nil
         ent._closeGapStart = nil
         ent._closeGapSpan = nil
+        ent._cuttingHaze = nil
+        ent._hazeSlow = nil
+        ent._hazeStuckAt = nil
+        ent._hazeChipped = nil
     end
 
     function H.fireCloseStrike(session, side, ent, Grid)
@@ -92,6 +96,9 @@ return function(Cues)
         local Audio = deps and deps.Audio
         if pending and Audio and type(Audio.playMove) == "function" then
             pcall(Audio.playMove, battle, pending.moveId, side == "player")
+        end
+        if pending then
+            Cues.cutLaneHaze(session, side, Grid, pending)
         end
         if pending and Projectiles and type(Projectiles.contact) == "function" then
             Projectiles.contact(session, side, pending)
@@ -175,7 +182,8 @@ return function(Cues)
     end
 
     --- FIRE NOW connected: stop the charge and shove the charger back.
-    function Cues.interruptCharge(session, side, Grid)
+    --- CHECK uses 1 tile; a connecting special uses 2.
+    function Cues.interruptCharge(session, side, Grid, tiles)
         local ent = H.sideEnt(session, side)
         if not ent then
             return false
@@ -187,8 +195,12 @@ return function(Cues)
         end
         Grid = Grid or (session._deps and session._deps.Grid)
         local foe = H.foeOf(session, side)
+        tiles = tonumber(tiles) or 2
+        if tiles < 1 then
+            tiles = 1
+        end
         if Grid and type(Grid.knockbackTiles) == "function" then
-            Grid.knockbackTiles(session.grid, ent, foe, 2)
+            Grid.knockbackTiles(session.grid, ent, foe, tiles)
         end
         ent._heavyHit = true
         H.playAnim(ent, "hit")

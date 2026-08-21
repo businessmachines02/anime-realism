@@ -1126,6 +1126,12 @@ function tests.npc_react_may_fire_when_the_window_is_open()
     { moveId = "SMOKESCREEN", power = 0 },
   })
   eq(shots.moveId, "FLAMETHROWER", "foe FIRE picks the strongest shot")
+  eq(FoeAi.pickFireShot({
+    { moveId = "EMBER", power = 40 },
+    { moveId = "TACKLE", power = 35, checkNow = true },
+    { moveId = "FLAMETHROWER", power = 95 },
+  }).moveId, "FLAMETHROWER",
+    "foe FIRE does not spend the shot on a punch")
   RD.clear(wall)
 end
 
@@ -1339,6 +1345,258 @@ function tests.fire_now_hit_stops_the_charge()
   eq(enemy.lastAnim, "hit", "charger takes the bolt")
   truthy(enemy.padU ~= startU or enemy.padV ~= startV,
     "charger leaves the charge cell")
+end
+
+function tests.check_now_hit_stops_the_charge_one_tile()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "QUICK_ATTACK" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startU = enemy.padU
+  local battle = { _arFireNow = true, _arCheckNow = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 41,
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, battle, {
+    category = "physical", moveId = "TACKLE",
+  }), "CHECK hit cue")
+  truthy(not enemy._pendingCloseStrike, "connecting CHECK cancels the charge")
+  eq(enemy.lastAnim, "hit", "charger takes the tackle")
+  local moved = math.max(math.abs((enemy.padU or 0) - startU),
+    math.abs((enemy.padV or 0) - eHome.v))
+  eq(moved, 1, "CHECK knocks the charger one tile, not two")
+end
+
+function tests.smog_haze_occupies_the_lane_without_jumping()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+    _cuttingHaze = true,
+    hp = 40,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  truthy(not Grid.pathObstructed(grid, player, enemy),
+    "open lane is not solid cover")
+  local placed = Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOG", density = 2, cells = 2,
+  })
+  truthy(#placed >= 1, "SMOG occupies the fight axis")
+  truthy(Grid.hasHaze(grid), "haze layer is live")
+  truthy(not Grid.pathObstructed(grid, player, enemy),
+    "haze is not solid cover — no jump")
+  local startU = enemy.padU
+  Grid.closeGap(grid, enemy, player)
+  truthy(Grid.isHaze(grid, enemy.padU, enemy.padV)
+    or math.max(math.abs(enemy.padU - player.padU), math.abs(enemy.padV - player.padV)) > 1,
+    "thick smog stalls the charge instead of landing adjacent")
+  truthy(enemy.padU ~= startU or Grid.isHaze(grid, enemy.padU, enemy.padV),
+    "charger stepped into the cloud")
+
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 50,
+    _deps = { Grid = Grid, Projectiles = Projectiles },
+    _battle = {},
+  }
+  Cues.tickReturns(session, Grid)
+  truthy(enemy._hazeChipped, "walking into smog chips once")
+  truthy(enemy._hazeSlow, "gait slows in the cloud")
+
+  Cues.cutLaneHaze(session, "player", Grid, {
+    category = "physical", moveId = "BONE_CLUB",
+  })
+  truthy(not Grid.hasHaze(grid), "Cubone's club clears the lane")
+  Grid.closeGap(grid, enemy, player)
+  eq(math.max(math.abs(enemy.padU - player.padU), math.abs(enemy.padV - player.padV)),
+    1, "after a cut the charge can finish")
+end
+
+function tests.ember_leaves_haze_residue_thunderbolt_clears()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOKESCREEN", density = 2, cells = 1,
+  })
+  truthy(Grid.hasHaze(grid), "smokescreen is down")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid, Projectiles = Projectiles },
+  }
+  Cues.cutLaneHaze(session, "enemy", Grid, {
+    category = "special", moveId = "EMBER", movePower = 40,
+  })
+  truthy(Grid.hasHaze(grid), "Ember 40 leaves residue")
+  Cues.cutLaneHaze(session, "enemy", Grid, {
+    category = "special", moveId = "THUNDERBOLT", movePower = 95,
+  })
+  truthy(not Grid.hasHaze(grid), "Thunderbolt cuts the haze")
+end
+
+function tests.lane_seed_is_a_chance_and_typed()
+  eq(Cues.laneKind({ moveId = "SMOG" }), "poison", "Smog is a poison lane")
+  eq(Cues.laneKind({
+    moveId = "EMBER", moveType = "FIRE", category = "special",
+  }, Projectiles), "fire", "Ember can leave fire")
+  eq(Cues.laneKind({
+    moveId = "WATER_GUN", moveType = "WATER", category = "special",
+  }, Projectiles), "water", "Water Gun can leave water")
+  eq(Cues.laneKind({
+    moveId = "THUNDERBOLT", moveType = "ELECTRIC", category = "special",
+  }, Projectiles), nil, "a bolt clashes, it does not puddle")
+  eq(Cues.laneKind({
+    moveId = "FIRE_PUNCH", moveType = "FIRE", category = "special",
+  }, Projectiles), nil, "Fire Punch is CHECK, not a trail")
+  eq(Cues.shouldSeedLane({ moveId = "EMBER", moveType = "FIRE",
+    category = "special", forceLane = true }, Projectiles), "fire",
+    "tests can force a lane")
+  eq(Cues.shouldSeedLane({ moveId = "EMBER", moveType = "FIRE",
+    category = "special", forceLane = false }, Projectiles), nil,
+    "force off skips the roll")
+  eq(Cues.shouldSeedLane({
+    moveId = "FLAMETHROWER", moveType = "FIRE", category = "special",
+  }, Projectiles, function() return 0 end), "fire", "a low roll seeds")
+  eq(Cues.shouldSeedLane({
+    moveId = "FLAMETHROWER", moveType = "FIRE", category = "special",
+  }, Projectiles, function() return 1 end), nil, "a high roll leaves no lane")
+end
+
+function tests.haze_sends_idle_mons_home_to_the_trainer()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    homePadU = pHome.u, homePadV = pHome.v,
+  }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "enemy", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+  })
+  truthy(Grid.hasHaze(grid), "fire lane is down")
+  local hazeU, hazeV = Grid.firstHazeOnPath(grid, player, enemy)
+  truthy(hazeU, "the cloud sits on the fight axis")
+  truthy(not Grid.isFree(grid, hazeU, hazeV, "wanderer", { id = "wanderer" }),
+    "idle roam will not step onto haze")
+
+  truthy(Grid.step(grid, player, 0, 1) or Grid.step(grid, player, 0, -1),
+    "stand one cell off the opening")
+  local away = math.abs(player.padU - pHome.u) + math.abs(player.padV - pHome.v)
+  truthy(away >= 1, "they left home")
+  truthy(Grid.idleWander(grid, player, "player", enemy),
+    "with a lane down they walk home")
+  truthy(math.abs(player.padU - pHome.u) + math.abs(player.padV - pHome.v) < away,
+    "home is closer to the trainer pad")
+  truthy(not Grid.isHaze(grid, player.padU, player.padV),
+    "they did not step onto the cloud")
+
+  truthy(Grid.setPad(grid, player, eHome.u, eHome.v + 1)
+      or Grid.setPad(grid, player, eHome.u, eHome.v - 1),
+    "stand next to the foe, off the cloud")
+  truthy(Grid.withdrawFromFoe(grid, player, enemy, "player"),
+    "withdraw with a lane down")
+  eq(player.padU, pHome.u, "withdraw goes to the trainer pad, not the FIRE ring")
+  eq(player.padV, pHome.v, "withdraw v is the opening home")
+end
+
+function tests.lane_hold_expires_and_tiles_loop()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+    now = 10,
+  })
+  truthy(Grid.hasHaze(grid), "fire lane is down")
+  eq(#Grid.tickHaze(grid, 99), 0, "a live lane does not burn out mid-turn")
+  truthy(Grid.hasHaze(grid), "it loops until the turn ends")
+
+  local battle = {}
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid, Cues = Cues },
+    _battle = battle,
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.onTurnStarted(battle)
+  truthy(not Grid.hasHaze(grid), "next turn clears the lane")
+  Lifecycle._testUnbind(battle)
+
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOG", kind = "poison", density = 2, cells = 1,
+  })
+  eq(#Grid.tickHaze(grid, 99), 0, "untimed test haze does not expire")
+  truthy(Grid.hasHaze(grid), "cut or faint still owns untimed cells")
+
+  local painted = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      rectangle = function() painted = painted + 1 end,
+      ellipse = function() painted = painted + 1 end,
+      circle = function() painted = painted + 1 end,
+      polygon = function() painted = painted + 1 end,
+    },
+    timer = { getTime = function() return 0.4 end },
+  }
+  local session = { live = true, grid = grid, _now = 0.4 }
+  Projectiles.drawHazeLanes(session, 0, 0)
+  truthy(painted > 0, "poison lane paints a looping puff")
+  Grid.clearHaze(grid)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+  })
+  painted = 0
+  Projectiles.drawHazeLanes(session, 0, 0)
+  truthy(painted > 0, "fire lane paints looping tongues")
+  love = prevLove
 end
 
 function tests.foe_fire_hit_stops_your_charge()
@@ -1667,6 +1925,23 @@ function tests.fire_clashes_with_an_incoming_special()
   eq(verdict, "win", "foe FIRE with higher Special shoves your beam")
   verdict = RD.contestSpecialClash(battle, ember, water)
   eq(verdict, "lose", "default contest still treats reply as the player")
+
+  local hydro = { id = "HYDRO_PUMP", power = 120, category = "special", type = "WATER" }
+  local bolt = { id = "THUNDERBOLT", power = 95, category = "special", type = "ELECTRIC" }
+  battle = {
+    player = { stats = { special = 150, speed = 20 } },
+    enemy = { stats = { special = 80, speed = 120 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, hydro, bolt)
+  eq(verdict, "win", "slower high-Special Thunderbolt still cuts Hydro Pump")
+  battle = {
+    player = { stats = { special = 40, speed = 20 } },
+    enemy = { stats = { special = 80, speed = 120 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, hydro, bolt, { replySide = "enemy" })
+  eq(verdict, "win", "slower foe FIRE with higher Special still cuts")
   RD.clear(battle)
 
   local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
@@ -1705,6 +1980,24 @@ function tests.fire_clashes_with_an_incoming_special()
   })
   truthy(not React.canFireNow(field, ember),
     "FIRE stays off when they are not two tiles out")
+
+  React.bind({
+    isFieldBattle = function() return true end,
+    playerStatusLocked = function() return false end,
+    listFireNowMoves = function() return {} end,
+    listCheckNowMoves = function()
+      return { { moveId = "TACKLE", name = "TACKLE", checkNow = true,
+        moveInst = { id = "TACKLE" } } }
+    end,
+    listCloudNowMoves = function() return {} end,
+    isRangedCounter = function() return false end,
+    isMeleeAttack = function() return true end,
+    chargeWindowOpen = function() return true end,
+    fireRangeOpen = function() return true end,
+  })
+  truthy(not React.canFireNow(field, {
+    id = "QUICK_ATTACK", power = 40, category = "physical", type = "NORMAL",
+  }), "FIRE stays off when the pool has no projectile special")
 
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -3522,6 +3815,30 @@ function tests.ranged_counter_skips_contact_punches()
   truthy(not Cues.isRangedCounter({
     moveId = "FIRE_PUNCH", category = "special", moveType = "FIRE",
   }, Projectiles), "fire punch stays a melee poke")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "EMBER", category = "special", moveType = "FIRE",
+  }), "Ember is a FIRE projectile")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "WATER_GUN", category = "special", moveType = "WATER",
+  }), "Water Gun is a FIRE projectile")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "SWIFT", category = "physical", moveType = "NORMAL",
+  }), "Swift still flies as FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "FIRE_PUNCH", category = "special", moveType = "FIRE",
+  }), "Fire Punch is not FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "TACKLE", category = "physical", moveType = "NORMAL",
+  }), "Tackle is not FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "PSYCHIC", category = "special", moveType = "PSYCHIC",
+  }), "Psychic is an aura, not a projectile")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "ABSORB", category = "special", moveType = "GRASS",
+  }), "Absorb is a drain, not a projectile")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "SMOG", category = "special", moveType = "POISON",
+  }), "Smog is a lane, not FIRE")
 end
 
 function tests.turn_start_clears_close_gap_drift()
@@ -4566,14 +4883,13 @@ function tests.world_space_projectiles()
   local ember = Projectiles.move(session, "player", {
     moveType = "FIRE", moveId = "EMBER",
   })
-  eq(ember.style, "ember", "ember uses bouncing flame tongues")
+  eq(ember.style, "ember", "ember uses a short fireball lob")
   eq(ember.glitz, "flame", "ember paints flame glitz")
   truthy(ember.sx < ember.ex, "ember travels toward the foe")
-  truthy((ember.arc or 0) >= 10, "ember arcs like bouncing fireballs")
+  truthy((ember.arc or 0) >= 8, "ember arcs like tossed fireballs")
   truthy(Projectiles.isTravelFx({
     moveType = "FIRE", moveId = "EMBER",
   }), "ember is a travel FX")
-  truthy(ember.variant, "ember picks a flight pattern")
   local rockThrow = Projectiles.move(session, "player", {
     moveType = "ROCK", moveId = "ROCK_THROW",
   })
@@ -5039,17 +5355,7 @@ function tests.fire_tongues_and_gust_paint()
   ember.age = 0.28
   ember:draw(0, 0)
   truthy(calls.polygon > 0, "ember paints flame-tongue polygons, not red blobs")
-
-  for _, variant in ipairs({ "volley", "hop", "spray", "corkscrew", "pop" }) do
-    calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
-    local shot = Projectiles.move(session, "player", {
-      moveType = "FIRE", moveId = "EMBER",
-    })
-    shot.variant = variant
-    shot.age = 0.28
-    shot:draw(0, 0)
-    truthy(calls.polygon > 0, variant .. " ember paints flame tongues")
-  end
+  truthy(calls.circle > 0, "ember paints a hot fireball core")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local rockThrow = Projectiles.move(session, "player", {
@@ -6764,6 +7070,382 @@ function tests.resolve_sheet_prefers_wilds_export()
   eq(sheet.providerId, "pokemmo", "provider id kept")
 end
 
+function tests.kit_candidate_paths_prefer_dex_then_name()
+  local mod = { path = "/mods/anime_realism" }
+  local game = { data = { pokemon = { CHARMANDER = { dex = 4 } } } }
+  local paths = Sprites.kitCandidatePaths(mod, game, "CHARMANDER")
+  eq(paths[1], "/mods/anime_realism/assets/followers/follower_004.png",
+    "dex kit")
+  eq(paths[2], "/mods/anime_realism/assets/followers/follower_004_normal.png",
+    "optional normal alias")
+  eq(paths[3], "/mods/anime_realism/assets/followers/CHARMANDER.png",
+    "species name kit")
+  eq(paths[4], "/mods/anime_realism/assets/followers/CHARMANDER_normal.png",
+    "species normal kit")
+end
+
+function tests.kit_block_uses_combat_rows()
+  eq(Sprites.kitBlockForAnim("idle", 6), 0, "idle is walk on a 6-block kit")
+  eq(Sprites.kitBlockForAnim("idle", 7), 6, "idle is the extra 7th block")
+  eq(Sprites.kitBlockForAnim("idle", 8), 6, "idle stays 7th when faint is present")
+  eq(Sprites.kitBlockForAnim("faint", 7), 0, "faint falls back without the 8th block")
+  eq(Sprites.kitBlockForAnim("faint", 8), 7, "faint is the extra 8th block")
+  eq(Sprites.kitBlockForAnim("walk", 7), 0, "walk stays the top block")
+  eq(Sprites.kitBlockForAnim("dodge", 6), 1, "dodge block")
+  eq(Sprites.kitBlockForAnim("brace", 6), 2, "brace block")
+  eq(Sprites.kitBlockForAnim("attack", 6), 3, "physical block")
+  eq(Sprites.kitBlockForAnim("jump", 6), 3, "jump uses physical on a short kit")
+  eq(Sprites.kitBlockForAnim("counter", 6), 3, "counter uses physical on a short kit")
+  eq(Sprites.kitBlockForAnim("miss", 6), 3, "miss uses physical on a short kit")
+  eq(Sprites.kitBlockForAnim("cast", 6), 4, "special block")
+  eq(Sprites.kitBlockForAnim("charge", 8), 4, "charge uses special until the extra row")
+  eq(Sprites.kitBlockForAnim("hit", 6), 5, "hit block")
+  eq(Sprites.kitBlockForAnim("selfhit", 6), 5, "recoil uses hit")
+  eq(Sprites.kitBlockForAnim("dodge", 1), 0, "missing dodge stays on walk")
+  eq(Sprites.kitBlockForAnim("cast", 3), 0, "missing special stays on walk")
+  eq(Sprites.kitBlockForAnim("charge", 16), 8, "charge is the 9th block")
+  eq(Sprites.kitBlockForAnim("jump", 16), 9, "jump is its own row")
+  eq(Sprites.kitBlockForAnim("counter", 16), 10, "counter is its own row")
+  eq(Sprites.kitBlockForAnim("miss", 16), 11, "miss is its own row")
+  eq(Sprites.kitBlockForAnim("sleep", 8), 6, "sleep uses idle on an 8-block kit")
+  eq(Sprites.kitBlockForAnim("sleep", 16), 12, "sleep is its own row")
+  eq(Sprites.kitBlockForAnim("freeze", 16), 13, "freeze is its own row")
+  eq(Sprites.kitBlockForAnim("confuse", 16), 14, "confuse is its own row")
+  eq(Sprites.kitBlockForAnim("float", 16), 15, "float is its own row")
+  eq(Sprites.kitBlockForAnim("flap", 16), 0, "flap is walk without the extra row")
+  eq(Sprites.kitBlockForAnim("flap", 17), 16, "flap is the 17th block")
+  eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "lift" }), 15,
+    "flying dodge uses float")
+  eq(Sprites.kitBlockForAnim("dodge", 8, { _dodgeStyle = "lift" }), 1,
+    "flying dodge stays dodge without float")
+  eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "phase" }), 1,
+    "ghost dodge keeps the dodge row")
+end
+
+function tests.kit_idle_override_follows_status()
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "SLP" } },
+  }, false), "sleep", "asleep standing uses sleep")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "SLP" } },
+  }, true), nil, "sleepwalk keeps walk")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "FRZ" } },
+  }, false), "freeze", "frozen standing uses freeze")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { confusedTurns = 3, mon = {} },
+  }, false), "confuse", "confused standing uses confuse")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "PAR" } },
+  }, false), nil, "para stays idle")
+end
+
+function tests.kit_move_override_flaps_when_flying()
+  local pidgeot = {
+    _kitSheet = true,
+    _kitBlocks = 17,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "NORMAL", "FLYING" } },
+  }
+  eq(Sprites.kitMoveOverride(pidgeot, true), "flap",
+    "Pidgeot flaps when the burst says so")
+  pidgeot._flapWalk = false
+  eq(Sprites.kitMoveOverride(pidgeot, true), nil,
+    "same burst can stay on Walk")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _kitBlocks = 17,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "FIRE" } },
+  }, true), nil, "ground types do not flap")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _kitBlocks = 16,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "FLYING" } },
+  }, true), nil, "no FlapAround row stays on Walk")
+  eq(Sprites.kitMoveOverride(pidgeot, false), nil, "standing clears the flap burst")
+  eq(pidgeot._flapWalk, nil, "next walk can roll flap again")
+end
+
+function tests.kit_pose_requires_combat_block()
+  local kit = { _kitSheet = true, _kitBlocks = 6 }
+  truthy(Sprites.usesKitPose(kit, "dodge"), "full kit plays dodge")
+  truthy(Sprites.usesKitPose(kit, "attack"), "full kit plays physical")
+  truthy(not Sprites.usesKitPose(kit, "idle"), "walk is not a combat pose")
+  truthy(not Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 1 }, "dodge"),
+    "walk-only kit keeps old hop")
+  truthy(not Sprites.usesKitPose({ _kitBlocks = 6 }, "dodge"),
+    "non-kit sheet keeps old hop")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 6 }, "jump"),
+    "short kit jump still uses physical")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "charge"),
+    "tall kit plays charge")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "sleep"),
+    "tall kit plays sleep")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 8 }, "faint"),
+    "8-block kit plays faint")
+  truthy(not Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 7 }, "faint"),
+    "no faint block keeps the shrink")
+end
+
+function tests.kit_dodge_keeps_slide_without_squash()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 6
+  player:play("dodge")
+  player._dodgeStyle = "duck"
+  Cast.tick(session, 1 / 60)
+  eq(player.drawScaleX, nil, "kit dodge does not squash x")
+  eq(player.drawScaleY, nil, "kit dodge does not squash y")
+  eq(player.drawAlpha, 1, "kit dodge stays opaque")
+  eq(player.drawAngle, 0, "kit dodge does not lean")
+  player:play("attack")
+  Cast.tick(session, 0.16)
+  eq(player.drawScale, 1, "kit punch does not scale up")
+  player._kitBlocks = 16
+  player:play("dodge")
+  player._dodgeStyle = "phase"
+  Cast.tick(session, 1 / 60)
+  truthy(player.drawAlpha < 1, "ghost kit dodge goes paler")
+  player:play("dodge")
+  player._dodgeStyle = "hop"
+  Cast.tick(session, 0.21)
+  eq(player.drawScaleX, nil, "kit hop does not squash x")
+  eq(player.drawScaleY, nil, "kit hop does not squash y")
+  truthy(player.py < player.basePy - 4, "kit hop leaves the ground")
+end
+
+function tests.kit_col_walk_and_combat()
+  eq(Sprites.kitColForAnim({ _walkT = 0 }, "idle", false), 0, "idle column")
+  eq(Sprites.kitColForAnim({ _idleT = 0.6 }, "idle", false), 2, "idle other stand")
+  eq(Sprites.kitColForAnim({ _walkT = 0.2, _kitBlocks = 7 }, "idle", true), 1,
+    "moving uses walk columns")
+  eq(Sprites.kitColForAnim({ _idleT = 0.3, _kitBlocks = 7 }, "idle", false), 1,
+    "dedicated idle loops all four frames")
+  eq(Sprites.kitColForAnim({ _walkT = 0.2 }, "idle", true), 1, "walk step column")
+  eq(Sprites.kitColForAnim({ animT = 0 }, "attack", false), 0, "physical start")
+  eq(Sprites.kitColForAnim({ animT = 0.18 }, "attack", false), 2, "physical recover")
+  eq(Sprites.kitColForAnim({ animT = 0.4 }, "cast", false), 3, "special settle")
+  eq(Sprites.kitColForAnim({ animT = 0.7, _kitBlocks = 8 }, "faint", false), 3,
+    "faint settles on the last column")
+  eq(Sprites.kitColForAnim({ animT = 0.30, _kitBlocks = 8 }, "faint", false), 2,
+    "faint collapse uses mid frames before the hold")
+  eq(Sprites.kitColForAnim({ animT = 0.25 }, "charge", false), 2,
+    "charge loops while held")
+  eq(Sprites.kitColForAnim({ _idleT = 0 }, "freeze", false), 0,
+    "freeze holds the first frame")
+  eq(Sprites.kitColForAnim({ _idleT = 0.9 }, "sleep", false), 2,
+    "sleep loops slower than idle")
+end
+
+function tests.kit_charge_hold_until_shoot()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  player:play("charge")
+  Cast.tick(session, 0.50)
+  eq(player.anim, "charge", "charge does not drop to idle")
+  player:play("cast")
+  eq(player.anim, "cast", "Shoot plays when the shot leaves")
+end
+
+function tests.cast_cue_holds_charge_on_kit()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  session._deps = { Sprites = Sprites }
+  truthy(Cues.apply(session, "player", "cast", Grid, nil, battle, {}),
+    "FIRE overlapping pose plays")
+  eq(player.anim, "charge", "kit FIRE pose holds Charge")
+end
+
+function tests.kit_faint_then_recall_keeps_crumple()
+  local grid, plan = sampleGrid()
+  local pHome = grid.home.player
+  grid.home.playerTrainer = { u = pHome.u - 1, v = pHome.v }
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true, _battle = battle }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  player.anim = "idle"
+  player._sendoutStarted = nil
+  player.px, player.py = 16, 32
+  session._deps = { Sprites = Sprites, Projectiles = Projectiles }
+  truthy(Cues.apply(session, "player", "faint", Grid, nil, battle, {}),
+    "kit faint cue")
+  eq(player.anim, "faint", "trainer faint plays the collapse first")
+  truthy(player._recallAfterFaint, "laser waits for the crumple")
+  Cast.tick(session, Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD + 0.02)
+  eq(player.anim, "recall", "crumple hands off to the recall laser")
+  eq(player._kitBlock, 7, "recall still shows the faint block")
+  eq(player._kitCol, 3, "recall holds the last crumpled frame")
+  truthy(not player.hidden, "sprite stays visible while the laser sucks them up")
+end
+
+function tests.kit_cell_origin_uses_block_facing_and_col()
+  local u, v = Sprites.kitCellOrigin({
+    _kitBlock = 3, _kitCol = 1, facing = "left",
+  }, "left")
+  eq(u, 32, "col 1 is 32px x")
+  eq(v, 416, "physical left is row 13")
+  u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "down")
+  eq(u, 0, "walk front origin x")
+  eq(v, 0, "walk front origin y")
+  u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "right")
+  eq(v, 64, "walk right is its own row, not a flipped left")
+end
+
+function tests.kit_billboard_does_not_mirror_right()
+  eq(Sprites.billboardFacing("right", true), "left",
+    "kit right is drawn, not GSC-flipped")
+  eq(Sprites.billboardFacing("left", true), "left", "kit left stays left")
+  eq(Sprites.billboardFacing("down", true), "down", "kit down stays down")
+  eq(Sprites.billboardFacing("right", false), "right",
+    "GSC sheets still flip right")
+end
+
+function tests.kit_billboards_stay_outermost_after_wilds_wrap()
+  local lastVerts
+  local SB = {
+    mesh = function(def, frame)
+      return { via = "orig", frame = frame }
+    end,
+  }
+  local Voxel3D = {
+    pushQuad = function() end,
+    newMesh = function(verts)
+      lastVerts = verts
+      return { verts = verts, via = "kit" }
+    end,
+  }
+  local mod = {
+    find = function(_, id)
+      if id == "DRAMATIC_SHAPE" then
+        return {
+          exports = {
+            lib = {
+              require = function(name)
+                if name == "SpriteBillboards" then
+                  return SB
+                end
+                if name == "Voxel3D" then
+                  return Voxel3D
+                end
+              end,
+            },
+          },
+        }
+      end
+    end,
+  }
+  truthy(Sprites.installKitBillboards(mod), "first wrap installs")
+  eq(SB.mesh, SB._arKitWrapper, "wrapper is live mesh()")
+  -- Wilds variable-geometry wrap steals mesh() for every 32px def.
+  local inner = SB.mesh
+  SB.mesh = function(def, frame)
+    if type(def) == "table" and def.frameWidth == 32 then
+      return { via = "wilds", frame = frame }
+    end
+    return inner(def, frame)
+  end
+  truthy(Sprites.installKitBillboards(mod), "rewrap after steal")
+  eq(SB.mesh, SB._arKitWrapper, "kit wrap is outermost again")
+  local fakeImg = {
+    getDimensions = function()
+      return 128, 768
+    end,
+  }
+  local kitMesh = SB.mesh({
+    kit = true,
+    image = "kit.png",
+    kitImage = fakeImg,
+    kitU = 32,
+    kitV = 64,
+    frameWidth = 32,
+    frameHeight = 32,
+  }, 2)
+  eq(kitMesh.via, "kit", "kit def does not use Wilds column-0 card")
+  truthy(lastVerts and lastVerts[1], "kit card has verts")
+  local u0 = lastVerts[1][4]
+  local expect = (32 + 0.02) / 128
+  assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
+  local vanilla = SB.mesh({ image = "npc.png", frames = 6 }, 3)
+  eq(vanilla.via, "orig", "vanilla GSC strip still uses original mesh")
+end
+
+function tests.kit_sheet_beats_wilds_when_present()
+  local kit = root .. "/../assets/followers/follower_025.png"
+  local f = io.open(kit, "rb")
+  if not f then
+    return
+  end
+  f:close()
+  local mod = {
+    path = root .. "/..",
+    options = {
+      get = function()
+        return "HGSS"
+      end,
+    },
+    find = function(_, id)
+      if id == "overworld_wild_spawns" then
+        return {
+          exports = {
+            resolveFollowerSprite = function(opts)
+              return {
+                image = "/wilds/" .. tostring(opts.species) .. ".png",
+                frames = 6,
+                providerId = "pokemmo",
+              }
+            end,
+          },
+        }
+      end
+    end,
+  }
+  local game = { data = { pokemon = { PIKACHU = { dex = 25 } } } }
+  local sheet = Sprites.resolveSheet(mod, game, "PIKACHU")
+  truthy(sheet and sheet.kit, "baked kit wins over Wilds")
+  truthy(sheet.image:find("follower_025%.png$"), "dex kit path")
+  eq(sheet.frameWidth, 32, "32px cells")
+  eq(sheet.trueColor, true, "true-color kit")
+end
+
 function tests.projectile_style_registry_is_public()
   eq(type(Projectiles.registerStyle), "function", "styles register by name")
 end
@@ -6801,6 +7483,11 @@ do
   local chunk, err = loadfile(fxFile)
   assert(chunk, err)
   local BattleFx = chunk()
+  BattleFx.bind({
+    isFireNowShot = function(_, opts)
+      return Projectiles.isFireNowShot(opts)
+    end,
+  })
 
   function tests.counter_strike_uses_only_known_moves()
     local battle = {
@@ -6890,6 +7577,32 @@ do
     local shots = BattleFx.listFireNowMoves(battle, battle.player)
     eq(#shots, 1, "only a ranged special with PP is fireable")
     eq(shots[1].moveId, "EMBER", "queued Scratch can still switch to Ember")
+    local checks = BattleFx.listCheckNowMoves(battle, battle.player)
+    eq(#checks, 2, "Scratch and Fire Punch are CHECKs during a charge")
+    local checkIds = {}
+    for i = 1, #checks do
+      checkIds[checks[i].moveId] = true
+    end
+    truthy(checkIds.SCRATCH, "Scratch is listed as a CHECK")
+    truthy(checkIds.FIRE_PUNCH, "Fire Punch stays melee even as a Fire type")
+    eq(checks[1].checkNow or checks[2].checkNow, true, "CHECK rows are tagged")
+
+    battle.player.curMoves = {
+      { id = "SMOG", pp = 20 },
+      { id = "SMOKESCREEN", pp = 20 },
+      { id = "EMBER", pp = 25 },
+    }
+    battle.data.moves.SMOG = {
+      id = "SMOG", power = 20, category = "special", type = "POISON",
+    }
+    battle.data.moves.SMOKESCREEN = {
+      id = "SMOKESCREEN", power = 0, category = "status", type = "NORMAL",
+    }
+    shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "SMOG is not a 2-tile FIRE special")
+    eq(shots[1].moveId, "EMBER", "Ember stays on the FIRE list")
+    local clouds = BattleFx.listCloudNowMoves(battle, battle.player)
+    eq(#clouds, 2, "Smog and Smokescreen seed a lane")
 
     battle.player.curMoves = {
       { id = "SCRATCH", pp = 35 },
@@ -6902,6 +7615,24 @@ do
     shots = BattleFx.listFireNowMoves(battle, battle.player)
     eq(#shots, 1, "Water Gun is a fireable special")
     eq(shots[1].moveId, "WATER_GUN", "Nidorina can FIRE NOW with Water Gun")
+
+    battle.player.curMoves = {
+      { id = "PSYCHIC", pp = 10 },
+      { id = "TACKLE", pp = 35 },
+      { id = "THUNDERBOLT", pp = 15 },
+    }
+    battle.data.moves.PSYCHIC = {
+      id = "PSYCHIC", power = 90, category = "special", type = "PSYCHIC",
+    }
+    battle.data.moves.TACKLE = {
+      id = "TACKLE", power = 35, category = "physical", type = "NORMAL",
+    }
+    battle.data.moves.THUNDERBOLT = {
+      id = "THUNDERBOLT", power = 95, category = "special", type = "ELECTRIC",
+    }
+    shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "FIRE lists only the projectile")
+    eq(shots[1].moveId, "THUNDERBOLT", "Psychic and Tackle stay off FIRE")
 
     battle.player.curMoves = {
       { id = "PSYCHIC", pp = 10 },

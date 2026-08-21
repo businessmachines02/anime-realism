@@ -1,7 +1,20 @@
 .DS_Store
 *.zip
-*.png
 *.jpg
 *.jpeg
 tag.sh
 .cursor/
+
+# PMD SpriteBot dumps (`*-Anim.png`, offsets, shadows). Those strips wedge
+# the voxel pass if a fight loads them. Unpack locally, then bake.
+*.png
+# Runtime pad kits only (32px, 4-facing). `follower_005.png`, optional
+# `follower_005_normal.png`, or a hand-drawn `CHARMELEON.png` at this folder.
+!assets/followers/follower_*.png
+!assets/followers/*.png
+
+# Baker
+__pycache__/
+*.py[cod]
+.venv/
+venv/

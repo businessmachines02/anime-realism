@@ -5,8 +5,8 @@
 -- faint looks wrong.
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
---   cast                           overlapping FIRE pose (shot is the attack cue)
---   attack                         physicals walk in; specials cast in place
+--   cast                           overlapping FIRE pose (Charge hold; shot is the attack cue)
+--   attack                         physicals walk in; specials Shoot in place
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
@@ -64,6 +64,7 @@ return function(Cues)
             movePower = opts.movePower,
             jump = jump,
         }
+        ent._cuttingHaze = true
         -- Already next to the foe: punch on the next present tick, do not
         -- burn a "walk first" frame (that stall is most obvious on your mon).
         -- If the player could FIRE NOW, keep a wind-up so the charge reads.
@@ -212,7 +213,7 @@ return function(Cues)
         if not ent then
             return false
         end
-        H.playAnim(ent, "cast")
+        H.playChargeHold(session, ent)
         return true
     end)
 
@@ -387,20 +388,31 @@ return function(Cues)
         if battle and battle._arFireNow then
             local charger = battle._arFireNowCharger or "enemy"
             if side == charger then
+                if battle._arHazeNow then
+                    Cues.seedLaneHaze(session, (side == "player") and "enemy" or "player",
+                        Grid, opts)
+                    H.playAnim(ent, "hit")
+                    return true
+                end
                 local foe = H.foeOf(session, side)
                 Cues.cancelCloseStrike(session, side, Grid)
+                local tiles = battle._arCheckNow and 1 or 2
                 if Grid and type(Grid.knockbackTiles) == "function" then
-                    Grid.knockbackTiles(session.grid, ent, foe, 2)
+                    Grid.knockbackTiles(session.grid, ent, foe, tiles)
                 end
                 ent._heavyHit = true
                 local Projectiles = session._deps and session._deps.Projectiles
-                if Projectiles and type(Projectiles.powerHit) == "function" then
-                    Projectiles.powerHit(session, side, opts)
+                if not battle._arCheckNow then
+                    if Projectiles and type(Projectiles.powerHit) == "function" then
+                        Projectiles.powerHit(session, side, opts)
+                    end
+                    if Projectiles and type(Projectiles.groundKick) == "function" then
+                        Projectiles.groundKick(session, side, opts)
+                    end
+                    H.impactKick(session, { powerful = true })
+                else
+                    H.impactKick(session, { powerful = false })
                 end
-                if Projectiles and type(Projectiles.groundKick) == "function" then
-                    Projectiles.groundKick(session, side, opts)
-                end
-                H.impactKick(session, { powerful = true })
                 H.playAnim(ent, "hit")
                 return true
             end
@@ -582,13 +594,21 @@ return function(Cues)
             Projectiles.faint(session, side)
         end
         -- Trainer-owned mons get the red recall laser; wild foes keep the sink.
+        -- A kit Faint strip plays first so the crumple reads, then the laser
+        -- sucks up that pose. No kit → laser shrink only, as before.
         local beamed = false
         if ent.anim ~= "sendout"
             and Projectiles and type(Projectiles.recallBeam) == "function" then
             beamed = Projectiles.recallBeam(session, side, { target = ent }) ~= nil
         end
+        local Sprites = session._deps and session._deps.Sprites
+        local kitFaint = Sprites and type(Sprites.usesKitPose) == "function"
+            and Sprites.usesKitPose(ent, "faint")
         ent._fainting = true
-        if beamed then
+        if beamed and kitFaint then
+            ent._recallAfterFaint = true
+            H.playAnim(ent, "faint")
+        elseif beamed then
             H.playAnim(ent, "recall")
         else
             H.playAnim(ent, "faint")

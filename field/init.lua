@@ -304,10 +304,10 @@ return function(env)
     end
   end
 
-  function FBV.interruptCharge(battle, side)
+  function FBV.interruptCharge(battle, side, tiles)
     local session = Lifecycle.get(battle)
     if session and Cues and type(Cues.interruptCharge) == "function" then
-      return Cues.interruptCharge(session, side, Grid)
+      return Cues.interruptCharge(session, side, Grid, tiles)
     end
   end
 
@@ -362,6 +362,12 @@ return function(env)
   function FBV.isRangedCounter(opts)
     if Cues and type(Cues.isRangedCounter) == "function" then
       return Cues.isRangedCounter(opts, Projectiles)
+    end
+  end
+
+  function FBV.isFireNowShot(opts)
+    if Cues and type(Cues.isFireNowShot) == "function" then
+      return Cues.isFireNowShot(opts, Projectiles)
     end
   end
 
@@ -659,6 +665,9 @@ return function(env)
       pcall(FBV.bind, mod._arPackages)
     end
     pcall(Intercept.install, FBV, mod)
+    if Sprites and type(Sprites.installKitBillboards) == "function" then
+      pcall(Sprites.installKitBillboards, mod)
+    end
     return Hooks.install(FBV, mod)
   end
 

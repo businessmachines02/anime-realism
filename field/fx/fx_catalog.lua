@@ -58,7 +58,7 @@ Catalog.MOVE_FX = {
   THUNDER = { style = "bolt", duration = 0.42 },
   FLAMETHROWER = { style = "stream", glitz = "flame", duration = 0.52 },
   FIRE_BLAST = { style = "blast", glitz = "flame", radius = 26, duration = 0.64 },
-  EMBER = { style = "ember", glitz = "flame", duration = 0.54, arc = 13 },
+  EMBER = { style = "ember", glitz = "flame", duration = 0.58, arc = 11 },
   FIRE_SPIN = { style = "spiral", glitz = "flame", duration = 0.52 },
   HYDRO_PUMP = { style = "stream", glitz = "bubble", duration = 0.46 },
   WATER_GUN = { style = "stream", glitz = "jet", duration = 0.52 },

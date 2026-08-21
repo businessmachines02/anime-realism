@@ -8,8 +8,8 @@
 -- PAR / FRZ / PSN / BRN / SLP / confusion auras are drawn around live field
 -- sprites each frame. Cover plants the mon behind a real pad prop (or a
 -- crouch shade if none is nearby) — never a looping crate glued to the sprite.
--- Fire specials paint teardrop flame tongues (not red blobs); Ember picks a
--- flight pattern each cast. Rock Throw lobs tumbling shards. Gust is a
+-- Fire specials paint teardrop flame tongues (not red blobs). Ember is a
+-- short lob of two or three fireballs. Rock Throw lobs tumbling shards. Gust is a
 -- traveling wind projectile even though Gen1 Flying is physical.
 
 local Coords = require("coords")
@@ -574,6 +574,31 @@ local TRAVEL_STYLES = {
   clones = true,
 }
 
+-- FIRE NOW: a shot you fire across the pad. Not a punch, aura, drain, or cloud.
+local FIRE_NOW_STYLES = {
+  orb = true,
+  beam = true,
+  stream = true,
+  ember = true,
+  bolt = true,
+  surf = true,
+  razor = true,
+  swift = true,
+  gust = true,
+  rock = true,
+  slide = true,
+  blast = true,
+  spiral = true,
+  multi = true,
+  shadow = true,
+}
+
+local FIRE_NOW_BLOCK = {
+  SMOG = true,
+  SMOKESCREEN = true,
+  POISON_GAS = true,
+}
+
 function Projectiles.isTravelFx(opts)
   local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
   local named = MOVE_FX[moveId]
@@ -583,6 +608,12 @@ function Projectiles.isTravelFx(opts)
   return TRAVEL_STYLES[named.style] == true
 end
 
+function Projectiles.moveStyle(opts)
+  local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
+  local named = MOVE_FX[moveId]
+  return named and named.style or nil
+end
+
 --- Gen 1 category may be physical; these still fly (Swift, Gust, …).
 function Projectiles.isProjectileSpecial(opts)
   local moveId = tostring((opts or {}).moveId or ""):upper():gsub("%s+", "_")
@@ -590,6 +621,28 @@ function Projectiles.isProjectileSpecial(opts)
     return true
   end
   return Projectiles.isTravelFx(opts)
+end
+
+--- FIRE NOW: damaging projectile specials only. Contact CHECK / haze / auras stay out.
+function Projectiles.isFireNowShot(opts)
+  opts = opts or {}
+  local moveId = tostring(opts.moveId or ""):upper():gsub("%s+", "_")
+  if moveId == "" or FIRE_NOW_BLOCK[moveId] then
+    return false
+  end
+  if Projectiles.isContactFx(opts) then
+    return false
+  end
+  if (Catalog.PROJECTILE_SPECIAL or {})[moveId] then
+    return true
+  end
+  local named = MOVE_FX[moveId]
+  local style = named and named.style
+  if not style then
+    local typed = TYPE_STYLE[tostring(opts.moveType or ""):upper()]
+    style = typed and typed.style
+  end
+  return FIRE_NOW_STYLES[tostring(style or "")] == true
 end
 
 -- Jaws / punches / slams close the gap even when the Gen1 type split marks
@@ -1791,11 +1844,9 @@ local function drawRockSlide(g, x, y, _ox, _oy, t, age, c, radius)
   end
 end
 
-local EMBER_VARIANTS = { "volley", "hop", "spray", "corkscrew", "pop" }
-
 local function emberFade(t)
-  if t > 0.82 then
-    return 1 - (t - 0.82) / 0.18
+  if t > 0.84 then
+    return 1 - (t - 0.84) / 0.16
   end
   return 1
 end
@@ -1810,182 +1861,70 @@ local function emberAxes(x, y, ox, oy)
   return dx, dy, nx, ny, math.atan2(dy, dx) + math.pi * 0.5
 end
 
-local function drawEmberImpact(g, x, y, t, age, fade)
-  if t <= 0.62 then
+--- Compact fireball: hot core + a tongue licking along flight.
+local function drawEmberBall(g, px, py, heading, scale, alpha, flick)
+  scale = scale or 1
+  alpha = (alpha or 1) * (flick or 1)
+  if alpha <= 0.02 then
     return
   end
-  local burst = (t - 0.62) / 0.38
-  for i = 1, 5 do
-    local a = i * 1.256 + (age or 0) * 4
-    local dist = burst * (4 + i)
-    drawFlameTongue(g,
-      x + math.cos(a) * dist,
-      y + math.sin(a) * dist * 0.5 - burst * 2,
-      a + math.pi * 0.5, 0.42, (0.7 - burst * 0.5) * fade)
-  end
+  g.setColor(1.00, 0.28, 0.04, 0.28 * alpha)
+  g.circle("fill", px, py + 0.6, 4.4 * scale)
+  g.setColor(1.00, 0.46, 0.08, 0.72 * alpha)
+  g.circle("fill", px, py, 2.7 * scale)
+  g.setColor(1.00, 0.78, 0.18, 0.95 * alpha)
+  g.circle("fill", px - 0.25 * scale, py - 0.35 * scale, 1.55 * scale)
+  g.setColor(1.00, 0.96, 0.72, 0.92 * alpha)
+  g.circle("fill", px - 0.45 * scale, py - 0.55 * scale, 0.72 * scale)
+  drawFlameTongue(g, px, py, heading, 0.72 * scale, 0.88 * alpha)
 end
 
---- Ember / volley: staggered bouncing flame tongues caster → foe.
-local function drawEmberVolley(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  local n = 6
-  for i = 1, n do
-    local delay = (i - 1) * 0.07
-    local u = (t - delay) / math.max(0.38, 0.78 - delay * 0.35)
-    if u > 0 and u < 1.14 then
-      local along = math.min(1, u)
-      local side = ((i % 2) * 2 - 1)
-      local bounce = math.sin(along * math.pi) * (5.5 + (i % 3) * 1.4)
-      local weave = math.sin(along * math.pi * 2.1 + i) * 2.2
-      local px = ox + dx * along + nx * (weave * side * 0.55)
-      local py = oy + dy * along + ny * (weave * side * 0.3) - bounce
-      local flick = 0.82 + 0.18 * math.abs(math.sin((age or 0) * 16 + i * 2.2))
-      local a = fade * (u < 1 and 0.95 or (1.14 - u) / 0.14) * flick
-      local rot = heading + math.sin((age or 0) * 10 + i) * 0.35
-          + side * 0.18
-      drawFlameTongue(g, px, py, rot, (0.62 + (i % 3) * 0.12) * flick, a)
-      if along > 0.08 and along < 0.92 then
-        for k = 1, 2 do
-          local back = k * 0.05
-          local sx = ox + dx * math.max(0, along - back)
-          local sy = oy + dy * math.max(0, along - back) - bounce * 0.7
-          g.setColor(1, 0.72, 0.18, (0.45 - k * 0.14) * a)
-          g.circle("fill", sx, sy, 1.1 - k * 0.25)
-        end
-      end
-    end
-  end
-end
-
---- Ember / hop: two or three bigger fireballs that skip toward the foe.
-local function drawEmberHop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  for i = 1, 3 do
-    local delay = (i - 1) * 0.11
-    local u = (t - delay) / 0.72
-    if u > 0 and u < 1.12 then
-      local along = math.min(1, u)
-      local hops = 1 + (i % 2)
-      local bounce = math.abs(math.sin(along * math.pi * hops)) * (7.5 + i * 1.6)
-      local side = ((i % 2) * 2 - 1) * (1.4 + along * 1.2)
-      local px = ox + dx * along + nx * side
-      local py = oy + dy * along + ny * side * 0.25 - bounce
-      local flick = 0.8 + 0.2 * math.abs(math.sin((age or 0) * 18 + i))
-      local a = fade * (u < 1 and 1 or (1.12 - u) / 0.12) * flick
-      drawFlameTongue(g, px, py, heading + math.sin((age or 0) * 8 + i) * 0.4,
-        (0.95 + (i % 3) * 0.12) * flick, a)
-      -- Spark kick at each bounce peak.
-      local peak = math.sin(along * math.pi * hops)
-      if peak > 0.82 then
-        for k = 1, 3 do
-          local aa = (age or 0) * 12 + i * 2 + k
-          drawFlameTongue(g,
-            px + math.cos(aa) * 2.2,
-            py + 1.2,
-            aa, 0.32, a * 0.7)
-        end
-      end
-      g.setColor(1, 0.78, 0.22, 0.4 * a)
-      g.circle("fill", px, py + 1.4, 1.4)
-    end
-  end
-end
-
---- Ember / spray: a widening fan of small tongues.
-local function drawEmberSpray(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  for i = 1, 9 do
-    local delay = (i - 1) * 0.035
-    local u = (t - delay) / 0.62
-    if u > 0 and u < 1.1 then
-      local along = math.min(1, u)
-      local lane = (i - 5) / 4
-      local spread = along * 7.2 * lane
-      local loft = -along * 2.4 - math.sin(along * math.pi) * 2.1
-      local px = ox + dx * along + nx * spread
-      local py = oy + dy * along + ny * spread * 0.3 + loft
-      local flick = 0.78 + 0.22 * math.abs(math.sin((age or 0) * 20 + i))
-      local a = fade * (u < 1 and 0.9 or (1.1 - u) / 0.1) * flick
-      drawFlameTongue(g, px, py,
-        heading + lane * 0.55 + math.sin((age or 0) * 11 + i) * 0.25,
-        (0.48 + (i % 3) * 0.1) * flick, a)
-    end
-  end
-end
-
---- Ember / corkscrew: tongues spiral around the flight line.
-local function drawEmberCorkscrew(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  for i = 1, 5 do
-    local delay = (i - 1) * 0.06
-    local u = (t - delay) / 0.70
-    if u > 0 and u < 1.12 then
-      local along = math.min(1, u)
-      local ang = along * math.pi * 4.2 + i * 1.256 + (age or 0) * 6
-      local rad = 2.2 + along * 3.4
-      local px = ox + dx * along + nx * math.cos(ang) * rad
-      local py = oy + dy * along + ny * math.sin(ang) * rad * 0.55
-          - math.sin(along * math.pi) * 2.4
-      local flick = 0.8 + 0.2 * math.abs(math.sin((age or 0) * 15 + i))
-      local a = fade * (u < 1 and 0.95 or (1.12 - u) / 0.12) * flick
-      drawFlameTongue(g, px, py, ang + math.pi * 0.5, 0.7 * flick, a)
-      if along > 0.08 then
-        g.setColor(1, 0.7, 0.16, 0.35 * a)
-        g.circle("fill",
-          ox + dx * math.max(0, along - 0.06),
-          oy + dy * math.max(0, along - 0.06),
-          1.0)
-      end
-    end
-  end
-end
-
---- Ember / pop: a few tongues that burst into sparks mid-flight.
-local function drawEmberPop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  for i = 1, 4 do
-    local delay = (i - 1) * 0.09
-    local u = (t - delay) / 0.68
-    if u > 0 and u < 1.16 then
-      local along = math.min(1, u)
-      local side = ((i % 2) * 2 - 1)
-      local px = ox + dx * along + nx * side * (1.6 + along)
-      local py = oy + dy * along - math.sin(along * math.pi) * (4.5 + i)
-      local flick = 0.82 + 0.18 * math.abs(math.sin((age or 0) * 14 + i))
-      local a = fade * (u < 1 and 0.95 or (1.16 - u) / 0.16) * flick
-      if along < 0.52 then
-        drawFlameTongue(g, px, py, heading + side * 0.2, 0.88 * flick, a)
-      else
-        local pop = (along - 0.52) / 0.48
-        for k = 1, 4 do
-          local aa = i * 1.7 + k * 1.4 + (age or 0) * 5
-          local dist = pop * (3.5 + k)
-          drawFlameTongue(g,
-            px + math.cos(aa) * dist,
-            py + math.sin(aa) * dist * 0.55 - pop * 2.4,
-            aa + math.pi * 0.5, 0.4 + (1 - pop) * 0.2,
-            a * (0.85 - pop * 0.4))
-        end
-      end
-    end
-  end
-end
-
-local function drawEmberCast(g, x, y, ox, oy, t, age, c, variant)
+--- Ember: two or three small fireballs lobbed caster → foe, then a pop.
+local function drawEmberCast(g, x, y, ox, oy, t, age, c, seed)
   if type(x) ~= "number" or type(y) ~= "number"
       or type(ox) ~= "number" or type(oy) ~= "number" then
     return
   end
   local dx, dy, nx, ny, heading = emberAxes(x, y, ox, oy)
   local fade = emberFade(t)
-  variant = variant or "volley"
-  if variant == "hop" then
-    drawEmberHop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  elseif variant == "spray" then
-    drawEmberSpray(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  elseif variant == "corkscrew" then
-    drawEmberCorkscrew(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  elseif variant == "pop" then
-    drawEmberPop(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
-  else
-    drawEmberVolley(g, x, y, ox, oy, t, age, fade, dx, dy, nx, ny, heading)
+  seed = tonumber(seed) or 0.37
+  local n = 3
+  for i = 1, n do
+    local delay = (i - 1) * 0.10
+    local u = (t - delay) / math.max(0.42, 0.88 - delay)
+    if u > 0 and u < 1.08 then
+      local along = math.min(1, u)
+      local side = ((i % 2) * 2 - 1) * (0.55 + (i - 1) * 0.35)
+      local bounce = math.sin(along * math.pi) * (3.2 + (i % 3) * 0.9)
+      local px = ox + dx * along + nx * side * (0.35 + along * 0.4)
+      local py = oy + dy * along - bounce
+      local flick = 0.88 + 0.12 * math.abs(math.sin((age or 0) * 14 + i * 2.1 + seed * 8))
+      local a = fade * (u < 1 and 1 or (1.08 - u) / 0.08)
+      local scale = (i == 1 and 1.05 or (0.72 + i * 0.06)) * flick
+      drawEmberBall(g, px, py, heading + side * 0.12, scale, a, flick)
+      if along > 0.12 and along < 0.88 then
+        g.setColor(1.00, 0.62, 0.12, 0.42 * a)
+        g.circle("fill",
+          ox + dx * math.max(0, along - 0.07) + nx * side * 0.2,
+          oy + dy * math.max(0, along - 0.07) - bounce * 0.65,
+          1.05)
+      end
+    end
   end
-  drawEmberImpact(g, x, y, t, age, fade)
+  if t > 0.70 then
+    local burst = (t - 0.70) / 0.30
+    local pop = 1 - burst * 0.55
+    for i = 1, 5 do
+      local a = i * 1.256 + seed * 4
+      local dist = burst * (5.5 + (i % 3))
+      drawFlameTongue(g,
+        x + math.cos(a) * dist * 0.85,
+        y + math.sin(a) * dist * 0.42 - burst * 1.6,
+        a + math.pi * 0.5, 0.38 * pop, fade * (0.75 - burst * 0.5))
+    end
+    g.setColor(1.00, 0.82, 0.28, 0.35 * fade * (1 - burst))
+    g.circle("fill", x, y - 1, 3.2 + burst * 4)
+  end
 end
 
 --- Flamethrower: dense jet of flame tongues along the stream.
@@ -3766,7 +3705,7 @@ Projectiles.registerStyle("swift", function(g, p, x, y, ox, oy, t, c, glitz)
     drawSwiftStars(g, x, y, ox, oy, t, p.age, c)
 end)
 Projectiles.registerStyle("ember", function(g, p, x, y, ox, oy, t, c, glitz)
-    drawEmberCast(g, x, y, ox, oy, t, p.age, c, p.variant)
+    drawEmberCast(g, x, y, ox, oy, t, p.age, c, p.seed)
 end)
 Projectiles.registerStyle("rock", function(g, p, x, y, ox, oy, t, c, glitz)
     drawRockThrow(g, x, y, ox, oy, t, p.age, c)
@@ -4119,6 +4058,87 @@ local function drawPebble(g, cx, cy, w, h, rgb, alpha)
     g.ellipse("fill", cx + w * 0.08, cy - h * 0.28, w * 0.18, h * 0.12)
   else
     g.circle("fill", cx + 0.6, cy - 1.2, 0.8)
+  end
+end
+
+local function drawLanePuddle(g, x, y, rx, ry, rgb, alpha)
+  g.setColor(rgb[1], rgb[2], rgb[3], alpha)
+  if g.ellipse then
+    g.ellipse("fill", x, y + 5, rx, ry)
+  else
+    g.circle("fill", x, y + 5, rx * 0.55)
+  end
+end
+
+--- Looping pad residue: smoke, fire, water, grit. t is wall time, not a one-shot.
+local function drawLaneHaze(g, x, y, entry, phase, fade)
+  local kind = tostring(entry and entry.kind or "poison")
+  local dens = math.max(1, tonumber(entry and entry.density) or 1)
+  fade = math.max(0, math.min(1, fade or 1))
+  if fade <= 0.01 then
+    return
+  end
+  local bob = math.sin(phase * 2.2) * 0.6
+  if kind == "fire" then
+    drawLanePuddle(g, x, y, 8.2, 2.6, { 1.00, 0.28, 0.06 }, 0.28 * fade)
+    local n = dens >= 2 and 4 or 3
+    for i = 1, n do
+      local flicker = 0.78 + 0.22 * math.abs(math.sin(phase * 11 + i * 1.7))
+      local sway = math.sin(phase * 7.4 + i * 2.1) * 1.4
+      drawFlameTongue(g,
+        x + (i - (n + 1) * 0.5) * 3.2 + sway * 0.35,
+        y + 3.4 + bob * 0.2,
+        sway * 0.08, 0.72 + i * 0.08, 0.88 * fade * flicker)
+    end
+    return
+  end
+  if kind == "water" then
+    local ring = 0.88 + 0.12 * math.abs(math.sin(phase * 2.8))
+    drawLanePuddle(g, x, y, 9.0 * ring, 2.9, { 0.18, 0.52, 0.92 }, 0.40 * fade)
+    if g.ellipse then
+      g.setColor(0.72, 0.90, 1.00, 0.38 * fade)
+      g.ellipse("line", x, y + 5, 7.4 * ring, 2.2)
+    end
+    for i = 1, 3 + dens do
+      local drift = (phase * 0.55 + i * 0.28) % 1
+      local px = x + math.sin(phase * 1.8 + i * 2.1) * 4.6
+      local py = y + 4 - drift * 8
+      local a = 0.62 * (1 - drift) * fade
+      g.setColor(0.55, 0.84, 1.00, a)
+      g.circle("fill", px, py, 1.15 + (i % 2) * 0.35)
+      g.setColor(1, 1, 1, a * 0.5)
+      g.circle("fill", px - 0.3, py - 0.3, 0.4)
+    end
+    return
+  end
+  if kind == "grit" then
+    drawLanePuddle(g, x, y, 8.0, 2.4, { 0.62, 0.46, 0.24 }, 0.32 * fade)
+    for i = 1, 5 + dens do
+      local a = phase * 1.6 + i * 1.15
+      local px = x + math.cos(a) * (3.2 + (i % 3))
+      local py = y + 4.2 + math.sin(a * 1.3) * 1.4 + bob * 0.15
+      g.setColor(0.72, 0.54, 0.30, 0.72 * fade)
+      if g.rectangle then
+        g.rectangle("fill", px - 0.9, py - 0.7, 1.8, 1.4)
+      else
+        g.circle("fill", px, py, 1.1)
+      end
+    end
+    return
+  end
+  -- poison / smoke
+  drawLanePuddle(g, x, y, 8.6, 2.7, { 0.52, 0.22, 0.64 }, 0.34 * fade)
+  local n = 4 + dens
+  for i = 1, n do
+    local a = phase * 1.35 + i * 1.4
+    local rise = (phase * 0.32 + i * 0.19) % 1
+    local px = x + math.sin(a) * (2.8 + i * 0.55)
+    local py = y + 3.2 - rise * 9 + bob
+    local r = 2.1 + (i % 3) * 0.7 + math.sin(a * 2) * 0.4
+    g.setColor(0.66, 0.30, 0.78, 0.42 * (1 - rise) * fade)
+    g.circle("fill", px, py, r)
+    g.setColor(0.86, 0.62, 0.95, 0.22 * (1 - rise) * fade)
+    g.circle("fill", px - 0.6, py - 0.8, r * 0.45)
   end
 end
 
@@ -4499,6 +4519,46 @@ function Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   end
 end
 
+function Projectiles.drawHazeLanes(session, camX, camY, mapFn)
+  if not (session and session.live and session.grid and love and love.graphics) then
+    return
+  end
+  local haze = session.grid.haze
+  if type(haze) ~= "table" then
+    return
+  end
+  local g = love.graphics
+  local t = (session._now ~= nil) and session._now or now()
+  camX, camY = camX or 0, camY or 0
+  for _, entry in pairs(haze) do
+    local u, v = entry and entry.u, entry and entry.v
+    if u ~= nil and v ~= nil then
+      local wx, wy = Coords.padCenterPx(session.grid, u, v)
+      if wx then
+        local x = wx - camX
+        local y = wy - camY
+        if type(mapFn) == "function" then
+          x, y = mapFn(x, y)
+        end
+        local fade = 1
+        local holdUntil = tonumber(entry.holdUntil)
+        if holdUntil then
+          local remain = holdUntil - t
+          if remain < 0.7 then
+            fade = math.max(0, remain / 0.7)
+          end
+        end
+        local phase = t - (tonumber(entry.born) or 0)
+        drawLaneHaze(g, x, y, entry, phase, fade)
+      end
+    end
+  end
+  g.setColor(1, 1, 1, 1)
+  if g.setLineWidth then
+    g.setLineWidth(1)
+  end
+end
+
 local function rrRange(a, b)
   local random = (love and love.math and love.math.random) or math.random
   if b ~= nil then
@@ -4598,6 +4658,7 @@ function Projectiles.drawUi(session, battle)
       return Coords.worldViewToUi(wx, wy, ren)
     end
   end
+  Projectiles.drawHazeLanes(session, camX, camY, mapFn)
   Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
   Projectiles.draw(session, camX, camY, mapFn)
 end
@@ -4801,16 +4862,15 @@ function Projectiles.move(session, side, opts)
 
   if fx.style == "ember" then
     local roll = (love and love.math and love.math.random) or math.random
-    local variant = EMBER_VARIANTS[roll(#EMBER_VARIANTS)]
     return spawn(session, {
       kind = "effect",
       style = "ember",
       glitz = fx.glitz or "flame",
       sx = sx, sy = sy, ex = ex, ey = ey,
-      duration = fx.duration or 0.54,
-      arc = fx.arc or 13,
+      duration = fx.duration or 0.58,
+      arc = fx.arc or 11,
       color = fx.color,
-      variant = variant,
+      seed = roll(),
       onDone = opts.onDone,
     })
   end
@@ -5359,6 +5419,33 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
     arc = 0,
     color = color,
   })
+end
+
+-- Occupancy lives on grid.haze. Paint loops in drawHazeLanes each frame.
+function Projectiles.hazeLinger(_session, _placed)
+end
+
+function Projectiles.hazeCut(session, cells)
+  if not (session and type(cells) == "table") then
+    return
+  end
+  local color = { 0.92, 0.88, 0.72 }
+  for i = 1, #cells do
+    local cell = cells[i]
+    if cell and cell.u ~= nil and session.grid then
+      local x, y = Coords.padCenterPx(session.grid, cell.u, cell.v)
+      if x then
+        spawn(session, {
+          kind = "effect",
+          style = "clash_trail",
+          sx = x, sy = y, ex = x, ey = y,
+          duration = 0.28,
+          arc = 0,
+          color = color,
+        })
+      end
+    end
+  end
 end
 
 function Projectiles.powerHit(session, side, opts)

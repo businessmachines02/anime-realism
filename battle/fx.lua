@@ -289,6 +289,10 @@ local function isRangedSpecial(battle, def, mv, id)
         moveType = (def and def.type) or (mv and mv.type),
         category = (def and def.category) or (mv and mv.category),
     }
+    local fireNow = hostCall("isFireNowShot", battle, opts)
+    if fireNow ~= nil then
+        return fireNow == true
+    end
     local flagged = hostCall("isRangedCounter", battle, opts)
     if flagged ~= nil then
         return flagged == true
@@ -301,6 +305,34 @@ local function isRangedSpecial(battle, def, mv, id)
         return false
     end
     return true
+end
+
+local CLOUD_NOW_MOVES = {
+    SMOG = true,
+    SMOKESCREEN = true,
+    POISON_GAS = true,
+}
+
+local function isMeleeContact(battle, def, mv, id)
+    if id and CLOUD_NOW_MOVES[id] then
+        return false
+    end
+    if isRangedSpecial(battle, def, mv, id) then
+        return false
+    end
+    local opts = {
+        moveId = id,
+        moveType = (def and def.type) or (mv and mv.type),
+        category = (def and def.category) or (mv and mv.category),
+    }
+    local flagged = hostCall("isMeleeAttack", battle, opts)
+    if flagged ~= nil then
+        return flagged == true
+    end
+    if id and id:find("PUNCH", 1, true) then
+        return true
+    end
+    return not defIsSpecial(def, mv)
 end
 
 -- Damaging ranged specials this battler can still fire (PP left).
@@ -323,6 +355,7 @@ function Fx.listFireNowMoves(battle, battler)
             local power = tonumber(def and def.power) or tonumber(mv.power) or 0
             local category = tostring((def and def.category) or mv.category or ""):lower()
             if id and power > 0 and category ~= "status"
+                and not CLOUD_NOW_MOVES[id]
                 and isRangedSpecial(battle, def, mv, id) then
                 out[#out + 1] = {
                     label = tostring((def and def.name) or mv.name or id),
@@ -333,6 +366,79 @@ function Fx.listFireNowMoves(battle, battler)
                     name = (def and def.name) or mv.name or id,
                     moveType = (def and def.type) or mv.type,
                     category = "special",
+                }
+            end
+        end
+    end
+    return out
+end
+
+-- Damaging contact moves that can check a close-gap charge.
+function Fx.listCheckNowMoves(battle, battler)
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
+    local out = {}
+    local moves = battlerMoveList(battler)
+    if type(moves) ~= "table" then
+        return out
+    end
+    for i = 1, #moves do
+        local mv = moves[i]
+        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+            local def, id = lookupMoveDef(battle, mv)
+            if not id then
+                id = canonMoveId(mv.id or mv.name)
+            end
+            local power = tonumber(def and def.power) or tonumber(mv.power) or 0
+            local category = tostring((def and def.category) or mv.category or ""):lower()
+            if id and power > 0 and category ~= "status"
+                and isMeleeContact(battle, def, mv, id) then
+                out[#out + 1] = {
+                    label = tostring((def and def.name) or mv.name or id),
+                    hint = "Check the charge",
+                    moveInst = mv,
+                    moveDef = def,
+                    moveId = id,
+                    name = (def and def.name) or mv.name or id,
+                    moveType = (def and def.type) or mv.type,
+                    category = "physical",
+                    checkNow = true,
+                }
+            end
+        end
+    end
+    return out
+end
+
+-- Clouds that can seed a lane during a charge (Smog / Smokescreen / Poison Gas).
+function Fx.listCloudNowMoves(battle, battler)
+    if type(battler) ~= "table" then
+        battler = battle and battle.player
+    end
+    local out = {}
+    local moves = battlerMoveList(battler)
+    if type(moves) ~= "table" then
+        return out
+    end
+    for i = 1, #moves do
+        local mv = moves[i]
+        if mv and not mv.struggle and (mv.pp == nil or mv.pp > 0) then
+            local def, id = lookupMoveDef(battle, mv)
+            if not id then
+                id = canonMoveId(mv.id or mv.name)
+            end
+            if id and CLOUD_NOW_MOVES[id] then
+                out[#out + 1] = {
+                    label = tostring((def and def.name) or mv.name or id),
+                    hint = "Lay a haze",
+                    moveInst = mv,
+                    moveDef = def,
+                    moveId = id,
+                    name = (def and def.name) or mv.name or id,
+                    moveType = (def and def.type) or mv.type,
+                    category = tostring((def and def.category) or mv.category or "status"):lower(),
+                    hazeNow = true,
                 }
             end
         end

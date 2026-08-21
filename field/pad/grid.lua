@@ -100,6 +100,7 @@ function Grid.build(arenaEdits, plan)
   local grid = {
     blocked = {},
     occ = {},
+    haze = {},
     props = {},
     home = {},
     walkable = arenaEdits and arenaEdits.walkable or nil,
@@ -218,7 +219,14 @@ function Grid.isFree(grid, u, v, ignoreId, ent)
     return false
   end
   local occupant = grid.occ[padKey(u, v)]
-  return occupant == nil or occupant == ignoreId
+  if occupant ~= nil and occupant ~= ignoreId then
+    return false
+  end
+  -- Haze is a soft block for idle roam. Chargers may step in to stall or cut.
+  if Grid.isHaze(grid, u, v) and not (ent and ent._pendingCloseStrike) then
+    return false
+  end
+  return true
 end
 
 function Grid.occupy(grid, id, u, v)
@@ -252,6 +260,7 @@ end
 function Grid.clear(grid)
   if grid then
     grid.occ = {}
+    Grid.clearHaze(grid)
   end
 end
 
@@ -496,6 +505,22 @@ function Grid.closeGap(grid, ent, foeEnt)
   if math.max(math.abs(foeU - u), math.abs(foeV - v)) <= 1 then
     return false
   end
+  ent._returnU, ent._returnV = nil, nil
+  local here = Grid.hazeAt(grid, u, v)
+  if here and (tonumber(here.density) or 1) >= 2 then
+    return false
+  end
+  local hazeU, hazeV, haze = Grid.firstHazeOnPath(grid, ent, foeEnt)
+  if hazeU ~= nil then
+    local density = (haze and tonumber(haze.density)) or 1
+    local cutting = ent._cuttingHaze == true
+    if cutting and density < 2 then
+      Grid.clearHazeAt(grid, hazeU, hazeV)
+    else
+      -- Stall on the cloud. Thick smog stays until a club / beam cuts it.
+      return Grid.setPad(grid, ent, hazeU, hazeV)
+    end
+  end
   local bestU, bestV, bestScore
   for deltaU = -1, 1 do
     for deltaV = -1, 1 do
@@ -518,15 +543,51 @@ function Grid.closeGap(grid, ent, foeEnt)
   -- Occupancy jumps to the approach cell; the sprite walks. Do not stash a
   -- returnHome snap to the opening — withdraw recovers to the FIRE ring,
   -- then idle roam uses the trainer lane.
-  ent._returnU, ent._returnV = nil, nil
   return Grid.setPad(grid, ent, bestU, bestV)
 end
 
---- Step back to the two-tile FIRE ring after a punch. Home stays the opening
---- lane: the next CALL decides whether they close again.
-function Grid.withdrawFromFoe(grid, ent, foeEnt)
+--- Step toward the opening trainer pad. Used when a lane hazard is down:
+--- do not camp the FIRE ring, go home.
+function Grid.withdrawTowardTrainer(grid, ent, side)
+  if not (grid and ent) then
+    return false
+  end
+  local homeU, homeV = Grid.homePad(grid, side)
+  if homeU == nil then
+    homeU, homeV = ent.homePadU, ent.homePadV
+  end
+  if homeU == nil then
+    return false
+  end
+  local u, v = padOf(grid, ent)
+  if u == homeU and v == homeV then
+    return false
+  end
+  if Grid.isFree(grid, homeU, homeV, ent.id, ent) then
+    return Grid.setPad(grid, ent, homeU, homeV)
+  end
+  local deltaU, deltaV = homeU - u, homeV - v
+  local stepU, stepV = unitStep(deltaU, deltaV)
+  if Grid.step(grid, ent, stepU, stepV) then
+    return true
+  end
+  if deltaU ~= 0 and Grid.step(grid, ent, deltaU > 0 and 1 or -1, 0) then
+    return true
+  end
+  if deltaV ~= 0 and Grid.step(grid, ent, 0, deltaV > 0 and 1 or -1) then
+    return true
+  end
+  return false
+end
+
+--- Step back after a punch. With a lane down, recover to the trainer pad
+--- instead of the two-tile FIRE ring.
+function Grid.withdrawFromFoe(grid, ent, foeEnt, side)
   if not (grid and ent and foeEnt) then
     return false
+  end
+  if Grid.hasHaze(grid) then
+    return Grid.withdrawTowardTrainer(grid, ent, side)
   end
   local u, v = padOf(grid, ent)
   local foeU, foeV = padOf(grid, foeEnt)
@@ -631,6 +692,281 @@ function Grid.pathObstructed(grid, fromEnt, toEnt)
     end
   end
   return false
+end
+
+local function dropHazeFx(entry)
+  if entry and entry.fx then
+    entry.fx._removed = true
+    entry.fx = nil
+  end
+end
+
+local function stampHazeLife(entry, u, v, opts)
+  if not entry then
+    return
+  end
+  entry.u, entry.v = u, v
+  local t = tonumber(opts and opts.now)
+  local hold = tonumber(opts and opts.hold)
+  if t then
+    entry.born = entry.born or t
+    if hold and hold > 0 then
+      local holdUntil = t + hold
+      if not entry.holdUntil or holdUntil > entry.holdUntil then
+        entry.holdUntil = holdUntil
+      end
+    end
+  elseif entry.born == nil then
+    entry.born = 0
+  end
+end
+
+function Grid.ensureHaze(grid)
+  if grid and type(grid.haze) ~= "table" then
+    grid.haze = {}
+  end
+  return grid and grid.haze
+end
+
+function Grid.isHaze(grid, u, v)
+  local haze = grid and grid.haze
+  return haze ~= nil and haze[padKey(u, v)] ~= nil
+end
+
+function Grid.nearHaze(grid, u, v)
+  if Grid.isHaze(grid, u, v) then
+    return true
+  end
+  for i = 1, #CARDINALS do
+    local dir = CARDINALS[i]
+    if Grid.isHaze(grid, u + dir[1], v + dir[2]) then
+      return true
+    end
+  end
+  return false
+end
+
+function Grid.hazeAt(grid, u, v)
+  local haze = grid and grid.haze
+  if not haze then
+    return nil
+  end
+  return haze[padKey(u, v)]
+end
+
+--- Pad cells strictly between two battlers on the fight axis.
+function Grid.axisCellsBetween(grid, fromEnt, toEnt)
+  local out = {}
+  if not (grid and fromEnt and toEnt) then
+    return out
+  end
+  local u0, v0 = padOf(grid, fromEnt)
+  local u1, v1 = padOf(grid, toEnt)
+  local deltaU, deltaV = u1 - u0, v1 - v0
+  local steps = math.max(math.abs(deltaU), math.abs(deltaV))
+  if steps <= 1 then
+    return out
+  end
+  local seen = {}
+  for i = 1, steps - 1 do
+    local t = i / steps
+    local u = math.floor(u0 + deltaU * t + 0.5)
+    local v = math.floor(v0 + deltaV * t + 0.5)
+    local key = padKey(u, v)
+    if not seen[key] then
+      seen[key] = true
+      out[#out + 1] = { u = u, v = v }
+    end
+  end
+  return out
+end
+
+function Grid.firstHazeOnPath(grid, fromEnt, toEnt)
+  local cells = Grid.axisCellsBetween(grid, fromEnt, toEnt)
+  for i = 1, #cells do
+    local cell = cells[i]
+    local entry = Grid.hazeAt(grid, cell.u, cell.v)
+    if entry then
+      return cell.u, cell.v, entry
+    end
+  end
+  return nil, nil, nil
+end
+
+function Grid.hasHaze(grid)
+  local haze = grid and grid.haze
+  if type(haze) ~= "table" then
+    return false
+  end
+  for _ in pairs(haze) do
+    return true
+  end
+  return false
+end
+
+--- Lay 1–2 cloud cells on the fight axis. Never uses grid.blocked (that jumps).
+function Grid.seedHaze(grid, fromEnt, toEnt, opts)
+  opts = opts or {}
+  local haze = Grid.ensureHaze(grid)
+  if not haze then
+    return {}
+  end
+  local density = math.max(1, tonumber(opts.density) or 1)
+  local want = math.max(1, tonumber(opts.cells) or 1)
+  local moveId = opts.moveId
+  local side = opts.side
+  local placed = {}
+  local cells = Grid.axisCellsBetween(grid, fromEnt, toEnt)
+  local function tryPlace(u, v)
+    if not Grid.inPad(grid, u, v) or Grid.isBlocked(grid, u, v) then
+      return false
+    end
+    if not Grid.canTraverse(grid, u, v, fromEnt) then
+      return false
+    end
+    local occ = grid.occ and grid.occ[padKey(u, v)]
+    if occ ~= nil then
+      return false
+    end
+    local key = padKey(u, v)
+    local prev = haze[key]
+    if prev then
+      prev.density = math.max(prev.density or 1, density)
+      prev.moveId = moveId or prev.moveId
+      prev.side = side or prev.side
+      prev.kind = opts.kind or prev.kind or "poison"
+      stampHazeLife(prev, u, v, opts)
+      placed[#placed + 1] = { u = u, v = v, entry = prev }
+      return true
+    end
+    local entry = {
+      density = density,
+      moveId = moveId,
+      side = side,
+      kind = opts.kind or "poison",
+    }
+    stampHazeLife(entry, u, v, opts)
+    haze[key] = entry
+    placed[#placed + 1] = { u = u, v = v, entry = entry }
+    return true
+  end
+  local mid = math.ceil(#cells / 2)
+  for i = 0, #cells - 1 do
+    if #placed >= want then
+      break
+    end
+    local idx = mid + (i % 2 == 0 and math.floor(i / 2) or -math.ceil(i / 2))
+    local cell = cells[idx]
+    if cell then
+      tryPlace(cell.u, cell.v)
+    end
+  end
+  -- One-cell gap: a thick cloud still occupies that tile at higher density.
+  if #placed == 0 and #cells == 0 then
+    local u0, v0 = padOf(grid, fromEnt)
+    local u1, v1 = padOf(grid, toEnt)
+    local stepU, stepV = unitStep(u1 - u0, v1 - v0)
+    tryPlace(u0 + stepU, v0 + stepV)
+  end
+  return placed
+end
+
+function Grid.clearHazeAt(grid, u, v)
+  local haze = grid and grid.haze
+  if not haze then
+    return false
+  end
+  local key = padKey(u, v)
+  local entry = haze[key]
+  if not entry then
+    return false
+  end
+  dropHazeFx(entry)
+  haze[key] = nil
+  return true
+end
+
+function Grid.reduceHazeAt(grid, u, v, amount)
+  local entry = Grid.hazeAt(grid, u, v)
+  if not entry then
+    return false
+  end
+  amount = amount or 1
+  entry.density = (tonumber(entry.density) or 1) - amount
+  if entry.density <= 0 then
+    return Grid.clearHazeAt(grid, u, v)
+  end
+  return true
+end
+
+--- Drop cells whose hold has elapsed. Untimed cells stay until cut.
+function Grid.tickHaze(grid, now)
+  now = tonumber(now)
+  local haze = grid and grid.haze
+  if not now or type(haze) ~= "table" then
+    return {}
+  end
+  local dropped = {}
+  for key, entry in pairs(haze) do
+    local holdUntil = entry and tonumber(entry.holdUntil)
+    if holdUntil and now >= holdUntil then
+      dropped[#dropped + 1] = {
+        u = entry.u, v = entry.v, entry = entry, key = key,
+      }
+      dropHazeFx(entry)
+      haze[key] = nil
+    end
+  end
+  return dropped
+end
+
+function Grid.clearHaze(grid)
+  local haze = grid and grid.haze
+  if type(haze) ~= "table" then
+    if grid then
+      grid.haze = {}
+    end
+    return false
+  end
+  local any = false
+  for key, entry in pairs(haze) do
+    dropHazeFx(entry)
+    haze[key] = nil
+    any = true
+  end
+  return any
+end
+
+--- Contact / a strong beam clears every cloud cell on the fight axis.
+function Grid.cutHazeOnAxis(grid, fromEnt, toEnt, opts)
+  opts = opts or {}
+  local residue = opts.residue == true
+  local cells = Grid.axisCellsBetween(grid, fromEnt, toEnt)
+  -- Also cut a cloud the cutter or the charger is standing in.
+  if fromEnt and fromEnt.padU ~= nil then
+    cells[#cells + 1] = { u = fromEnt.padU, v = fromEnt.padV }
+  end
+  if toEnt and toEnt.padU ~= nil then
+    cells[#cells + 1] = { u = toEnt.padU, v = toEnt.padV }
+  end
+  local cut = {}
+  local seen = {}
+  for i = 1, #cells do
+    local cell = cells[i]
+    local key = padKey(cell.u, cell.v)
+    if not seen[key] then
+      seen[key] = true
+      if Grid.isHaze(grid, cell.u, cell.v) then
+        if residue then
+          Grid.reduceHazeAt(grid, cell.u, cell.v, 1)
+        else
+          Grid.clearHazeAt(grid, cell.u, cell.v)
+        end
+        cut[#cut + 1] = cell
+      end
+    end
+  end
+  return cut
 end
 
 --- Unit pad step away from `fromEnt` (knockback / push direction).
@@ -886,6 +1222,9 @@ function Grid.idleWander(grid, ent, side, foeEnt)
   local u, v = padOf(grid, ent)
   local distFromHome = math.abs(u - homeU) + math.abs(v - homeV)
   local rand = randomFn()
+  local hazeOut = Grid.hasHaze(grid)
+      or Grid.isHaze(grid, u, v)
+      or Grid.nearHaze(grid, u, v)
 
   local function tryStepTowardHome()
     local dirs = {}
@@ -896,6 +1235,14 @@ function Grid.idleWander(grid, ent, side, foeEnt)
       if Grid.step(grid, ent, dirs[i][1], dirs[i][2]) then
         return true
       end
+    end
+    return false
+  end
+
+  -- A live lane: walk home. Do not roam across the cloud.
+  if hazeOut then
+    if distFromHome > 0 then
+      return tryStepTowardHome() or Grid.withdrawTowardTrainer(grid, ent, side)
     end
     return false
   end
