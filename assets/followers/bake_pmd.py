@@ -52,7 +52,10 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     6: 29,    # Charizard - make a bit bigger
     9: 29,    # Blastoise - make a bit bigger
     19: 20,   # Rattata
+    25: 20,   # Pikachu - make smaller, like Growlithe
+    26: 25,   # Raichu - make the size of Ninetales
     37: 20,   # Vulpix
+    38: 27,   # Ninetales
     58: 20,   # Growlithe
     133: 20,  # Eevee
     134: 20,  # Vaporeon (1.0m would otherwise sit in the 24px band)
