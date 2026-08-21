@@ -1,6 +1,7 @@
 .DS_Store
 *.zip
 *.png
+!assets/followers/follower_*.png
 *.jpg
 *.jpeg
 tag.sh

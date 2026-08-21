@@ -665,6 +665,9 @@ return function(env)
       pcall(FBV.bind, mod._arPackages)
     end
     pcall(Intercept.install, FBV, mod)
+    if Sprites and type(Sprites.installKitBillboards) == "function" then
+      pcall(Sprites.installKitBillboards, mod)
+    end
     return Hooks.install(FBV, mod)
   end
 

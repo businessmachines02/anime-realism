@@ -7070,6 +7070,197 @@ function tests.resolve_sheet_prefers_wilds_export()
   eq(sheet.providerId, "pokemmo", "provider id kept")
 end
 
+function tests.kit_candidate_paths_prefer_dex_then_name()
+  local mod = { path = "/mods/anime_realism" }
+  local game = { data = { pokemon = { CHARMANDER = { dex = 4 } } } }
+  local paths = Sprites.kitCandidatePaths(mod, game, "CHARMANDER")
+  eq(paths[1], "/mods/anime_realism/assets/followers/follower_004.png",
+    "dex kit")
+  eq(paths[2], "/mods/anime_realism/assets/followers/follower_004_normal.png",
+    "optional normal alias")
+  eq(paths[3], "/mods/anime_realism/assets/followers/CHARMANDER.png",
+    "species name kit")
+  eq(paths[4], "/mods/anime_realism/assets/followers/CHARMANDER_normal.png",
+    "species normal kit")
+end
+
+function tests.kit_block_uses_combat_rows()
+  eq(Sprites.kitBlockForAnim("idle", 6), 0, "idle is walk")
+  eq(Sprites.kitBlockForAnim("dodge", 6), 1, "dodge block")
+  eq(Sprites.kitBlockForAnim("brace", 6), 2, "brace block")
+  eq(Sprites.kitBlockForAnim("attack", 6), 3, "physical block")
+  eq(Sprites.kitBlockForAnim("jump", 6), 3, "jump uses physical")
+  eq(Sprites.kitBlockForAnim("counter", 6), 3, "counter uses physical")
+  eq(Sprites.kitBlockForAnim("cast", 6), 4, "special block")
+  eq(Sprites.kitBlockForAnim("hit", 6), 5, "hit block")
+  eq(Sprites.kitBlockForAnim("selfhit", 6), 5, "recoil uses hit")
+  eq(Sprites.kitBlockForAnim("dodge", 1), 0, "missing dodge stays on walk")
+  eq(Sprites.kitBlockForAnim("cast", 3), 0, "missing special stays on walk")
+end
+
+function tests.kit_pose_requires_combat_block()
+  local kit = { _kitSheet = true, _kitBlocks = 6 }
+  truthy(Sprites.usesKitPose(kit, "dodge"), "full kit plays dodge")
+  truthy(Sprites.usesKitPose(kit, "attack"), "full kit plays physical")
+  truthy(not Sprites.usesKitPose(kit, "idle"), "walk is not a combat pose")
+  truthy(not Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 1 }, "dodge"),
+    "walk-only kit keeps old hop")
+  truthy(not Sprites.usesKitPose({ _kitBlocks = 6 }, "dodge"),
+    "non-kit sheet keeps old hop")
+end
+
+function tests.kit_dodge_keeps_slide_without_squash()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 6
+  player:play("dodge")
+  player._dodgeStyle = "duck"
+  Cast.tick(session, 1 / 60)
+  eq(player.drawScaleX, nil, "kit dodge does not squash x")
+  eq(player.drawScaleY, nil, "kit dodge does not squash y")
+  eq(player.drawAlpha, 1, "kit dodge stays opaque")
+  eq(player.drawAngle, 0, "kit dodge does not lean")
+  player:play("attack")
+  Cast.tick(session, 0.16)
+  eq(player.drawScale, 1, "kit punch does not scale up")
+end
+
+function tests.kit_col_walk_and_combat()
+  eq(Sprites.kitColForAnim({ _walkT = 0 }, "idle", false), 0, "idle column")
+  eq(Sprites.kitColForAnim({ _idleT = 0.6 }, "idle", false), 2, "idle other stand")
+  eq(Sprites.kitColForAnim({ _walkT = 0.2 }, "idle", true), 1, "walk step column")
+  eq(Sprites.kitColForAnim({ animT = 0 }, "attack", false), 0, "physical start")
+  eq(Sprites.kitColForAnim({ animT = 0.18 }, "attack", false), 2, "physical recover")
+  eq(Sprites.kitColForAnim({ animT = 0.4 }, "cast", false), 3, "special settle")
+end
+
+function tests.kit_cell_origin_uses_block_facing_and_col()
+  local u, v = Sprites.kitCellOrigin({
+    _kitBlock = 3, _kitCol = 1, facing = "left",
+  }, "left")
+  eq(u, 32, "col 1 is 32px x")
+  eq(v, 416, "physical left is row 13")
+  u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "down")
+  eq(u, 0, "walk front origin x")
+  eq(v, 0, "walk front origin y")
+end
+
+function tests.kit_billboards_stay_outermost_after_wilds_wrap()
+  local lastVerts
+  local SB = {
+    mesh = function(def, frame)
+      return { via = "orig", frame = frame }
+    end,
+  }
+  local Voxel3D = {
+    pushQuad = function() end,
+    newMesh = function(verts)
+      lastVerts = verts
+      return { verts = verts, via = "kit" }
+    end,
+  }
+  local mod = {
+    find = function(_, id)
+      if id == "DRAMATIC_SHAPE" then
+        return {
+          exports = {
+            lib = {
+              require = function(name)
+                if name == "SpriteBillboards" then
+                  return SB
+                end
+                if name == "Voxel3D" then
+                  return Voxel3D
+                end
+              end,
+            },
+          },
+        }
+      end
+    end,
+  }
+  truthy(Sprites.installKitBillboards(mod), "first wrap installs")
+  eq(SB.mesh, SB._arKitWrapper, "wrapper is live mesh()")
+  -- Wilds variable-geometry wrap steals mesh() for every 32px def.
+  local inner = SB.mesh
+  SB.mesh = function(def, frame)
+    if type(def) == "table" and def.frameWidth == 32 then
+      return { via = "wilds", frame = frame }
+    end
+    return inner(def, frame)
+  end
+  truthy(Sprites.installKitBillboards(mod), "rewrap after steal")
+  eq(SB.mesh, SB._arKitWrapper, "kit wrap is outermost again")
+  local fakeImg = {
+    getDimensions = function()
+      return 128, 768
+    end,
+  }
+  local kitMesh = SB.mesh({
+    kit = true,
+    image = "kit.png",
+    kitImage = fakeImg,
+    kitU = 32,
+    kitV = 64,
+    frameWidth = 32,
+    frameHeight = 32,
+  }, 2)
+  eq(kitMesh.via, "kit", "kit def does not use Wilds column-0 card")
+  truthy(lastVerts and lastVerts[1], "kit card has verts")
+  local u0 = lastVerts[1][4]
+  local expect = (32 + 0.02) / 128
+  assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
+  local vanilla = SB.mesh({ image = "npc.png", frames = 6 }, 3)
+  eq(vanilla.via, "orig", "vanilla GSC strip still uses original mesh")
+end
+
+function tests.kit_sheet_beats_wilds_when_present()
+  local kit = root .. "/../assets/followers/follower_025.png"
+  local f = io.open(kit, "rb")
+  if not f then
+    return
+  end
+  f:close()
+  local mod = {
+    path = root .. "/..",
+    options = {
+      get = function()
+        return "HGSS"
+      end,
+    },
+    find = function(_, id)
+      if id == "overworld_wild_spawns" then
+        return {
+          exports = {
+            resolveFollowerSprite = function(opts)
+              return {
+                image = "/wilds/" .. tostring(opts.species) .. ".png",
+                frames = 6,
+                providerId = "pokemmo",
+              }
+            end,
+          },
+        }
+      end
+    end,
+  }
+  local game = { data = { pokemon = { PIKACHU = { dex = 25 } } } }
+  local sheet = Sprites.resolveSheet(mod, game, "PIKACHU")
+  truthy(sheet and sheet.kit, "baked kit wins over Wilds")
+  truthy(sheet.image:find("follower_025%.png$"), "dex kit path")
+  eq(sheet.frameWidth, 32, "32px cells")
+  eq(sheet.trueColor, true, "true-color kit")
+end
+
 function tests.projectile_style_registry_is_public()
   eq(type(Projectiles.registerStyle), "function", "styles register by name")
 end

@@ -64,5 +64,20 @@ zip -q -r "$OUT" \
   -x "*.DS_Store" \
   -x "**/.DS_Store"
 
+if [[ -f "$ROOT/assets/follower-kit.md" ]]; then
+  zip -q "$OUT" assets/follower-kit.md
+fi
+if [[ -f "$ROOT/assets/followers/bake_pmd.py" ]]; then
+  zip -q "$OUT" assets/followers/bake_pmd.py
+fi
+if [[ -d "$ROOT/assets/followers/pmd" ]]; then
+  zip -q -r "$OUT" assets/followers/pmd \
+    -x "**/.DS_Store"
+fi
+# Baked 4×24 kits only — never pack PMD source folders (0001/…).
+while IFS= read -r kit; do
+  zip -q "$OUT" "$kit"
+done < <(find assets/followers -maxdepth 1 -name 'follower_*.png' | sort)
+
 echo "Built $ROOT/$OUT"
 unzip -l "$OUT"
