@@ -51,6 +51,9 @@ EXTRA_POSES = [
     ("freeze", ("Sit", "Idle"), True, "idle"),
     ("confuse", ("Rotate", "Tumble", "LostBalance"), True, "idle"),
     ("float", ("Float", "Hop", "Idle"), True, "dodge"),
+    # Last and optional: skip when the pack has no FlapAround/Hover so
+    # Charizard does not grow a dummy 17th block.
+    ("flap", ("FlapAround", "Hover"), True, None),
 ]
 
 PREFER_NAMED = {"idle", "faint"}
@@ -277,6 +280,9 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
                 block, dirs, cols, idxs, fw, fh = baked
                 print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
             else:
+                if fallback is None:
+                    print(f"  {pose}: skip")
+                    continue
                 src = by_pose.get(fallback) or by_pose.get("walk")
                 if not src:
                     break

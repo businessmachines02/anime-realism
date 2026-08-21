@@ -7112,6 +7112,8 @@ function tests.kit_block_uses_combat_rows()
   eq(Sprites.kitBlockForAnim("freeze", 16), 13, "freeze is its own row")
   eq(Sprites.kitBlockForAnim("confuse", 16), 14, "confuse is its own row")
   eq(Sprites.kitBlockForAnim("float", 16), 15, "float is its own row")
+  eq(Sprites.kitBlockForAnim("flap", 16), 0, "flap is walk without the extra row")
+  eq(Sprites.kitBlockForAnim("flap", 17), 16, "flap is the 17th block")
   eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "lift" }), 15,
     "flying dodge uses float")
   eq(Sprites.kitBlockForAnim("dodge", 8, { _dodgeStyle = "lift" }), 1,
@@ -7136,6 +7138,34 @@ function tests.kit_idle_override_follows_status()
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "PAR" } },
   }, false), nil, "para stays idle")
+end
+
+function tests.kit_move_override_flaps_when_flying()
+  local pidgeot = {
+    _kitSheet = true,
+    _kitBlocks = 17,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "NORMAL", "FLYING" } },
+  }
+  eq(Sprites.kitMoveOverride(pidgeot, true), "flap",
+    "Pidgeot flaps when the burst says so")
+  pidgeot._flapWalk = false
+  eq(Sprites.kitMoveOverride(pidgeot, true), nil,
+    "same burst can stay on Walk")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _kitBlocks = 17,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "FIRE" } },
+  }, true), nil, "ground types do not flap")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _kitBlocks = 16,
+    _flapWalk = true,
+    _battleBattler = { curTypes = { "FLYING" } },
+  }, true), nil, "no FlapAround row stays on Walk")
+  eq(Sprites.kitMoveOverride(pidgeot, false), nil, "standing clears the flap burst")
+  eq(pidgeot._flapWalk, nil, "next walk can roll flap again")
 end
 
 function tests.kit_pose_requires_combat_block()
@@ -7187,6 +7217,12 @@ function tests.kit_dodge_keeps_slide_without_squash()
   player._dodgeStyle = "phase"
   Cast.tick(session, 1 / 60)
   truthy(player.drawAlpha < 1, "ghost kit dodge goes paler")
+  player:play("dodge")
+  player._dodgeStyle = "hop"
+  Cast.tick(session, 0.21)
+  eq(player.drawScaleX, nil, "kit hop does not squash x")
+  eq(player.drawScaleY, nil, "kit hop does not squash y")
+  truthy(player.py < player.basePy - 4, "kit hop leaves the ground")
 end
 
 function tests.kit_col_walk_and_combat()

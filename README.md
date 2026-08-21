@@ -95,7 +95,7 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
   the same feel (not extra toggles).
 - **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
 - **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
-- **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
+- **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; pad battlers use this mod’s baked 32px combat kits (walk, idle, dodge, brace, physical, special, hit, faint, plus charge / jump / counter / miss / status / flap when present); switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
 
 ## Mechanics
 
@@ -171,16 +171,23 @@ remain on their normal presentation path.
   from movement. The map itself is never edited.
 - Each Pokémon owns a tracked pad cell; pixel movement is derived from that cell.
 - Idle Pokémon use a gentle vertical overworld-style bob without horizontal sway.
-- Physical moves step toward the target, special/status moves cast in place,
-  and hits recoil or faint without changing battle calculations.
+- Physical moves step toward the target, special/status moves cast in place
+  (Charge hold, then Shoot when the bolt leaves), and hits recoil or faint
+  without changing battle calculations.
+- Pad battlers (player lead and foe) prefer this mod’s 4-facing combat kits
+  in `assets/followers/follower_XXX.png`. Overworld followers behind the
+  player still come from Wilds / PokéPC. Layout: [`assets/follower-kit.md`](assets/follower-kit.md).
+  Bake PMD Collab packs with `assets/followers/bake_pmd.py` — never load
+  `AnimData.xml` or `*-Anim.png` in a fight (those strips wedge the 3D map).
+  See [`assets/followers/pmd/README.md`](assets/followers/pmd/README.md).
 - Switches use recall/send-out scale animations. Capture throws and special-move
   projectiles are overworld entities, so they stay aligned with the active
   world camera.
 - `PokePCFollowers_VoxelMerge`, `FOLLOWERS_EX`, or **Wilds of Kanto** supplies
-  overworld sheets. **FIELD SPRITES** picks the set: `AUTO` matches Wilds'
-  Sprite Style when that mod is loaded, otherwise GSC followers. `GSC` /
-  `HGSS` / `POKEDEX` force a pack. A visible placeholder is used if no art is
-  found.
+  overworld sheets when a kit is missing. **FIELD SPRITES** picks that fallback:
+  `AUTO` matches Wilds' Sprite Style when that mod is loaded, otherwise GSC
+  followers. `GSC` / `HGSS` / `POKEDEX` force a pack. A visible placeholder is
+  used if no art is found.
 - Hybrid voxel mode is preserved: the voxelized map remains active while the
   Pokémon and generic FIELD effects use animated 2D overworld sprites. FIELD
   suppresses duplicate staged arenas. On battle exit the pre-battle voxel
@@ -195,7 +202,7 @@ remain on their normal presentation path.
 | Option | Default | Description |
 |--------|---------|-------------|
 | **BATTLE STAGE** | FIELD | `FIELD` keeps wild/trainer singles on the live map; `AUTO` leaves other presentation mods alone |
-| **FIELD SPRITES** | AUTO | Overworld battler art. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
+| **FIELD SPRITES** | AUTO | Fallback overworld pack when this mod has no kit. `AUTO` follows Wilds of Kanto Sprite Style when that mod is on, else GSC followers. `GSC` / `HGSS` / `POKEDEX` pick a pack |
 | **MOVE HUD** | CLASSIC | FIELD fight menu. `CLASSIC` is a compact full-width 2×2 with U/R/L/D labels (D-pad + **A**). `DIAMOND` is the compass with instant-cast |
 | **REACTIVE DEF** | On | Focus reactions (Commit/Dodge/Cover/Brace/Entrench); COUNTER → Again!; trainer foes may mirror |
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
@@ -225,6 +232,22 @@ derived mod — if you credit **Anime Realism** / **businessmachines02** and
 link to [this repository](https://github.com/businessmachines02/anime-realism).
 Keep `LICENSE`, and note your changes.
 
+Pad battler art baked from [PMD Collab](https://sprites.pmdcollab.org/) is **not** CC BY. See [Art credits](#art-credits).
+
+## Art credits
+
+FIELD pad kits (`assets/followers/follower_XXX.png`) are baked from the
+[PMD Sprite Repository](https://sprites.pmdcollab.org/) /
+[SpriteCollab](https://github.com/PMDCollab/SpriteCollab). Community frames are
+[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (credit the
+artists, non-commercial). Official Explorers-style frames belong to
+**Spike Chunsoft**.
+
+Each unpacked pack keeps its upstream `credits.txt`. A species-by-species
+example (Charmeleon) is in
+[`assets/followers/pmd/README.md`](assets/followers/pmd/README.md). The pad
+never loads those source strips in a fight.
+
 ## Files
 
 - `manifest.json` — mod metadata
@@ -233,7 +256,10 @@ Keep `LICENSE`, and note your changes.
 - `hud/` — hide numbers + EXP/effort rewards
 - `battle/` — battle systems (`rules/` math + pipeline, `chrome/` HUD paint)
 - `field/` — overworld FIELD combat (tile-grid movement tracker)
-- `LICENSE` — CC BY 4.0 (attribution required)
+- `assets/followers/` — baked pad kits (`follower_XXX.png`) plus PMD unpacks
+- `assets/followers/bake_pmd.py` — flatten a PMD pack into a kit
+- `assets/follower-kit.md` — 32px 4-facing sheet layout
+- `LICENSE` — CC BY 4.0 (attribution required; does not cover PMD Collab art)
 - `DIFFERENCES.md` — what this mod changes from vanilla
 - `build.sh` — local zip for testing
 - `.github/workflows/release.yml` — Gen1Recomp launcher release pipeline

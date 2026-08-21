@@ -3,7 +3,8 @@
 -- Pad battlers prefer this mod's 4-column combat kits
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
 -- rows play dodge / brace / physical / special / hit, then idle, then faint,
--- then charge / jump / counter / miss / sleep / freeze / confuse / float. FIELD
+-- then charge / jump / counter / miss / sleep / freeze / confuse / float,
+-- then optional flap. FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
 -- fallback. Overworld followers behind the player stay on those packs.
 -- Never load PMD `AnimData.xml` or `*-Anim.png` here — those strips wedge
@@ -198,6 +199,7 @@ Sprites.KIT_BLOCK = {
   faint = 7,
   sleep = 12, freeze = 13, confuse = 14,
   float = 15,
+  flap = 16,
 }
 
 -- Missing extra rows reuse an earlier combat strip instead of walk.
@@ -324,16 +326,49 @@ function Sprites.kitIdleOverride(ent, moving)
   return nil
 end
 
+-- Flying types with a FlapAround/Hover row: sometimes travel on that strip
+-- instead of Walk. Rolled once per movement burst.
+Sprites.FLAP_CHANCE = 0.45
+
+function Sprites.kitMoveOverride(ent, moving)
+  if not (ent and moving) then
+    if ent then
+      ent._flapWalk = nil
+    end
+    return nil
+  end
+  local battler = ent._battleBattler
+  local status = battler and battler.mon and battler.mon.status
+  if type(status) == "string" and status:upper() == "SLP" then
+    return nil
+  end
+  if not Sprites.hasType(ent, "FLYING") then
+    return nil
+  end
+  if not Sprites.usesKitPose(ent, "flap") then
+    return nil
+  end
+  if ent._flapWalk == nil then
+    local rand = (love and love.math and love.math.random) or math.random
+    ent._flapWalk = rand() < (Sprites.FLAP_CHANCE or 0.45)
+  end
+  if ent._flapWalk then
+    return "flap"
+  end
+  return nil
+end
+
 function Sprites.kitColForAnim(ent, anim, moving)
   anim = anim or "idle"
   if anim == "idle" and moving then
-    anim = "walk"
+    anim = Sprites.kitMoveOverride(ent, true) or "walk"
   end
   local blocks = (ent and (ent._kitBlocks or 1)) or 1
   local block = Sprites.kitBlockForAnim(anim, blocks, ent)
-  if anim == "walk" or (anim == "idle" and block == 0) then
+  if anim == "walk" or anim == "flap" or (anim == "idle" and block == 0) then
     if moving then
-      return math.floor((ent and ent._walkT or 0) * 8) % 4
+      local rate = (anim == "flap") and 10 or 8
+      return math.floor((ent and ent._walkT or 0) * rate) % 4
     end
     -- Walk cols 0 and 2 are idle; cycle them so standing is not frozen.
     return (math.floor((ent and ent._idleT or 0) / 0.5) % 2) * 2
@@ -422,7 +457,9 @@ local function syncKitPose(ent, moving)
     anim = "idle"
   end
   if anim == "idle" and moving then
-    anim = "walk"
+    anim = Sprites.kitMoveOverride(ent, true) or "walk"
+  elseif not moving then
+    ent._flapWalk = nil
   end
   if anim == "idle" then
     anim = Sprites.kitIdleOverride(ent, moving) or anim
@@ -871,14 +908,41 @@ local function tickDodge(self, dt, towardX, towardY)
   self.drawAlpha = 1
 
   if Sprites.usesKitPose(self, "dodge") then
-    -- Sheet carries the pose; keep a small sidestep so it still leaves the line.
+    -- Sheet is PMD Hop (or Float for Flying). Style only flavors motion / FX
+    -- so a hop actually hops instead of sliding the same drawing.
     ox = lx * pulse * 8
     oy = ly * pulse * 3
     if style == "phase" then
-      -- Ghost: dodge art, paler so they read as phasing through.
       self.drawAlpha = 0.38 + 0.40 * (0.5 + 0.5 * math.sin(t * math.pi * 7))
     elseif style == "lift" then
       oy = oy - pulse * 8
+    elseif style == "hop" then
+      ox = lx * pulse * 5
+      oy = -pulse * 14
+    elseif style == "duck" then
+      oy = pulse * 6
+    elseif style == "burrow" then
+      oy = pulse * 6
+      if not self._dodgeFxSpawned then
+        spawnDodgeBits(self, 6, { 0.42, 0.32, 0.16 }, "crumb")
+        self._dodgeFxSpawned = true
+      end
+    elseif style == "blur" then
+      ox = lx * pulse * 14
+      self.drawAlpha = 0.82
+    elseif style == "splash" then
+      ox = lx * pulse * 12
+      if not self._dodgeFxSpawned then
+        spawnDodgeBits(self, 7, { 0.45, 0.78, 1.0 }, "ripple")
+        spawnDodgeBits(self, 5, { 0.85, 0.95, 1.0 }, "spark")
+        self._dodgeFxSpawned = true
+      end
+    elseif style == "static" then
+      ox = lx * pulse * 10 + math.sin((self.animT or 0) * 70) * 1.4
+      if not self._dodgeFxSpawned then
+        spawnDodgeBits(self, 8, { 1.0, 0.92, 0.25 }, "spark")
+        self._dodgeFxSpawned = true
+      end
     end
     tickDodgeBits(self, dt)
     if self.animT >= dur then

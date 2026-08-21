@@ -65,6 +65,7 @@ Then copy the `*-Anim.png` files from that same `sprite/0005/` folder.
 | Freeze | Sit, Idle |
 | Confuse | Rotate, Tumble, LostBalance |
 | Float | Float, Hop, Idle |
+| Flap (Flying move) | FlapAround, Hover |
 
 Eight-direction sheets use south / east / north / west (skip diagonals). Frame timing comes from `AnimData.xml` (60 ticks per second).
 
