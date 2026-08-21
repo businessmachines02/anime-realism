@@ -95,7 +95,7 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
   the same feel (not extra toggles).
 - **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
 - **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
-- **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; pad battlers use this mod’s baked 32px combat kits (walk, idle, dodge, brace, physical, special, hit, faint, plus charge / jump / counter / miss / status / flap when present); switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
+- **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; pad battlers use this mod’s baked 32px combat kits (walk, idle, dodge, brace, physical, special, hit, faint, plus charge / jump / counter / miss / status / tumble / flap when present); switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
 
 ## Mechanics
 

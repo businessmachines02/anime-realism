@@ -111,8 +111,9 @@ EXTRA_POSES = [
     ("freeze", ("Sit", "Idle"), True, "idle"),
     ("confuse", ("Rotate", "Tumble", "LostBalance"), True, "idle"),
     ("float", ("Float", "Hop", "Idle"), True, "dodge"),
+    ("tumble", ("TumbleBack", "Tumble", "Pain", "Hurt"), True, "hit"),
     # Last and optional: skip when the pack has no FlapAround/Hover so
-    # Charizard does not grow a dummy 17th block.
+    # Charizard does not grow a dummy flap block.
     ("flap", ("FlapAround", "Hover"), True, None),
 ]
 

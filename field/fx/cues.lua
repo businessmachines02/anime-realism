@@ -100,6 +100,15 @@ function H.playAnim(ent, name)
     end
 end
 
+--- Heavy knock uses TumbleBack; a flinch stays on Hit.
+function H.playHitAnim(ent)
+    if ent and ent._heavyHit then
+        H.playAnim(ent, "tumble")
+        return
+    end
+    H.playAnim(ent, "hit")
+end
+
 --- FIRE NOW overlapping pose: hold Charge while the shot is on the pad.
 --- Non-kit battlers keep the old short `cast` pulse.
 function H.playChargeHold(session, ent)

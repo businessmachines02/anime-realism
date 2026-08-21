@@ -1342,7 +1342,7 @@ function tests.fire_now_hit_stops_the_charge()
   }), "FIRE hit cue")
   truthy(not enemy._pendingCloseStrike, "connecting FIRE cancels the charge")
   truthy(enemy._heavyHit, "charger is knocked back")
-  eq(enemy.lastAnim, "hit", "charger takes the bolt")
+  eq(enemy.lastAnim, "tumble", "charger takes the bolt")
   truthy(enemy.padU ~= startU or enemy.padV ~= startV,
     "charger leaves the charge cell")
 end
@@ -1377,7 +1377,7 @@ function tests.check_now_hit_stops_the_charge_one_tile()
     category = "physical", moveId = "TACKLE",
   }), "CHECK hit cue")
   truthy(not enemy._pendingCloseStrike, "connecting CHECK cancels the charge")
-  eq(enemy.lastAnim, "hit", "charger takes the tackle")
+  eq(enemy.lastAnim, "tumble", "charger takes the tackle")
   local moved = math.max(math.abs((enemy.padU or 0) - startU),
     math.abs((enemy.padV or 0) - eHome.v))
   eq(moved, 1, "CHECK knocks the charger one tile, not two")
@@ -1630,7 +1630,7 @@ function tests.foe_fire_hit_stops_your_charge()
   }), "foe FIRE hit cue")
   truthy(not player._pendingCloseStrike, "connecting foe FIRE cancels your charge")
   truthy(player._heavyHit, "you are knocked back")
-  eq(player.lastAnim, "hit", "you take the bolt")
+  eq(player.lastAnim, "tumble", "you take the bolt")
   truthy(player.padU ~= startU or player.padV ~= startV,
     "you leave the charge cell")
 end
@@ -2612,7 +2612,7 @@ function tests.powerful_moves_push_and_impact()
     moveType = "FIRE",
     category = "special",
   }), "powerful hit cue")
-  eq(enemy.lastAnim, "hit", "heavy hit animation")
+  eq(enemy.lastAnim, "tumble", "heavy hit animation")
   truthy(enemy._heavyHit, "heavy hit flag set for sprite knockback")
   eq(enemy.padU, startU + 1, "powerful hit pushes one tile before rock")
   eq(#(session.projectiles or {}), 3, "power hit + wall impact + ground kick")
@@ -2660,7 +2660,7 @@ function tests.powerful_moves_push_and_impact()
     category = "physical",
     crit = true,
   }), "critical hit cue")
-  eq(enemy.lastAnim, "hit", "crit still flinches")
+  eq(enemy.lastAnim, "tumble", "crit still flinches")
   truthy(enemy._heavyHit, "crit knocks like a heavy hit")
   local critStyles = {}
   for i = 1, #(session.projectiles or {}) do
@@ -2715,7 +2715,7 @@ function tests.counter_clash_punches_in()
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
     category = "physical", clash = true, push = true,
   }), "clash hit cue")
-  eq(enemy.lastAnim, "hit", "foe takes the clash")
+  eq(enemy.lastAnim, "tumble", "foe takes the clash")
   truthy(enemy._heavyHit, "clash knock is heavy")
 end
 
@@ -2760,7 +2760,7 @@ function tests.finishing_blow_plays_the_clash()
     category = "physical", moveId = "TACKLE", finishing = true,
   }), "finishing hit cue")
   eq(player.lastAnim, "counter", "attacker plays the counter pose")
-  eq(enemy.lastAnim, "hit", "foe takes the KO")
+  eq(enemy.lastAnim, "tumble", "foe takes the KO")
   truthy(session._clashPunch, "camera punch-in is armed")
   truthy((session._clashSlowT or 0) >= 0.7, "slow-mo holds the beat")
   truthy(enemy._heavyHit, "KO knock is heavy")
@@ -3125,7 +3125,7 @@ function tests.close_gap_powerful_hit_pushes_two()
   eq(player.lastAnim, "attack", "punch lands in melee")
   eq(enemy.padU, 8, "powerful close-in hit pushes two tiles")
   truthy(enemy._heavyHit, "heavy hit flag set")
-  eq(enemy.lastAnim, "hit", "foe plays the hit")
+  eq(enemy.lastAnim, "tumble", "foe plays the hit")
 end
 
 function tests.bite_closes_gap_when_typed_special()
@@ -7112,8 +7112,11 @@ function tests.kit_block_uses_combat_rows()
   eq(Sprites.kitBlockForAnim("freeze", 16), 13, "freeze is its own row")
   eq(Sprites.kitBlockForAnim("confuse", 16), 14, "confuse is its own row")
   eq(Sprites.kitBlockForAnim("float", 16), 15, "float is its own row")
+  eq(Sprites.kitBlockForAnim("tumble", 16), 5, "tumble uses hit until the extra row")
+  eq(Sprites.kitBlockForAnim("tumble", 17), 16, "tumble is the 17th block")
   eq(Sprites.kitBlockForAnim("flap", 16), 0, "flap is walk without the extra row")
-  eq(Sprites.kitBlockForAnim("flap", 17), 16, "flap is the 17th block")
+  eq(Sprites.kitBlockForAnim("flap", 17), 0, "flap is walk when only tumble is present")
+  eq(Sprites.kitBlockForAnim("flap", 18), 17, "flap is the 18th block")
   eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "lift" }), 15,
     "flying dodge uses float")
   eq(Sprites.kitBlockForAnim("dodge", 8, { _dodgeStyle = "lift" }), 1,
@@ -7143,7 +7146,7 @@ end
 function tests.kit_move_override_flaps_when_flying()
   local pidgeot = {
     _kitSheet = true,
-    _kitBlocks = 17,
+    _kitBlocks = 18,
     _flapWalk = true,
     _battleBattler = { curTypes = { "NORMAL", "FLYING" } },
   }
@@ -7154,7 +7157,7 @@ function tests.kit_move_override_flaps_when_flying()
     "same burst can stay on Walk")
   eq(Sprites.kitMoveOverride({
     _kitSheet = true,
-    _kitBlocks = 17,
+    _kitBlocks = 18,
     _flapWalk = true,
     _battleBattler = { curTypes = { "FIRE" } },
   }, true), nil, "ground types do not flap")
@@ -7181,6 +7184,8 @@ function tests.kit_pose_requires_combat_block()
     "short kit jump still uses physical")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "charge"),
     "tall kit plays charge")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 17 }, "tumble"),
+    "tumble row plays when present")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "sleep"),
     "tall kit plays sleep")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 8 }, "faint"),

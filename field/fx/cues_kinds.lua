@@ -413,7 +413,7 @@ return function(Cues)
                 else
                     H.impactKick(session, { powerful = false })
                 end
-                H.playAnim(ent, "hit")
+                H.playHitAnim(ent)
                 return true
             end
         end
@@ -460,7 +460,7 @@ return function(Cues)
             if Projectiles and type(Projectiles.groundKick) == "function" then
                 Projectiles.groundKick(session, side, opts)
             end
-            H.playAnim(ent, "hit")
+            H.playHitAnim(ent)
             return true
         end
         if Projectiles and type(Projectiles.lightHit) == "function" then

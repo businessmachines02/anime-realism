@@ -4,7 +4,7 @@
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
 -- rows play dodge / brace / physical / special / hit, then idle, then faint,
 -- then charge / jump / counter / miss / sleep / freeze / confuse / float,
--- then optional flap. FIELD
+-- then tumble, then optional flap. FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
 -- fallback. Overworld followers behind the player stay on those packs.
 -- Never load PMD `AnimData.xml` or `*-Anim.png` here — those strips wedge
@@ -199,7 +199,8 @@ Sprites.KIT_BLOCK = {
   faint = 7,
   sleep = 12, freeze = 13, confuse = 14,
   float = 15,
-  flap = 16,
+  tumble = 16, tumbleback = 16,
+  flap = 17,
 }
 
 -- Missing extra rows reuse an earlier combat strip instead of walk.
@@ -208,6 +209,7 @@ Sprites.KIT_FALLBACK = {
   charge = 4,
   sleep = 6, freeze = 6, confuse = 6,
   float = 1,
+  tumble = 5, tumbleback = 5,
 }
 
 -- Kit faint: four collapse frames, then hold the crumpled pose.
@@ -216,7 +218,7 @@ Sprites.KIT_FAINT_HOLD = 0.28
 
 local KIT_ANIM_DUR = {
   attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
-  cast = 0.42, brace = 0.40, selfhit = 0.46,
+  cast = 0.42, brace = 0.40, selfhit = 0.46, tumble = 0.58,
   faint = Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD,
 }
 
@@ -1979,6 +1981,36 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       if self.animT >= (heavy and 0.52 or 0.42) then
         self.anim = "idle"
         self.animT = 0
+        self._heavyHit = nil
+      end
+    elseif anim == "tumble" then
+      -- Heavy knock: farther slip and a longer recover than a flinch.
+      self.animT = (self.animT or 0) + dt
+      local dur = 0.58
+      local t = math.min(1, self.animT / dur)
+      local kit = Sprites.usesKitPose(self, "tumble")
+      local knock = math.min(1, self.animT / 0.28)
+      local tx = self.basePx - (towardX or self.basePx)
+      local ty = self.basePy - (towardY or self.basePy)
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+      else
+        tx, ty = 0, 1
+      end
+      local reach = kit and 16 or 20
+      local lift = kit and 7 or 11
+      ox = ox + tx * knock * reach
+      oy = oy + ty * knock * lift - math.sin(t * math.pi) * (kit and 5 or 8)
+      if not kit then
+        local flash = (math.floor(self.animT * 18) % 2 == 0) and 1 or -1
+        ox = ox + flash * 5
+        self.drawAngle = math.sin(t * math.pi) * 0.18
+      end
+      if self.animT >= dur then
+        self.anim = "idle"
+        self.animT = 0
+        self.drawAngle = 0
         self._heavyHit = nil
       end
     elseif anim == "selfhit" then

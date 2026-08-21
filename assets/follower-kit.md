@@ -99,14 +99,18 @@ Standing still while afflicted. Sleep is a downed breathe, freeze is a held sit,
 
 The Pokémon **got hurt**. Damage landed. This is not a choice. Recoil, flash of pain, knock off balance, then recover.
 
-Face does not have to stay heroic; a grimace or closed eyes is fine. Heavy hits knock them back in code — draw the body taking the blow, not a dodge (they failed to dodge) and not a brace (the guard broke). Confusion and recoil can use this same “bonk” read.
+Face does not have to stay heroic; a grimace or closed eyes is fine. A flinch stays on this row. Confusion and recoil can use this same “bonk” read.
+
+### TumbleBack
+
+The Pokémon **goes flying**. Powerful hits, crits, clashes, and FIRE NOW knocks. Farther slip than Hit, longer recover. This is the one that leaves their feet.
 
 ## Canvas
 
 | | |
 |---|---|
 | Cell | 32×32 |
-| Full kit | **4 columns × 64 rows = 128×2048** |
+| Full kit | **4 columns × 68 rows = 128×2176** (plus optional flap → 128×2304) |
 | Origin | top-left; row 1 is the top |
 
 Walk-only is **128×128**. Add more height in chunks of 128 pixels (four rows) for each extra pose. Width never changes.
@@ -152,7 +156,8 @@ Every block uses four frames, left to right.
 | 1664–1791 | 53–56 | Freeze | 4 | Frozen hold. |
 | 1792–1919 | 57–60 | Confuse | 4 | Dizzy wobble. |
 | 1920–2047 | 61–64 | Float | 4 | Flying dodge (Ghost dodge still uses Dodge, paler). |
-| 2048–2175 | 65–68 | Flap | 4 | Optional. FlapAround / Hover while moving (Flying types). |
+| 2048–2175 | 65–68 | TumbleBack | 4 | Heavy knock / crit. |
+| 2176–2303 | 69–72 | Flap | 4 | Optional. FlapAround / Hover while moving (Flying types). |
 
 ## Incremental sizes (32px cells)
 
@@ -176,11 +181,12 @@ Ship a short sheet; extra blocks are optional. Preview greys out poses that are 
 | + freeze | 128×1792 |
 | + confuse | 128×1920 |
 | + float | **128×2048** |
-| + flap | **128×2176** (optional; FlapAround / Hover only) |
+| + tumble | **128×2176** |
+| + flap | **128×2304** (optional; FlapAround / Hover only) |
 
 ## In-game
 
-`field/fx/sprites.lua` loads a four-column grid from this mod’s follower PNG. Walking uses the top block. Standing uses the Idle block when that block exists; otherwise it uses Walk rest frames. Faint uses the last core block when present, instead of shrinking the walk sprite. Trainer faint plays that crumple, then the recall laser; wild faint holds the last frame and hides. Charge holds while a FIRE NOW shot is on the pad; Shoot plays when it leaves. Jump, counter, and miss use their own rows when present, else Physical. Sleep / freeze / confuse replace standing Idle while afflicted. Flying dodges use Float; Ghost dodges use Dodge paler. Round bodies and the hop cycle bounce the PMD Hop strip instead of sliding it. Flying types with a FlapAround (or Hover) row sometimes travel on that strip instead of Walk. If the sheet is taller than walk, dodge, brace, physical, special, and hit play from later blocks when those rows exist. A missing block keeps using the walk frames (with the usual hop and squash), or an earlier combat strip for the extra poses.
+`field/fx/sprites.lua` loads a four-column grid from this mod’s follower PNG. Walking uses the top block. Standing uses the Idle block when that block exists; otherwise it uses Walk rest frames. Faint uses the last core block when present, instead of shrinking the walk sprite. Trainer faint plays that crumple, then the recall laser; wild faint holds the last frame and hides. Charge holds while a FIRE NOW shot is on the pad; Shoot plays when it leaves. Jump, counter, and miss use their own rows when present, else Physical. Powerful hits, crits, and clashes play TumbleBack; a flinch stays on Hit. Sleep / freeze / confuse replace standing Idle while afflicted. Flying dodges use Float; Ghost dodges use Dodge paler. Round bodies and the hop cycle bounce the PMD Hop strip instead of sliding it. Flying types with a FlapAround (or Hover) row sometimes travel on that strip instead of Walk. If the sheet is taller than walk, dodge, brace, physical, special, and hit play from later blocks when those rows exist. A missing block keeps using the walk frames (with the usual hop and squash), or an earlier combat strip for the extra poses.
 
 The game does not flip the right-facing row. It does not load `followers/005/dodge.png` when this grid is in use.
 
