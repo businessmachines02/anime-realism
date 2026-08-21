@@ -1188,10 +1188,14 @@ return function(mod)
             if battle and battle._arFireNow then
                 battle._arFireNowHit = hit and true or false
                 if not hit then
-                    -- Missed FIRE is a slow shot the charger runs through,
-                    -- not a slip-past / dodge hop.
-                    battle._arFireCarryThrough = true
-                    battle._arAccuracyMissSide = nil
+                    if battle._arCheckNow then
+                        battle._arAccuracyMissSide = nil
+                    else
+                        -- Missed FIRE is a slow shot the charger runs through,
+                        -- not a slip-past / dodge hop.
+                        battle._arFireCarryThrough = true
+                        battle._arAccuracyMissSide = nil
+                    end
                 end
             end
             if not (battle and battle._arFireCarryThrough) then
@@ -1213,9 +1217,14 @@ return function(mod)
             local opts = pending.opts or {}
             if battle._arFireNow and not hit then
                 kind = pending.kind or "attack"
-                opts.slowShot = true
-                opts.fireCarry = true
-                battle._arFireCarryThrough = true
+                if battle._arCheckNow then
+                    opts.closeTheGap = false
+                    opts.followUp = true
+                else
+                    opts.slowShot = true
+                    opts.fireCarry = true
+                    battle._arFireCarryThrough = true
+                end
             end
             pcall(FieldBattleViewer.react, battle, pending.side, kind, opts)
         end
@@ -1385,6 +1394,9 @@ return function(mod)
             if shotMult and shotMult > 0 and shotMult ~= 1 and type(dmg) == "number" and dmg > 0 then
                 battle._arFireShotMult = nil
                 dmg = math.max(1, math.floor(dmg * shotMult + 0.5))
+            end
+            if battle and battle._arCheckNow and type(dmg) == "number" and dmg > 0 then
+                dmg = math.max(1, math.floor(dmg * 0.35 + 0.5))
             end
 
             local state = battle and React.peek(battle)
@@ -1855,7 +1867,8 @@ return function(mod)
         local function executeFoeFire(battle, moveDef, shots, foe, focusNow)
             local FoeAi = Battle and Battle.FoeAi
             local shot = FoeAi and type(FoeAi.pickFireShot) == "function"
-                and FoeAi.pickFireShot(shots) or (shots and shots[1])
+                and FoeAi.pickFireShot(shots)
+                or (shots and shots[1])
             if not shot then
                 return nil
             end
@@ -1878,14 +1891,16 @@ return function(mod)
                 id = shot.moveId,
                 type = shot.moveType,
                 power = (shot.moveDef and shot.moveDef.power) or shot.power,
-                category = "special",
+                category = shot.checkNow and "physical"
+                    or shot.hazeNow and (shot.category or "status")
+                    or "special",
                 moveId = shot.moveId,
                 moveType = shot.moveType,
             }
             local cue = {
                 side = "enemy",
-                kind = "cast",
-                category = "special",
+                kind = (shot.checkNow and "attack") or "cast",
+                category = reply.category,
                 moveType = shot.moveType,
                 moveId = shot.moveId,
             }
@@ -1894,6 +1909,7 @@ return function(mod)
             local clashIncoming = ReactiveDefense
                 and type(ReactiveDefense.isSpecialClashIncoming) == "function"
                 and ReactiveDefense.isSpecialClashIncoming(moveDef)
+                and not shot.checkNow and not shot.hazeNow
             if clashIncoming then
                 local verdict = ReactiveDefense.contestSpecialClash(
                     battle, moveDef, reply, { replySide = "enemy" })
@@ -1924,13 +1940,24 @@ return function(mod)
                     string.format("clash=%s focus=%d", tostring(verdict), focusNow))
                 return line, nil, false, nil, cue
             end
-            if type(dev.fireQueuedSpecial) == "function" then
+            if shot.checkNow and type(dev.fireQueuedCheck) == "function" then
+                if battle then
+                    battle._arCheckNow = true
+                end
+                dev.fireQueuedCheck(battle, inst, "enemy")
+            elseif type(dev.fireQueuedSpecial) == "function" then
+                if shot.hazeNow then
+                    battle._arHazeNow = true
+                end
                 dev.fireQueuedSpecial(battle, inst, "enemy")
             end
             if battle._arFireNowHit then
-                if FieldBattleViewer
+                if shot.hazeNow then
+                    -- Lane stall; no 2-tile knockback.
+                elseif FieldBattleViewer
                     and type(FieldBattleViewer.interruptCharge) == "function" then
-                    FieldBattleViewer.interruptCharge(battle, "player")
+                    FieldBattleViewer.interruptCharge(battle, "player",
+                        shot.checkNow and 1 or 2)
                 end
             elseif ReactiveDefense then
                 ReactiveDefense.state(battle).hitMod = {
@@ -3110,11 +3137,21 @@ return function(mod)
             battle._arFireNowCharger = isPlayer and "enemy" or "player"
             local ok, err = pcall(battle.performMove, battle, user, target, action)
             battle._arFireNow = nil
+            battle._arCheckNow = nil
+            battle._arHazeNow = nil
             if not ok then
                 dev.log(battle, "ERR FIRE now", tostring(err))
                 return false
             end
             return true
+        end
+
+        -- Contact CHECK during a close-gap: in-place melee, 1-tile interrupt.
+        dev.fireQueuedCheck = function(battle, moveInst, side)
+            if battle then
+                battle._arCheckNow = true
+            end
+            return dev.fireQueuedSpecial(battle, moveInst, side)
         end
 
         -- Idle HARDEN / GROWTH / DIG pulses while braced or hiding in the menu.
@@ -3978,6 +4015,11 @@ return function(mod)
                         return FieldBattleViewer.isRangedCounter(opts)
                     end
                 end,
+                isFireNowShot = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isFireNowShot) == "function" then
+                        return FieldBattleViewer.isFireNowShot(opts)
+                    end
+                end,
             })
         end
         if React then
@@ -4049,6 +4091,16 @@ return function(mod)
                         return Fx.listFireNowMoves(battle, battler)
                     end
                 end,
+                listCheckNowMoves = function(battle, battler)
+                    if Fx and type(Fx.listCheckNowMoves) == "function" then
+                        return Fx.listCheckNowMoves(battle, battler)
+                    end
+                end,
+                listCloudNowMoves = function(battle, battler)
+                    if Fx and type(Fx.listCloudNowMoves) == "function" then
+                        return Fx.listCloudNowMoves(battle, battler)
+                    end
+                end,
                 queueMoveAttackAnim = queueMoveAttackAnim,
                 applyCalloutBuffs = applyCalloutBuffs,
                 enqueueBraceAnim = enqueueBraceAnim,
@@ -4066,6 +4118,11 @@ return function(mod)
                 isRangedCounter = function(battle, opts)
                     if FieldBattleViewer and type(FieldBattleViewer.isRangedCounter) == "function" then
                         return FieldBattleViewer.isRangedCounter(opts)
+                    end
+                end,
+                isFireNowShot = function(battle, opts)
+                    if FieldBattleViewer and type(FieldBattleViewer.isFireNowShot) == "function" then
+                        return FieldBattleViewer.isFireNowShot(opts)
                     end
                 end,
                 isMeleeAttack = function(battle, opts)
@@ -4093,6 +4150,11 @@ return function(mod)
                         return dev.fireQueuedSpecial(battle, moveInst, side)
                     end
                 end,
+                fireQueuedCheck = function(battle, moveInst, side)
+                    if type(dev.fireQueuedCheck) == "function" then
+                        return dev.fireQueuedCheck(battle, moveInst, side)
+                    end
+                end,
                 playBeamClash = function(battle, result, ctx)
                     if FieldBattleViewer and type(FieldBattleViewer.playBeamClash) == "function" then
                         return FieldBattleViewer.playBeamClash(battle, result, ctx)
@@ -4103,9 +4165,9 @@ return function(mod)
                         return FieldBattleViewer.cancelCloseStrike(battle, side)
                     end
                 end,
-                interruptCharge = function(battle, side)
+                interruptCharge = function(battle, side, tiles)
                     if FieldBattleViewer and type(FieldBattleViewer.interruptCharge) == "function" then
-                        return FieldBattleViewer.interruptCharge(battle, side)
+                        return FieldBattleViewer.interruptCharge(battle, side, tiles)
                     end
                 end,
                 deferCancelCloseStrike = function(battle, side, delay)

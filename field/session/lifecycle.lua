@@ -1776,13 +1776,21 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         ent._keepAway = Cues.keepAwayBias(ent, session._battle, side)
     end
     local keep = tonumber(ent._keepAway) or 0
+    local hazeOut = session.grid and Grid.hasHaze
+        and Grid.hasHaze(session.grid)
     -- Awake mons often hold the lane. Hurt / glass cannons step away more.
-    -- Sleepwalkers take the step.
-    if not asleep and rand() > (0.35 + 0.45 * keep) then
+    -- A live hazard: always walk home. Sleepwalkers take the step.
+    if not asleep and not hazeOut and rand() > (0.35 + 0.45 * keep) then
         ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
     local foe = (side == "player") and session.enemyMon or session.playerMon
+    if hazeOut and Grid.isHaze(session.grid, ent.padU, ent.padV) then
+        if Grid.withdrawTowardTrainer(session.grid, ent, side) then
+            ent._wanderCD = 0.45 + rand() * 0.35
+            return
+        end
+    end
     if Grid.idleWander(session.grid, ent, side, foe) then
         ent._wanderCD = asleep and (1.4 + rand() * 1.1) or (3.2 + rand() * 2.8)
     else
@@ -2102,6 +2110,9 @@ function Lifecycle.onTurnStarted(battle)
         session._reactReleaseT = nil
         session._reactReleaseDur = nil
         session._dodgeCounterShot = nil
+        if Grid and session.grid and type(Grid.clearHaze) == "function" then
+            Grid.clearHaze(session.grid)
+        end
     end
     if Cues and type(Cues.resetTurnSide) == "function" then
         Cues.resetTurnSide(session, "player", keepPlayer, Grid)

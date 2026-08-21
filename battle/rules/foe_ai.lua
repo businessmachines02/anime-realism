@@ -3,6 +3,9 @@
 -- Execution (Focus spend, poses, shots, clash FX) stays in main.lua and
 -- reactive_defense.lua. This file only decides what they try.
 
+
+-- gary stands no chance against me... but I can make him a bit stronger anyway ;)
+
 local FoeAi = {}
 local RD
 
@@ -85,18 +88,20 @@ function FoeAi.canFireNow(battle, incoming, opts)
   return opts.playerChargeOpen == true or opts.incomingMelee == true
 end
 
---- Strongest remaining ranged special. First shot if powers tie.
+--- Strongest remaining projectile special.
 function FoeAi.pickFireShot(shots)
   if type(shots) ~= "table" or #shots == 0 then
     return nil
   end
+  local function powerOf(shot)
+    return tonumber(shot.moveDef and shot.moveDef.power)
+      or tonumber(shot.power) or 0
+  end
   local best = shots[1]
-  local bestPower = tonumber(best.moveDef and best.moveDef.power)
-    or tonumber(best.power) or 0
+  local bestPower = powerOf(best)
   for i = 2, #shots do
     local shot = shots[i]
-    local power = tonumber(shot.moveDef and shot.moveDef.power)
-      or tonumber(shot.power) or 0
+    local power = powerOf(shot)
     if power > bestPower then
       best = shot
       bestPower = power

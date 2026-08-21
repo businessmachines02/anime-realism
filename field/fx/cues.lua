@@ -393,7 +393,148 @@ function Cues.isMeleeAttack(opts, Projectiles)
     return H.normCategory(opts.category) ~= "special"
 end
 
+Cues.CLOUD_MOVES = {
+    SMOG = true,
+    SMOKESCREEN = true,
+    POISON_GAS = true,
+}
+Cues.CHECK_HIT_FRAC = 0.35
+Cues.HAZE_SLOW = 0.45
+Cues.HAZE_CHIP = 4
+--- Dedicated clouds usually stick. Traveling fire/water is a roll.
+Cues.LANE_SEED_CHANCE = {
+    poison = 0.72,
+    fire = 0.36,
+    water = 0.36,
+    grit = 0.55,
+}
+function Cues.isCloudMove(opts)
+    local mid = H.cueMoveId(opts)
+    if not mid and type(opts) == "string" then
+        mid = tostring(opts):upper():gsub("%s+", "_")
+    end
+    return mid ~= nil and Cues.CLOUD_MOVES[mid] == true
+end
+
+--- poison / fire / water / grit, or nil if this shot should not leave a lane.
+function Cues.laneKind(opts, Projectiles)
+    opts = opts or {}
+    if Cues.isCloudMove(opts) then
+        return "poison"
+    end
+    if Cues.isMeleeAttack(opts, Projectiles) then
+        return nil
+    end
+    local mid = H.cueMoveId(opts) or ""
+    local typ = tostring(opts.moveType or opts.type or ""):upper()
+    local style = nil
+    if Projectiles and type(Projectiles.moveStyle) == "function" then
+        style = Projectiles.moveStyle(opts)
+    end
+    style = tostring(style or ""):lower()
+    if mid == "SAND_ATTACK" or mid == "SANDATTACK" or style == "sand" then
+        return "grit"
+    end
+    if typ == "FIRE" and style ~= "beam" then
+        return "fire"
+    end
+    if typ == "WATER" and style ~= "beam" then
+        return "water"
+    end
+    if typ == "POISON" then
+        return "poison"
+    end
+    return nil
+end
+
+function Cues.shouldSeedLane(opts, Projectiles, roll)
+    opts = opts or {}
+    if opts.forceLane == true then
+        return Cues.laneKind(opts, Projectiles) or "poison"
+    end
+    if opts.forceLane == false then
+        return nil
+    end
+    local kind = Cues.laneKind(opts, Projectiles)
+    if not kind then
+        return nil
+    end
+    local chance = Cues.LANE_SEED_CHANCE[kind] or 0.3
+    local style = nil
+    if Projectiles and type(Projectiles.moveStyle) == "function" then
+        style = tostring(Projectiles.moveStyle(opts) or ""):lower()
+    end
+    if style == "area" or style == "stream" or style == "sand"
+        or style == "spiral" or style == "blast" then
+        chance = chance + 0.12
+    end
+    if chance > 0.88 then
+        chance = 0.88
+    end
+    roll = roll or H.rr
+    local n = roll()
+    if type(n) ~= "number" then
+        n = 1
+    end
+    if n > chance then
+        return nil
+    end
+    return kind
+end
+
+function Cues.hazeCutKind(opts, Projectiles, hazeKind)
+    opts = opts or {}
+    if Cues.isCloudMove(opts) then
+        return nil
+    end
+    if Cues.isMeleeAttack(opts, Projectiles) then
+        return "clear"
+    end
+    local seed = Cues.laneKind(opts, Projectiles)
+    hazeKind = tostring(hazeKind or "")
+    local power = tonumber(opts.movePower or opts.power) or 0
+    local style = nil
+    if Projectiles and type(Projectiles.moveStyle) == "function" then
+        style = Projectiles.moveStyle(opts)
+    end
+    if not style and Projectiles and type(Projectiles.isTravelFx) == "function"
+        and Projectiles.isTravelFx(opts) then
+        style = "travel"
+    end
+    local named = style and tostring(style):lower() or ""
+    if hazeKind == "fire" and seed == "water" then
+        return "clear"
+    end
+    if (hazeKind == "poison" or hazeKind == "grit")
+        and (seed == "fire" or seed == "water")
+        and (power >= 60 or named == "stream" or named == "area"
+            or named == "blast" or named == "spiral") then
+        return "clear"
+    end
+    if hazeKind == "water" and seed == "fire" then
+        return "residue"
+    end
+    if named == "beam" or named == "stream" or named == "bolt" then
+        return "clear"
+    end
+    if power >= 60 then
+        return "clear"
+    end
+    if Projectiles and type(Projectiles.isPowerfulMove) == "function"
+        and Projectiles.isPowerfulMove(opts) then
+        return "clear"
+    end
+    if H.normCategory(opts.category) == "special" or named ~= "" then
+        return "residue"
+    end
+    return nil
+end
+
 function Cues.closeTheGapEnabled(session, opts)
+    local battle = session and session._battle
+    if battle and battle._arCheckNow then
+        return false
+    end
     if opts and opts.closeTheGap ~= nil then
         return opts.closeTheGap == true
     end
@@ -679,6 +820,9 @@ function Cues.tickCloseGapGait(ent, foe)
     -- Mix linear with quadratic so the first steps aren't glued down.
     local eased = u * (0.42 + 0.58 * u)
     local px = start + (cruise - start) * eased
+    if ent._hazeSlow then
+        px = px * (Cues.HAZE_SLOW or 0.45)
+    end
     ent.stepSpeed = px
     return px
 end
@@ -957,6 +1101,20 @@ function Cues.isRangedCounter(opts, Projectiles)
         return true
     end
     return H.normCategory(opts.category) == "special"
+end
+
+function Cues.isFireNowShot(opts, Projectiles)
+    opts = opts or {}
+    if Projectiles and type(Projectiles.isFireNowShot) == "function" then
+        return Projectiles.isFireNowShot(opts) == true
+    end
+    if Cues.isCloudMove(opts) then
+        return false
+    end
+    if Cues.isMeleeAttack(opts, Projectiles) then
+        return false
+    end
+    return Cues.isRangedCounter(opts, Projectiles)
 end
 
 --- Fire the dodge-counter special while the charger is still walking in.
@@ -1345,6 +1503,89 @@ function Cues.register(kind, handler)
     return Cues
 end
 
+local function hazeLinger(session, placed)
+    local Projectiles = session._deps and session._deps.Projectiles
+    if not (Projectiles and type(Projectiles.hazeLinger) == "function") then
+        return
+    end
+    Projectiles.hazeLinger(session, placed)
+end
+
+function Cues.seedLaneHaze(session, side, Grid, opts)
+    Grid = Grid or (session and session._deps and session._deps.Grid)
+    if not (session and Grid and type(Grid.seedHaze) == "function") then
+        return {}
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    local kind = opts and opts.kind or Cues.laneKind(opts, Projectiles) or "poison"
+    local ent = H.sideEnt(session, side)
+    local foe = H.foeOf(session, side)
+    local mid = H.cueMoveId(opts)
+    local density = (kind == "poison" and mid == "SMOG") and 2
+        or (kind == "fire" or kind == "water") and 1 or 1
+    local placed = Grid.seedHaze(session.grid, ent, foe, {
+        side = side,
+        moveId = mid,
+        kind = kind,
+        density = density,
+        cells = density,
+        now = H.now(session),
+    })
+    hazeLinger(session, placed)
+    return placed
+end
+
+function Cues.cutLaneHaze(session, side, Grid, opts)
+    Grid = Grid or (session and session._deps and session._deps.Grid)
+    if not (session and Grid and type(Grid.cutHazeOnAxis) == "function") then
+        return {}
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    local hazeKind = nil
+    if type(Grid.firstHazeOnPath) == "function" then
+        local ent = H.sideEnt(session, side)
+        local foe = H.foeOf(session, side)
+        local _, _, entry = Grid.firstHazeOnPath(session.grid, ent, foe)
+        hazeKind = entry and entry.kind
+    end
+    local kind = Cues.hazeCutKind(opts, Projectiles, hazeKind)
+    if not kind then
+        return {}
+    end
+    local ent = H.sideEnt(session, side)
+    local foe = H.foeOf(session, side)
+    local cut = Grid.cutHazeOnAxis(session.grid, ent, foe, {
+        residue = kind == "residue",
+    })
+    if #cut > 0 and Projectiles and type(Projectiles.hazeCut) == "function" then
+        Projectiles.hazeCut(session, cut)
+    end
+    return cut
+end
+
+function Cues.afterLaneCue(session, side, kind, Grid, opts)
+    opts = opts or {}
+    kind = tostring(kind or "")
+    if kind == "faint" or kind == "recall" then
+        Grid = Grid or (session and session._deps and session._deps.Grid)
+        if Grid and type(Grid.clearHaze) == "function" then
+            Grid.clearHaze(session.grid)
+        end
+        return
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if kind == "attack" or kind == "cast" or kind == "counter" then
+        Cues.cutLaneHaze(session, side, Grid, opts)
+    end
+    if (kind == "status" or kind == "cast" or kind == "attack") then
+        local lane = Cues.shouldSeedLane(opts, Projectiles)
+        if lane then
+            opts.kind = lane
+            Cues.seedLaneHaze(session, side, Grid, opts)
+        end
+    end
+end
+
 --- Apply a cue kind to a side. opts.category = "physical"|"special"
 function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     if not (session and session.live and session.grid) then
@@ -1423,6 +1664,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
             return false
         end
         H.note(session, battle, "cue ok", side, kind, opts.moveId)
+        if result then
+            Cues.afterLaneCue(session, side, kind, Grid, opts)
+        end
         return result and true or false
     end
     if type(ent.play) == "function" and not ent._pendingCloseStrike then

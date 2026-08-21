@@ -612,7 +612,9 @@ end
 
 local function replyMoveForFire(battle, state)
     local inst = state and state.fireNowMove
-    local shots = listFireNowMoves(battle)
+    local incoming = state and state.pendingDamage and state.pendingDamage.ctx
+        and state.pendingDamage.ctx.move
+    local shots = chargeWindowShots(battle, incoming)
     local shot = shots[1]
     local qid = inst and tostring(inst.id or inst.name or ""):upper():gsub("%s+", "_")
     if qid and qid ~= "" then
@@ -632,12 +634,22 @@ local function replyMoveForFire(battle, state)
     if not (inst or shot) then
         return nil
     end
+    local checkNow = (state and state.checkNow) or (shot and shot.checkNow)
+    local hazeNow = (state and state.hazeNow) or (shot and shot.hazeNow)
+    local category = "special"
+    if checkNow then
+        category = "physical"
+    elseif hazeNow and shot and shot.category then
+        category = shot.category
+    end
     return {
         id = (shot and shot.moveId) or (inst and (inst.id or inst.name)),
         name = (shot and shot.name) or (inst and (inst.name or inst.id)),
         power = (shot and shot.moveDef and shot.moveDef.power) or (inst and inst.power),
         type = (shot and shot.moveType) or (inst and inst.type),
-        category = "special",
+        category = category,
+        checkNow = checkNow == true,
+        hazeNow = hazeNow == true,
     }
 end
 
@@ -710,6 +722,8 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
 
         if action == "fire" and pending and pending.ctx then
             pending.ctx.replyMove = replyMoveForFire(battle, state)
+            battle._arCheckNow = state.checkNow == true
+            battle._arHazeNow = state.hazeNow == true
         end
 
         if action == "entrench_break" and RD() then
@@ -877,7 +891,14 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                 hostCall("playBeamClash", battle, result, pending.ctx)
                 spendFireNowTurn(battle, state)
             elseif result.fireNow then
-                hostCall("fireQueuedSpecial", battle, state.fireNowMove)
+                if state.checkNow then
+                    hostCall("fireQueuedCheck", battle, state.fireNowMove)
+                else
+                    if state.hazeNow then
+                        battle._arHazeNow = true
+                    end
+                    hostCall("fireQueuedSpecial", battle, state.fireNowMove)
+                end
                 state.fireNowMove = nil
             end
             local foe = battle.enemy
@@ -885,10 +906,14 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
             local fireHit = result.fireNow and battle._arFireNowHit == true
             if result.fireNow and (fireHit or foeDown) then
                 -- Connecting FIRE knocks the charger off the line; skip the punch.
-                if foeDown then
+                -- Clouds stall in the lane instead of a 2-tile shove.
+                if state.hazeNow then
+                    -- haze occupancy handles the stall
+                elseif foeDown then
                     hostCall("cancelCloseStrike", battle, "enemy")
                 else
-                    hostCall("interruptCharge", battle, "enemy")
+                    hostCall("interruptCharge", battle, "enemy",
+                        state.checkNow and 1 or 2)
                 end
                 if RD() then
                     RD().state(battle).hitMod = nil
@@ -949,23 +974,6 @@ local function listFireNowMoves(battle)
     return {}
 end
 
-local function preferredFireNowMove(battle)
-    local shots = listFireNowMoves(battle)
-    if #shots == 0 then
-        return nil, shots, 1
-    end
-    local queued = battle and momentumState(battle).queuedPlayerAction
-    local qid = queued and tostring(queued.id or queued.name or ""):upper():gsub("%s+", "_")
-    if qid and qid ~= "" then
-        for i = 1, #shots do
-            if shots[i].moveId == qid then
-                return shots[i], shots, i
-            end
-        end
-    end
-    return shots[1], shots, 1
-end
-
 local function incomingIsRanged(battle, incoming)
     if not incoming then
         return false
@@ -995,6 +1003,27 @@ local function incomingIsMelee(battle, incoming)
     return tostring(incoming.category or ""):lower() == "physical"
 end
 
+local function chargeWindowShots(battle, incoming)
+    return listFireNowMoves(battle)
+end
+
+local function preferredFireNowMove(battle, incoming)
+    local shots = chargeWindowShots(battle, incoming)
+    if #shots == 0 then
+        return nil, shots, 1
+    end
+    local queued = battle and momentumState(battle).queuedPlayerAction
+    local qid = queued and tostring(queued.id or queued.name or ""):upper():gsub("%s+", "_")
+    if qid and qid ~= "" then
+        for i = 1, #shots do
+            if shots[i].moveId == qid then
+                return shots[i], shots, i
+            end
+        end
+    end
+    return shots[1], shots, 1
+end
+
 local function canFireNow(battle, incoming)
     if not hostCall("isFieldBattle", battle) then
         return false
@@ -1013,7 +1042,7 @@ local function canFireNow(battle, incoming)
         or action.switch or action.run or action.special == "holdPosition") then
         return false
     end
-    if #listFireNowMoves(battle) == 0 then
+    if #chargeWindowShots(battle, incoming) == 0 then
         return false
     end
     -- Two tiles (one empty cell). Adjacent is melee; farther is not yet a shot.
@@ -1039,14 +1068,20 @@ local function canFireNow(battle, incoming)
 end
 
 local function fireHintForMenu(battle, incoming)
-    local preferred, shots = preferredFireNowMove(battle)
+    local preferred, shots = preferredFireNowMove(battle, incoming)
     if type(shots) == "table" and #shots > 1 then
         if incomingIsRanged(battle, incoming) then
             return "Clash now"
         end
-        return "Pick a special"
+        return "Pick a move"
     end
     if preferred then
+        if preferred.checkNow then
+            return "Check the charge"
+        end
+        if preferred.hazeNow then
+            return "Lay a haze"
+        end
         return tostring(preferred.name or preferred.moveId or "Special now")
     end
     if incomingIsRanged(battle, incoming) then
@@ -1062,9 +1097,12 @@ local function queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
         local shot = shots[i]
         choices[#choices + 1] = {
             label = shot.label or shot.name or shot.moveId,
-            hint = shot.hint or "Special now",
+            hint = shot.hint or (shot.checkNow and "Check the charge")
+                or (shot.hazeNow and "Lay a haze") or "Special now",
             id = "fire",
             moveInst = shot.moveInst,
+            checkNow = shot.checkNow == true,
+            hazeNow = shot.hazeNow == true,
         }
     end
     hostCall("insertBeforeAnim", battle, {
@@ -1092,7 +1130,13 @@ local function queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
                 cancelable = false,
                 onPick = function(choice)
                     local st = momentumState(battle)
-                    st.fireNowMove = choice and choice.moveInst or shots[1] and shots[1].moveInst
+                    local shot = choice
+                    if not shot and shots[1] then
+                        shot = shots[1]
+                    end
+                    st.fireNowMove = shot and shot.moveInst
+                    st.checkNow = shot and shot.checkNow == true
+                    st.hazeNow = shot and shot.hazeNow == true
                     finishCalloutPick(battle, me, moveName, "fire", nil)
                 end,
             })
@@ -1113,7 +1157,10 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
             return
         end
         if #shots == 1 then
-            momentumState(battle).fireNowMove = shots[1].moveInst
+            local st = momentumState(battle)
+            st.fireNowMove = shots[1].moveInst
+            st.checkNow = shots[1].checkNow == true
+            st.hazeNow = shots[1].hazeNow == true
             finishCalloutPick(battle, me, moveName, "fire", nil)
             return
         end
@@ -1180,7 +1227,7 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
                     return
                 end
                 if id == "fire" then
-                    local _, shots, prefIdx = preferredFireNowMove(battle)
+                    local _, shots, prefIdx = preferredFireNowMove(battle, pendingMove)
                     beginFireNow(shots, prefIdx)
                     return
                 end

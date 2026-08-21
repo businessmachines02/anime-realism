@@ -64,6 +64,7 @@ return function(Cues)
             movePower = opts.movePower,
             jump = jump,
         }
+        ent._cuttingHaze = true
         -- Already next to the foe: punch on the next present tick, do not
         -- burn a "walk first" frame (that stall is most obvious on your mon).
         -- If the player could FIRE NOW, keep a wind-up so the charge reads.
@@ -387,20 +388,31 @@ return function(Cues)
         if battle and battle._arFireNow then
             local charger = battle._arFireNowCharger or "enemy"
             if side == charger then
+                if battle._arHazeNow then
+                    Cues.seedLaneHaze(session, (side == "player") and "enemy" or "player",
+                        Grid, opts)
+                    H.playAnim(ent, "hit")
+                    return true
+                end
                 local foe = H.foeOf(session, side)
                 Cues.cancelCloseStrike(session, side, Grid)
+                local tiles = battle._arCheckNow and 1 or 2
                 if Grid and type(Grid.knockbackTiles) == "function" then
-                    Grid.knockbackTiles(session.grid, ent, foe, 2)
+                    Grid.knockbackTiles(session.grid, ent, foe, tiles)
                 end
                 ent._heavyHit = true
                 local Projectiles = session._deps and session._deps.Projectiles
-                if Projectiles and type(Projectiles.powerHit) == "function" then
-                    Projectiles.powerHit(session, side, opts)
+                if not battle._arCheckNow then
+                    if Projectiles and type(Projectiles.powerHit) == "function" then
+                        Projectiles.powerHit(session, side, opts)
+                    end
+                    if Projectiles and type(Projectiles.groundKick) == "function" then
+                        Projectiles.groundKick(session, side, opts)
+                    end
+                    H.impactKick(session, { powerful = true })
+                else
+                    H.impactKick(session, { powerful = false })
                 end
-                if Projectiles and type(Projectiles.groundKick) == "function" then
-                    Projectiles.groundKick(session, side, opts)
-                end
-                H.impactKick(session, { powerful = true })
                 H.playAnim(ent, "hit")
                 return true
             end

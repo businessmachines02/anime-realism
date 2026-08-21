@@ -1126,6 +1126,12 @@ function tests.npc_react_may_fire_when_the_window_is_open()
     { moveId = "SMOKESCREEN", power = 0 },
   })
   eq(shots.moveId, "FLAMETHROWER", "foe FIRE picks the strongest shot")
+  eq(FoeAi.pickFireShot({
+    { moveId = "EMBER", power = 40 },
+    { moveId = "TACKLE", power = 35, checkNow = true },
+    { moveId = "FLAMETHROWER", power = 95 },
+  }).moveId, "FLAMETHROWER",
+    "foe FIRE does not spend the shot on a punch")
   RD.clear(wall)
 end
 
@@ -1339,6 +1345,258 @@ function tests.fire_now_hit_stops_the_charge()
   eq(enemy.lastAnim, "hit", "charger takes the bolt")
   truthy(enemy.padU ~= startU or enemy.padV ~= startV,
     "charger leaves the charge cell")
+end
+
+function tests.check_now_hit_stops_the_charge_one_tile()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "QUICK_ATTACK" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startU = enemy.padU
+  local battle = { _arFireNow = true, _arCheckNow = true }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 41,
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, battle, {
+    category = "physical", moveId = "TACKLE",
+  }), "CHECK hit cue")
+  truthy(not enemy._pendingCloseStrike, "connecting CHECK cancels the charge")
+  eq(enemy.lastAnim, "hit", "charger takes the tackle")
+  local moved = math.max(math.abs((enemy.padU or 0) - startU),
+    math.abs((enemy.padV or 0) - eHome.v))
+  eq(moved, 1, "CHECK knocks the charger one tile, not two")
+end
+
+function tests.smog_haze_occupies_the_lane_without_jumping()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+    _cuttingHaze = true,
+    hp = 40,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  truthy(not Grid.pathObstructed(grid, player, enemy),
+    "open lane is not solid cover")
+  local placed = Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOG", density = 2, cells = 2,
+  })
+  truthy(#placed >= 1, "SMOG occupies the fight axis")
+  truthy(Grid.hasHaze(grid), "haze layer is live")
+  truthy(not Grid.pathObstructed(grid, player, enemy),
+    "haze is not solid cover — no jump")
+  local startU = enemy.padU
+  Grid.closeGap(grid, enemy, player)
+  truthy(Grid.isHaze(grid, enemy.padU, enemy.padV)
+    or math.max(math.abs(enemy.padU - player.padU), math.abs(enemy.padV - player.padV)) > 1,
+    "thick smog stalls the charge instead of landing adjacent")
+  truthy(enemy.padU ~= startU or Grid.isHaze(grid, enemy.padU, enemy.padV),
+    "charger stepped into the cloud")
+
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 50,
+    _deps = { Grid = Grid, Projectiles = Projectiles },
+    _battle = {},
+  }
+  Cues.tickReturns(session, Grid)
+  truthy(enemy._hazeChipped, "walking into smog chips once")
+  truthy(enemy._hazeSlow, "gait slows in the cloud")
+
+  Cues.cutLaneHaze(session, "player", Grid, {
+    category = "physical", moveId = "BONE_CLUB",
+  })
+  truthy(not Grid.hasHaze(grid), "Cubone's club clears the lane")
+  Grid.closeGap(grid, enemy, player)
+  eq(math.max(math.abs(enemy.padU - player.padU), math.abs(enemy.padV - player.padV)),
+    1, "after a cut the charge can finish")
+end
+
+function tests.ember_leaves_haze_residue_thunderbolt_clears()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOKESCREEN", density = 2, cells = 1,
+  })
+  truthy(Grid.hasHaze(grid), "smokescreen is down")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid, Projectiles = Projectiles },
+  }
+  Cues.cutLaneHaze(session, "enemy", Grid, {
+    category = "special", moveId = "EMBER", movePower = 40,
+  })
+  truthy(Grid.hasHaze(grid), "Ember 40 leaves residue")
+  Cues.cutLaneHaze(session, "enemy", Grid, {
+    category = "special", moveId = "THUNDERBOLT", movePower = 95,
+  })
+  truthy(not Grid.hasHaze(grid), "Thunderbolt cuts the haze")
+end
+
+function tests.lane_seed_is_a_chance_and_typed()
+  eq(Cues.laneKind({ moveId = "SMOG" }), "poison", "Smog is a poison lane")
+  eq(Cues.laneKind({
+    moveId = "EMBER", moveType = "FIRE", category = "special",
+  }, Projectiles), "fire", "Ember can leave fire")
+  eq(Cues.laneKind({
+    moveId = "WATER_GUN", moveType = "WATER", category = "special",
+  }, Projectiles), "water", "Water Gun can leave water")
+  eq(Cues.laneKind({
+    moveId = "THUNDERBOLT", moveType = "ELECTRIC", category = "special",
+  }, Projectiles), nil, "a bolt clashes, it does not puddle")
+  eq(Cues.laneKind({
+    moveId = "FIRE_PUNCH", moveType = "FIRE", category = "special",
+  }, Projectiles), nil, "Fire Punch is CHECK, not a trail")
+  eq(Cues.shouldSeedLane({ moveId = "EMBER", moveType = "FIRE",
+    category = "special", forceLane = true }, Projectiles), "fire",
+    "tests can force a lane")
+  eq(Cues.shouldSeedLane({ moveId = "EMBER", moveType = "FIRE",
+    category = "special", forceLane = false }, Projectiles), nil,
+    "force off skips the roll")
+  eq(Cues.shouldSeedLane({
+    moveId = "FLAMETHROWER", moveType = "FIRE", category = "special",
+  }, Projectiles, function() return 0 end), "fire", "a low roll seeds")
+  eq(Cues.shouldSeedLane({
+    moveId = "FLAMETHROWER", moveType = "FIRE", category = "special",
+  }, Projectiles, function() return 1 end), nil, "a high roll leaves no lane")
+end
+
+function tests.haze_sends_idle_mons_home_to_the_trainer()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    homePadU = pHome.u, homePadV = pHome.v,
+  }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "enemy", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+  })
+  truthy(Grid.hasHaze(grid), "fire lane is down")
+  local hazeU, hazeV = Grid.firstHazeOnPath(grid, player, enemy)
+  truthy(hazeU, "the cloud sits on the fight axis")
+  truthy(not Grid.isFree(grid, hazeU, hazeV, "wanderer", { id = "wanderer" }),
+    "idle roam will not step onto haze")
+
+  truthy(Grid.step(grid, player, 0, 1) or Grid.step(grid, player, 0, -1),
+    "stand one cell off the opening")
+  local away = math.abs(player.padU - pHome.u) + math.abs(player.padV - pHome.v)
+  truthy(away >= 1, "they left home")
+  truthy(Grid.idleWander(grid, player, "player", enemy),
+    "with a lane down they walk home")
+  truthy(math.abs(player.padU - pHome.u) + math.abs(player.padV - pHome.v) < away,
+    "home is closer to the trainer pad")
+  truthy(not Grid.isHaze(grid, player.padU, player.padV),
+    "they did not step onto the cloud")
+
+  truthy(Grid.setPad(grid, player, eHome.u, eHome.v + 1)
+      or Grid.setPad(grid, player, eHome.u, eHome.v - 1),
+    "stand next to the foe, off the cloud")
+  truthy(Grid.withdrawFromFoe(grid, player, enemy, "player"),
+    "withdraw with a lane down")
+  eq(player.padU, pHome.u, "withdraw goes to the trainer pad, not the FIRE ring")
+  eq(player.padV, pHome.v, "withdraw v is the opening home")
+end
+
+function tests.lane_hold_expires_and_tiles_loop()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+    now = 10,
+  })
+  truthy(Grid.hasHaze(grid), "fire lane is down")
+  eq(#Grid.tickHaze(grid, 99), 0, "a live lane does not burn out mid-turn")
+  truthy(Grid.hasHaze(grid), "it loops until the turn ends")
+
+  local battle = {}
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = { Grid = Grid, Cues = Cues },
+    _battle = battle,
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.onTurnStarted(battle)
+  truthy(not Grid.hasHaze(grid), "next turn clears the lane")
+  Lifecycle._testUnbind(battle)
+
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "SMOG", kind = "poison", density = 2, cells = 1,
+  })
+  eq(#Grid.tickHaze(grid, 99), 0, "untimed test haze does not expire")
+  truthy(Grid.hasHaze(grid), "cut or faint still owns untimed cells")
+
+  local painted = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      line = function() end,
+      rectangle = function() painted = painted + 1 end,
+      ellipse = function() painted = painted + 1 end,
+      circle = function() painted = painted + 1 end,
+      polygon = function() painted = painted + 1 end,
+    },
+    timer = { getTime = function() return 0.4 end },
+  }
+  local session = { live = true, grid = grid, _now = 0.4 }
+  Projectiles.drawHazeLanes(session, 0, 0)
+  truthy(painted > 0, "poison lane paints a looping puff")
+  Grid.clearHaze(grid)
+  Grid.seedHaze(grid, player, enemy, {
+    side = "player", moveId = "EMBER", kind = "fire", density = 1, cells = 1,
+  })
+  painted = 0
+  Projectiles.drawHazeLanes(session, 0, 0)
+  truthy(painted > 0, "fire lane paints looping tongues")
+  love = prevLove
 end
 
 function tests.foe_fire_hit_stops_your_charge()
@@ -1667,6 +1925,23 @@ function tests.fire_clashes_with_an_incoming_special()
   eq(verdict, "win", "foe FIRE with higher Special shoves your beam")
   verdict = RD.contestSpecialClash(battle, ember, water)
   eq(verdict, "lose", "default contest still treats reply as the player")
+
+  local hydro = { id = "HYDRO_PUMP", power = 120, category = "special", type = "WATER" }
+  local bolt = { id = "THUNDERBOLT", power = 95, category = "special", type = "ELECTRIC" }
+  battle = {
+    player = { stats = { special = 150, speed = 20 } },
+    enemy = { stats = { special = 80, speed = 120 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, hydro, bolt)
+  eq(verdict, "win", "slower high-Special Thunderbolt still cuts Hydro Pump")
+  battle = {
+    player = { stats = { special = 40, speed = 20 } },
+    enemy = { stats = { special = 80, speed = 120 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, hydro, bolt, { replySide = "enemy" })
+  eq(verdict, "win", "slower foe FIRE with higher Special still cuts")
   RD.clear(battle)
 
   local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
@@ -1705,6 +1980,24 @@ function tests.fire_clashes_with_an_incoming_special()
   })
   truthy(not React.canFireNow(field, ember),
     "FIRE stays off when they are not two tiles out")
+
+  React.bind({
+    isFieldBattle = function() return true end,
+    playerStatusLocked = function() return false end,
+    listFireNowMoves = function() return {} end,
+    listCheckNowMoves = function()
+      return { { moveId = "TACKLE", name = "TACKLE", checkNow = true,
+        moveInst = { id = "TACKLE" } } }
+    end,
+    listCloudNowMoves = function() return {} end,
+    isRangedCounter = function() return false end,
+    isMeleeAttack = function() return true end,
+    chargeWindowOpen = function() return true end,
+    fireRangeOpen = function() return true end,
+  })
+  truthy(not React.canFireNow(field, {
+    id = "QUICK_ATTACK", power = 40, category = "physical", type = "NORMAL",
+  }), "FIRE stays off when the pool has no projectile special")
 
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -3522,6 +3815,30 @@ function tests.ranged_counter_skips_contact_punches()
   truthy(not Cues.isRangedCounter({
     moveId = "FIRE_PUNCH", category = "special", moveType = "FIRE",
   }, Projectiles), "fire punch stays a melee poke")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "EMBER", category = "special", moveType = "FIRE",
+  }), "Ember is a FIRE projectile")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "WATER_GUN", category = "special", moveType = "WATER",
+  }), "Water Gun is a FIRE projectile")
+  truthy(Projectiles.isFireNowShot({
+    moveId = "SWIFT", category = "physical", moveType = "NORMAL",
+  }), "Swift still flies as FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "FIRE_PUNCH", category = "special", moveType = "FIRE",
+  }), "Fire Punch is not FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "TACKLE", category = "physical", moveType = "NORMAL",
+  }), "Tackle is not FIRE")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "PSYCHIC", category = "special", moveType = "PSYCHIC",
+  }), "Psychic is an aura, not a projectile")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "ABSORB", category = "special", moveType = "GRASS",
+  }), "Absorb is a drain, not a projectile")
+  truthy(not Projectiles.isFireNowShot({
+    moveId = "SMOG", category = "special", moveType = "POISON",
+  }), "Smog is a lane, not FIRE")
 end
 
 function tests.turn_start_clears_close_gap_drift()
@@ -4566,14 +4883,13 @@ function tests.world_space_projectiles()
   local ember = Projectiles.move(session, "player", {
     moveType = "FIRE", moveId = "EMBER",
   })
-  eq(ember.style, "ember", "ember uses bouncing flame tongues")
+  eq(ember.style, "ember", "ember uses a short fireball lob")
   eq(ember.glitz, "flame", "ember paints flame glitz")
   truthy(ember.sx < ember.ex, "ember travels toward the foe")
-  truthy((ember.arc or 0) >= 10, "ember arcs like bouncing fireballs")
+  truthy((ember.arc or 0) >= 8, "ember arcs like tossed fireballs")
   truthy(Projectiles.isTravelFx({
     moveType = "FIRE", moveId = "EMBER",
   }), "ember is a travel FX")
-  truthy(ember.variant, "ember picks a flight pattern")
   local rockThrow = Projectiles.move(session, "player", {
     moveType = "ROCK", moveId = "ROCK_THROW",
   })
@@ -5039,17 +5355,7 @@ function tests.fire_tongues_and_gust_paint()
   ember.age = 0.28
   ember:draw(0, 0)
   truthy(calls.polygon > 0, "ember paints flame-tongue polygons, not red blobs")
-
-  for _, variant in ipairs({ "volley", "hop", "spray", "corkscrew", "pop" }) do
-    calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
-    local shot = Projectiles.move(session, "player", {
-      moveType = "FIRE", moveId = "EMBER",
-    })
-    shot.variant = variant
-    shot.age = 0.28
-    shot:draw(0, 0)
-    truthy(calls.polygon > 0, variant .. " ember paints flame tongues")
-  end
+  truthy(calls.circle > 0, "ember paints a hot fireball core")
 
   calls.polygon, calls.arc, calls.circle, calls.ellipse, calls.line = 0, 0, 0, 0, 0
   local rockThrow = Projectiles.move(session, "player", {
@@ -6801,6 +7107,11 @@ do
   local chunk, err = loadfile(fxFile)
   assert(chunk, err)
   local BattleFx = chunk()
+  BattleFx.bind({
+    isFireNowShot = function(_, opts)
+      return Projectiles.isFireNowShot(opts)
+    end,
+  })
 
   function tests.counter_strike_uses_only_known_moves()
     local battle = {
@@ -6890,6 +7201,32 @@ do
     local shots = BattleFx.listFireNowMoves(battle, battle.player)
     eq(#shots, 1, "only a ranged special with PP is fireable")
     eq(shots[1].moveId, "EMBER", "queued Scratch can still switch to Ember")
+    local checks = BattleFx.listCheckNowMoves(battle, battle.player)
+    eq(#checks, 2, "Scratch and Fire Punch are CHECKs during a charge")
+    local checkIds = {}
+    for i = 1, #checks do
+      checkIds[checks[i].moveId] = true
+    end
+    truthy(checkIds.SCRATCH, "Scratch is listed as a CHECK")
+    truthy(checkIds.FIRE_PUNCH, "Fire Punch stays melee even as a Fire type")
+    eq(checks[1].checkNow or checks[2].checkNow, true, "CHECK rows are tagged")
+
+    battle.player.curMoves = {
+      { id = "SMOG", pp = 20 },
+      { id = "SMOKESCREEN", pp = 20 },
+      { id = "EMBER", pp = 25 },
+    }
+    battle.data.moves.SMOG = {
+      id = "SMOG", power = 20, category = "special", type = "POISON",
+    }
+    battle.data.moves.SMOKESCREEN = {
+      id = "SMOKESCREEN", power = 0, category = "status", type = "NORMAL",
+    }
+    shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "SMOG is not a 2-tile FIRE special")
+    eq(shots[1].moveId, "EMBER", "Ember stays on the FIRE list")
+    local clouds = BattleFx.listCloudNowMoves(battle, battle.player)
+    eq(#clouds, 2, "Smog and Smokescreen seed a lane")
 
     battle.player.curMoves = {
       { id = "SCRATCH", pp = 35 },
@@ -6902,6 +7239,24 @@ do
     shots = BattleFx.listFireNowMoves(battle, battle.player)
     eq(#shots, 1, "Water Gun is a fireable special")
     eq(shots[1].moveId, "WATER_GUN", "Nidorina can FIRE NOW with Water Gun")
+
+    battle.player.curMoves = {
+      { id = "PSYCHIC", pp = 10 },
+      { id = "TACKLE", pp = 35 },
+      { id = "THUNDERBOLT", pp = 15 },
+    }
+    battle.data.moves.PSYCHIC = {
+      id = "PSYCHIC", power = 90, category = "special", type = "PSYCHIC",
+    }
+    battle.data.moves.TACKLE = {
+      id = "TACKLE", power = 35, category = "physical", type = "NORMAL",
+    }
+    battle.data.moves.THUNDERBOLT = {
+      id = "THUNDERBOLT", power = 95, category = "special", type = "ELECTRIC",
+    }
+    shots = BattleFx.listFireNowMoves(battle, battle.player)
+    eq(#shots, 1, "FIRE lists only the projectile")
+    eq(shots[1].moveId, "THUNDERBOLT", "Psychic and Tackle stay off FIRE")
 
     battle.player.curMoves = {
       { id = "PSYCHIC", pp = 10 },
