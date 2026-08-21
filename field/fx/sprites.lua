@@ -2,7 +2,8 @@
 --
 -- Pad battlers prefer this mod's 4-column combat kits
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
--- rows play dodge / brace / physical / special / hit, then idle, then faint. FIELD
+-- rows play dodge / brace / physical / special / hit, then idle, then faint,
+-- then charge / jump / counter / miss / sleep / freeze / confuse / float. FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
 -- fallback. Overworld followers behind the player stay on those packs.
 -- Never load PMD `AnimData.xml` or `*-Anim.png` here — those strips wedge
@@ -179,7 +180,7 @@ local function sheetFromPath(path, frames, walker)
 end
 
 -- Combat kit: 4 columns × N 4-row blocks, 32px cells, 128px wide.
--- Blocks (top → bottom): walk, dodge, brace, physical, special, hit, idle, faint.
+-- Blocks 0–7 stay put so an older 8-block sheet still maps. 8+ append.
 Sprites.KIT_CELL = 32
 Sprites.KIT_COLS = 4
 Sprites.KIT_FACE = { down = 0, left = 1, right = 2, up = 3 }
@@ -189,15 +190,32 @@ Sprites.KIT_BLOCK = {
   walk = 0,
   idle = 6,
   dodge = 1, brace = 2,
-  attack = 3, jump = 3, counter = 3, miss = 3, physical = 3,
-  cast = 4, special = 4,
+  attack = 3, physical = 3,
+  jump = 9, counter = 10, miss = 11,
+  cast = 4, special = 4, shoot = 4,
+  charge = 8,
   hit = 5, selfhit = 5,
   faint = 7,
+  sleep = 12, freeze = 13, confuse = 14,
+  float = 15,
 }
+
+-- Missing extra rows reuse an earlier combat strip instead of walk.
+Sprites.KIT_FALLBACK = {
+  jump = 3, counter = 3, miss = 3,
+  charge = 4,
+  sleep = 6, freeze = 6, confuse = 6,
+  float = 1,
+}
+
+-- Kit faint: four collapse frames, then hold the crumpled pose.
+Sprites.KIT_FAINT_PLAY = 0.60
+Sprites.KIT_FAINT_HOLD = 0.28
 
 local KIT_ANIM_DUR = {
   attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
-  cast = 0.42, brace = 0.40, selfhit = 0.46, faint = 0.80,
+  cast = 0.42, brace = 0.40, selfhit = 0.46,
+  faint = Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD,
 }
 
 function Sprites.kitCandidatePaths(mod, game, species)
@@ -249,16 +267,26 @@ local function kitPackPath(mod, game, species)
   return nil
 end
 
-function Sprites.kitBlockForAnim(anim, blocks)
+function Sprites.kitBlockForAnim(anim, blocks, ent)
   blocks = tonumber(blocks) or 1
   if blocks < 1 then
     blocks = 1
   end
-  local block = Sprites.KIT_BLOCK[anim or "idle"] or 0
-  if block >= blocks then
-    return 0
+  if anim == "dodge" and ent and ent._dodgeStyle == "lift" then
+    local floatB = Sprites.KIT_BLOCK.float
+    if floatB < blocks then
+      return floatB
+    end
   end
-  return block
+  local want = Sprites.KIT_BLOCK[anim or "idle"] or 0
+  if want < blocks then
+    return want
+  end
+  local fallback = Sprites.KIT_FALLBACK[anim]
+  if fallback and fallback < blocks then
+    return fallback
+  end
+  return 0
 end
 
 --- True when this battler has a kit combat strip for `anim` (not walk fallback).
@@ -270,7 +298,30 @@ function Sprites.usesKitPose(ent, anim)
   if want <= 0 then
     return false
   end
-  return Sprites.kitBlockForAnim(anim, ent._kitBlocks or 1) == want
+  return Sprites.kitBlockForAnim(anim, ent._kitBlocks or 1, ent) > 0
+end
+
+function Sprites.kitIdleOverride(ent, moving)
+  if moving or not ent then
+    return nil
+  end
+  local battler = ent._battleBattler
+  local mon = battler and battler.mon
+  local status = mon and mon.status
+  if type(status) == "string" then
+    status = status:upper()
+  end
+  if status == "SLP" then
+    return "sleep"
+  end
+  if status == "FRZ" then
+    return "freeze"
+  end
+  local confused = battler and tonumber(battler.confusedTurns)
+  if confused and confused > 0 then
+    return "confuse"
+  end
+  return nil
 end
 
 function Sprites.kitColForAnim(ent, anim, moving)
@@ -279,7 +330,7 @@ function Sprites.kitColForAnim(ent, anim, moving)
     anim = "walk"
   end
   local blocks = (ent and (ent._kitBlocks or 1)) or 1
-  local block = Sprites.kitBlockForAnim(anim, blocks)
+  local block = Sprites.kitBlockForAnim(anim, blocks, ent)
   if anim == "walk" or (anim == "idle" and block == 0) then
     if moving then
       return math.floor((ent and ent._walkT or 0) * 8) % 4
@@ -287,9 +338,27 @@ function Sprites.kitColForAnim(ent, anim, moving)
     -- Walk cols 0 and 2 are idle; cycle them so standing is not frozen.
     return (math.floor((ent and ent._idleT or 0) / 0.5) % 2) * 2
   end
-  if anim == "idle" then
-    -- PMD Idle is a breathing loop, not a one-shot.
-    return math.floor((ent and ent._idleT or 0) / 0.28) % 4
+  if anim == "idle" or anim == "sleep" then
+    -- PMD Idle / Sleep are breathing loops, not one-shots.
+    local step = (anim == "sleep") and 0.42 or 0.28
+    return math.floor((ent and ent._idleT or 0) / step) % 4
+  end
+  if anim == "freeze" then
+    return 0
+  end
+  if anim == "confuse" then
+    return math.floor((ent and ent._idleT or 0) / 0.18) % 4
+  end
+  if anim == "charge" then
+    return math.floor((ent and ent.animT or 0) / 0.12) % 4
+  end
+  if anim == "faint" then
+    local play = Sprites.KIT_FAINT_PLAY
+    local t = (ent and ent.animT) or 0
+    if t >= play then
+      return 3
+    end
+    return math.min(3, math.floor((t / play) * 4))
   end
   local dur = KIT_ANIM_DUR[anim]
   if anim == "dodge" then
@@ -355,8 +424,29 @@ local function syncKitPose(ent, moving)
   if anim == "idle" and moving then
     anim = "walk"
   end
+  if anim == "idle" then
+    anim = Sprites.kitIdleOverride(ent, moving) or anim
+  end
   local blocks = ent._kitBlocks or (ent.sprite and ent.sprite.kitBlocks) or 1
-  ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks)
+  -- Recall after a kit faint: keep the crumpled cell while they shrink into
+  -- the laser. Do not replay Walk under the bolt.
+  if anim == "recall" and ent._fainting and Sprites.usesKitPose(ent, "faint") then
+    ent._kitBlock = Sprites.kitBlockForAnim("faint", blocks, ent)
+    ent._kitCol = 3
+    local sprite = ent.sprite
+    if sprite and sprite.kit then
+      sprite.kitBlock = ent._kitBlock
+      sprite.kitCol = ent._kitCol
+      local def = sprite.def
+      if type(def) == "table" then
+        local u, v = Sprites.kitCellOrigin(ent, ent.facing)
+        def.kitU, def.kitV = u, v
+        def.kit = true
+      end
+    end
+    return
+  end
+  ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks, ent)
   ent._kitCol = Sprites.kitColForAnim(ent, anim, moving)
   local sprite = ent.sprite
   if sprite and sprite.kit then
@@ -784,6 +874,12 @@ local function tickDodge(self, dt, towardX, towardY)
     -- Sheet carries the pose; keep a small sidestep so it still leaves the line.
     ox = lx * pulse * 8
     oy = ly * pulse * 3
+    if style == "phase" then
+      -- Ghost: dodge art, paler so they read as phasing through.
+      self.drawAlpha = 0.38 + 0.40 * (0.5 + 0.5 * math.sin(t * math.pi * 7))
+    elseif style == "lift" then
+      oy = oy - pulse * 8
+    end
     tickDodgeBits(self, dt)
     if self.animT >= dur then
       self.anim = "idle"
@@ -1709,6 +1805,27 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
       end
+    elseif anim == "charge" then
+      -- Wind-up hold: FIRE NOW overlapping pose, or the gather before Shoot.
+      -- Do not drop back to idle; Shoot (`cast`) replaces this when the shot leaves.
+      self.animT = (self.animT or 0) + dt
+      local tx = (towardX or self.basePx) - self.basePx
+      local ty = (towardY or self.basePy) - self.basePy
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        self.facing = faceFromDelta(tx, ty)
+      end
+      local kit = Sprites.usesKitPose(self, "charge")
+      local pulse = 0.5 + 0.5 * math.sin((self.animT or 0) * 6)
+      if kit then
+        if len > 0.1 then
+          ox = ox + (tx / len) * pulse * 1.5
+          oy = oy + (ty / len) * pulse * 1.5
+        end
+      else
+        oy = oy - pulse * 5
+        self._walkFrame = (math.floor(self.animT * 8) % 2)
+      end
     elseif anim == "counter" then
       -- Rebound into the foe: overlap, hang in the clash, then ease off.
       self.animT = (self.animT or 0) + dt
@@ -1941,14 +2058,14 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "faint" then
-      -- Stagger, then sink. Kit Faint plays the collapse; missing block
-      -- keeps the old shrink-into-the-ground read.
+      -- Stagger, then sink. Kit Faint plays the collapse and holds the last
+      -- crumpled frame. Trainer-owned mons then shrink into the recall laser
+      -- still on that pose. Missing block keeps the old shrink-into-ground.
       local dur = KIT_ANIM_DUR.faint
       local kit = Sprites.usesKitPose(self, "faint")
       self.animT = (self.animT or 0) + dt
       local t = math.min(1, self.animT / dur)
       if kit then
-        oy = oy + t * t * 6
         self.drawScale = 1
       else
         local wobble = 0
@@ -1966,10 +2083,15 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.drawScale = math.max(0.06, 1 - fall)
       end
       if self.animT >= dur then
-        self._faintDone = true
-        self.hidden = true
-        self.drawScale = 0.05
-        self._pendingDetach = true
+        if self._recallAfterFaint then
+          self._recallAfterFaint = nil
+          self:play("recall")
+        else
+          self._faintDone = true
+          self.hidden = true
+          self.drawScale = 0.05
+          self._pendingDetach = true
+        end
       end
     end
 

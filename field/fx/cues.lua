@@ -100,6 +100,18 @@ function H.playAnim(ent, name)
     end
 end
 
+--- FIRE NOW overlapping pose: hold Charge while the shot is on the pad.
+--- Non-kit battlers keep the old short `cast` pulse.
+function H.playChargeHold(session, ent)
+    local Sprites = session and session._deps and session._deps.Sprites
+    if Sprites and type(Sprites.usesKitPose) == "function"
+        and Sprites.usesKitPose(ent, "charge") then
+        H.playAnim(ent, "charge")
+        return
+    end
+    H.playAnim(ent, "cast")
+end
+
 Cues.TOSS_DUR = 1.08
 
 function Cues.isTossMove(opts)

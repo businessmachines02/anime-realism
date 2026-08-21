@@ -5,8 +5,8 @@
 -- faint looks wrong.
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
---   cast                           overlapping FIRE pose (shot is the attack cue)
---   attack                         physicals walk in; specials cast in place
+--   cast                           overlapping FIRE pose (Charge hold; shot is the attack cue)
+--   attack                         physicals walk in; specials Shoot in place
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
@@ -213,7 +213,7 @@ return function(Cues)
         if not ent then
             return false
         end
-        H.playAnim(ent, "cast")
+        H.playChargeHold(session, ent)
         return true
     end)
 
@@ -594,13 +594,21 @@ return function(Cues)
             Projectiles.faint(session, side)
         end
         -- Trainer-owned mons get the red recall laser; wild foes keep the sink.
+        -- A kit Faint strip plays first so the crumple reads, then the laser
+        -- sucks up that pose. No kit → laser shrink only, as before.
         local beamed = false
         if ent.anim ~= "sendout"
             and Projectiles and type(Projectiles.recallBeam) == "function" then
             beamed = Projectiles.recallBeam(session, side, { target = ent }) ~= nil
         end
+        local Sprites = session._deps and session._deps.Sprites
+        local kitFaint = Sprites and type(Sprites.usesKitPose) == "function"
+            and Sprites.usesKitPose(ent, "faint")
         ent._fainting = true
-        if beamed then
+        if beamed and kitFaint then
+            ent._recallAfterFaint = true
+            H.playAnim(ent, "faint")
+        elseif beamed then
             H.playAnim(ent, "recall")
         else
             H.playAnim(ent, "faint")

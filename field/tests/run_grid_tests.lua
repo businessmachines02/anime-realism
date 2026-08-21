@@ -7094,13 +7094,48 @@ function tests.kit_block_uses_combat_rows()
   eq(Sprites.kitBlockForAnim("dodge", 6), 1, "dodge block")
   eq(Sprites.kitBlockForAnim("brace", 6), 2, "brace block")
   eq(Sprites.kitBlockForAnim("attack", 6), 3, "physical block")
-  eq(Sprites.kitBlockForAnim("jump", 6), 3, "jump uses physical")
-  eq(Sprites.kitBlockForAnim("counter", 6), 3, "counter uses physical")
+  eq(Sprites.kitBlockForAnim("jump", 6), 3, "jump uses physical on a short kit")
+  eq(Sprites.kitBlockForAnim("counter", 6), 3, "counter uses physical on a short kit")
+  eq(Sprites.kitBlockForAnim("miss", 6), 3, "miss uses physical on a short kit")
   eq(Sprites.kitBlockForAnim("cast", 6), 4, "special block")
+  eq(Sprites.kitBlockForAnim("charge", 8), 4, "charge uses special until the extra row")
   eq(Sprites.kitBlockForAnim("hit", 6), 5, "hit block")
   eq(Sprites.kitBlockForAnim("selfhit", 6), 5, "recoil uses hit")
   eq(Sprites.kitBlockForAnim("dodge", 1), 0, "missing dodge stays on walk")
   eq(Sprites.kitBlockForAnim("cast", 3), 0, "missing special stays on walk")
+  eq(Sprites.kitBlockForAnim("charge", 16), 8, "charge is the 9th block")
+  eq(Sprites.kitBlockForAnim("jump", 16), 9, "jump is its own row")
+  eq(Sprites.kitBlockForAnim("counter", 16), 10, "counter is its own row")
+  eq(Sprites.kitBlockForAnim("miss", 16), 11, "miss is its own row")
+  eq(Sprites.kitBlockForAnim("sleep", 8), 6, "sleep uses idle on an 8-block kit")
+  eq(Sprites.kitBlockForAnim("sleep", 16), 12, "sleep is its own row")
+  eq(Sprites.kitBlockForAnim("freeze", 16), 13, "freeze is its own row")
+  eq(Sprites.kitBlockForAnim("confuse", 16), 14, "confuse is its own row")
+  eq(Sprites.kitBlockForAnim("float", 16), 15, "float is its own row")
+  eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "lift" }), 15,
+    "flying dodge uses float")
+  eq(Sprites.kitBlockForAnim("dodge", 8, { _dodgeStyle = "lift" }), 1,
+    "flying dodge stays dodge without float")
+  eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "phase" }), 1,
+    "ghost dodge keeps the dodge row")
+end
+
+function tests.kit_idle_override_follows_status()
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "SLP" } },
+  }, false), "sleep", "asleep standing uses sleep")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "SLP" } },
+  }, true), nil, "sleepwalk keeps walk")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "FRZ" } },
+  }, false), "freeze", "frozen standing uses freeze")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { confusedTurns = 3, mon = {} },
+  }, false), "confuse", "confused standing uses confuse")
+  eq(Sprites.kitIdleOverride({
+    _battleBattler = { mon = { status = "PAR" } },
+  }, false), nil, "para stays idle")
 end
 
 function tests.kit_pose_requires_combat_block()
@@ -7112,6 +7147,12 @@ function tests.kit_pose_requires_combat_block()
     "walk-only kit keeps old hop")
   truthy(not Sprites.usesKitPose({ _kitBlocks = 6 }, "dodge"),
     "non-kit sheet keeps old hop")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 6 }, "jump"),
+    "short kit jump still uses physical")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "charge"),
+    "tall kit plays charge")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "sleep"),
+    "tall kit plays sleep")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 8 }, "faint"),
     "8-block kit plays faint")
   truthy(not Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 7 }, "faint"),
@@ -7141,6 +7182,11 @@ function tests.kit_dodge_keeps_slide_without_squash()
   player:play("attack")
   Cast.tick(session, 0.16)
   eq(player.drawScale, 1, "kit punch does not scale up")
+  player._kitBlocks = 16
+  player:play("dodge")
+  player._dodgeStyle = "phase"
+  Cast.tick(session, 1 / 60)
+  truthy(player.drawAlpha < 1, "ghost kit dodge goes paler")
 end
 
 function tests.kit_col_walk_and_combat()
@@ -7156,6 +7202,83 @@ function tests.kit_col_walk_and_combat()
   eq(Sprites.kitColForAnim({ animT = 0.4 }, "cast", false), 3, "special settle")
   eq(Sprites.kitColForAnim({ animT = 0.7, _kitBlocks = 8 }, "faint", false), 3,
     "faint settles on the last column")
+  eq(Sprites.kitColForAnim({ animT = 0.30, _kitBlocks = 8 }, "faint", false), 2,
+    "faint collapse uses mid frames before the hold")
+  eq(Sprites.kitColForAnim({ animT = 0.25 }, "charge", false), 2,
+    "charge loops while held")
+  eq(Sprites.kitColForAnim({ _idleT = 0 }, "freeze", false), 0,
+    "freeze holds the first frame")
+  eq(Sprites.kitColForAnim({ _idleT = 0.9 }, "sleep", false), 2,
+    "sleep loops slower than idle")
+end
+
+function tests.kit_charge_hold_until_shoot()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  player:play("charge")
+  Cast.tick(session, 0.50)
+  eq(player.anim, "charge", "charge does not drop to idle")
+  player:play("cast")
+  eq(player.anim, "cast", "Shoot plays when the shot leaves")
+end
+
+function tests.cast_cue_holds_charge_on_kit()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  session._deps = { Sprites = Sprites }
+  truthy(Cues.apply(session, "player", "cast", Grid, nil, battle, {}),
+    "FIRE overlapping pose plays")
+  eq(player.anim, "charge", "kit FIRE pose holds Charge")
+end
+
+function tests.kit_faint_then_recall_keeps_crumple()
+  local grid, plan = sampleGrid()
+  local pHome = grid.home.player
+  grid.home.playerTrainer = { u = pHome.u - 1, v = pHome.v }
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid, live = true, _battle = battle }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitBlocks = 16
+  player.anim = "idle"
+  player._sendoutStarted = nil
+  player.px, player.py = 16, 32
+  session._deps = { Sprites = Sprites, Projectiles = Projectiles }
+  truthy(Cues.apply(session, "player", "faint", Grid, nil, battle, {}),
+    "kit faint cue")
+  eq(player.anim, "faint", "trainer faint plays the collapse first")
+  truthy(player._recallAfterFaint, "laser waits for the crumple")
+  Cast.tick(session, Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD + 0.02)
+  eq(player.anim, "recall", "crumple hands off to the recall laser")
+  eq(player._kitBlock, 7, "recall still shows the faint block")
+  eq(player._kitCol, 3, "recall holds the last crumpled frame")
+  truthy(not player.hidden, "sprite stays visible while the laser sucks them up")
 end
 
 function tests.kit_cell_origin_uses_block_facing_and_col()

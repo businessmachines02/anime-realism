@@ -28,7 +28,8 @@ DEX_DIR = re.compile(r"^\d{3,4}$")
 
 # Pad pose → PMD anim names. First sheet with 4+ directions wins; 1-dir
 # strips (Cringe, LeapForth) are last-resort so facings stay distinct.
-# Idle then Faint sit LAST so combat rows stay at the same Y.
+# Idle then Faint sit LAST so combat rows stay at the same Y. Extra
+# poses APPEND after Faint so an 8-block kit still maps 0–7.
 POSES = [
     ("walk", ("Walk", "Idle")),
     ("dodge", ("Hop", "Rotate", "LeapForth", "Walk")),
@@ -39,6 +40,20 @@ POSES = [
     ("idle", ("Idle", "Walk")),
     ("faint", ("Faint", "Sleep", "EventSleep", "Pain", "Hurt")),
 ]
+
+# prefer_named, fallback pose if the strip is missing (keeps block indices).
+EXTRA_POSES = [
+    ("charge", ("Charge", "SpAttack", "Shoot"), True, "special"),
+    ("jump", ("LeapForth", "Hop", "Attack"), True, "physical"),
+    ("counter", ("Strike", "Attack", "Swing"), True, "physical"),
+    ("miss", ("Trip", "Tumble", "LostBalance", "Hurt"), True, "physical"),
+    ("sleep", ("Sleep", "EventSleep", "Laying"), True, "idle"),
+    ("freeze", ("Sit", "Idle"), True, "idle"),
+    ("confuse", ("Rotate", "Tumble", "LostBalance"), True, "idle"),
+    ("float", ("Float", "Hop", "Idle"), True, "dodge"),
+]
+
+PREFER_NAMED = {"idle", "faint"}
 
 # Kit rows: front, left, right, back.
 # PMD 8-dir rows: down, down-right, right, up-right, up, up-left, left, down-left.
@@ -202,25 +217,11 @@ def slice_frame(sheet: Image.Image, col: int, row: int, fw: int, fh: int) -> Ima
     return sheet.crop((x, y, x + fw, y + fh))
 
 
-def bake_dir(pack_dir: Path, out_path: Path) -> bool:
-    xml_path = pack_dir / "AnimData.xml"
-    if not xml_path.is_file():
-        return False
-    by_name = parse_pack(xml_path)
-    blocks: list[Image.Image] = []
-    used = 0
-    for pose, names in POSES:
-        anim, dirs = pose_anim(
-            pack_dir, by_name, names,
-            prefer_named=(pose in ("idle", "faint")))
-        if not anim:
-            if pose == "walk":
-                sys.stderr.write(f"{pack_dir}: no Walk/Idle PNG\n")
-                return False
-            if pose == "idle" or pose == "faint":
-                continue
-            break
-        sheet = Image.open(pack_dir / f"{anim['source']}-Anim.png")
+def bake_block(pack_dir: Path, anim: dict, dirs: int):
+    png = pack_dir / f"{anim['source']}-Anim.png"
+    if not png.is_file():
+        return None
+    with Image.open(png) as sheet:
         fw, fh = anim["width"], anim["height"]
         cols = max(1, sheet.width // fw)
         dirs = max(1, sheet.height // fh)
@@ -233,11 +234,57 @@ def bake_dir(pack_dir: Path, out_path: Path) -> bool:
                 fi = min(fi, cols - 1)
                 cell = fit_cell(slice_frame(sheet, fi, row, fw, fh))
                 block.paste(cell, (col * CELL, face * CELL), cell)
+        return block, dirs, cols, idxs, fw, fh
+
+
+def bake_dir(pack_dir: Path, out_path: Path) -> bool:
+    xml_path = pack_dir / "AnimData.xml"
+    if not xml_path.is_file():
+        return False
+    by_name = parse_pack(xml_path)
+    blocks: list[Image.Image] = []
+    by_pose: dict[str, Image.Image] = {}
+    used = 0
+    for pose, names in POSES:
+        anim, dirs = pose_anim(
+            pack_dir, by_name, names,
+            prefer_named=(pose in PREFER_NAMED))
+        if not anim:
+            if pose == "walk":
+                sys.stderr.write(f"{pack_dir}: no Walk/Idle PNG\n")
+                return False
+            if pose == "idle" or pose == "faint":
+                continue
+            break
+        baked = bake_block(pack_dir, anim, dirs)
+        if not baked:
+            if pose == "idle" or pose == "faint":
+                continue
+            break
+        block, dirs, cols, idxs, fw, fh = baked
         blocks.append(block)
+        by_pose[pose] = block
         used += 1
         print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
     if used < 1:
         return False
+    # Only append extras when Idle+Faint already occupy blocks 6–7.
+    if used >= 8:
+        for pose, names, prefer, fallback in EXTRA_POSES:
+            anim, dirs = pose_anim(pack_dir, by_name, names, prefer_named=prefer)
+            baked = bake_block(pack_dir, anim, dirs) if anim else None
+            if baked:
+                block, dirs, cols, idxs, fw, fh = baked
+                print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
+            else:
+                src = by_pose.get(fallback) or by_pose.get("walk")
+                if not src:
+                    break
+                block = src.copy()
+                print(f"  {pose}: copy {fallback}")
+            blocks.append(block)
+            by_pose[pose] = block
+            used += 1
     kit = Image.new("RGBA", (CELL * COLS, CELL * BLOCK_ROWS * used), (0, 0, 0, 0))
     for i, block in enumerate(blocks):
         kit.paste(block, (0, i * CELL * BLOCK_ROWS), block)

@@ -51,11 +51,20 @@ Then copy the `*-Anim.png` files from that same `sprite/0005/` folder.
 | Pad | PMD animation (first hit that exists) |
 |---|---|
 | Idle / walk | Idle, Walk |
-| Dodge | Hop, LeapForth, Rotate |
+| Dodge | Hop, Rotate, LeapForth |
 | Brace | Cringe, LostBalance, Hurt |
 | Physical | Attack, Strike, Swing, Kick |
-| Special | Shoot, Charge, SpAttack |
-| Hit | Hurt, Pain, Cringe |
+| Special (Shoot) | Shoot, Charge, SpAttack |
+| Hit | Pain, Hurt, Cringe |
+| Faint | Faint, Sleep, EventSleep |
+| Charge | Charge, SpAttack, Shoot |
+| Jump | LeapForth, Hop, Attack |
+| Counter | Strike, Attack, Swing |
+| Miss | Trip, Tumble, LostBalance |
+| Sleep | Sleep, EventSleep, Laying |
+| Freeze | Sit, Idle |
+| Confuse | Rotate, Tumble, LostBalance |
+| Float | Float, Hop, Idle |
 
 Eight-direction sheets use south / east / north / west (skip diagonals). Frame timing comes from `AnimData.xml` (60 ticks per second).
 
