@@ -182,8 +182,9 @@ local function sheetFromPath(path, frames, walker)
   return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
 end
 
--- Combat kit: N columns × M 4-row blocks, 32px cells.
--- Hand-drawn kits are 4 columns (128px). Baked PMD kits are wider.
+-- Combat kit: N columns × M face-rows per block (4 cardinals, or 8
+-- with diagonals). Hand-drawn kits are 4 columns (128px). Baked PMD
+-- kits are wider. Sidecar `kit cell cols 8` marks an 8-face sheet.
 -- Blocks 0–7 stay put so an older 8-block sheet still maps. 8+ append.
 Sprites.KIT_CELL = 32
 Sprites.KIT_CELL_MAX = 64
@@ -197,7 +198,17 @@ Sprites.KIT_IDLE_TICK_MIN = 10
 Sprites.KIT_IDLE_TICK_MAX = 16
 Sprites.KIT_SLEEP_TICK_MIN = 14
 Sprites.KIT_SLEEP_TICK_MAX = 20
-Sprites.KIT_FACE = { down = 0, left = 1, right = 2, up = 3 }
+Sprites.KIT_FACE = {
+  down = 0, left = 1, right = 2, up = 3,
+  ["down-right"] = 4, ["down-left"] = 5,
+  ["up-right"] = 6, ["up-left"] = 7,
+}
+Sprites.KIT_FACES = 4
+Sprites.KIT_FACES_MAX = 8
+Sprites.KIT_FACE_SNAP = {
+  ["down-right"] = "right", ["up-right"] = "right",
+  ["down-left"] = "left", ["up-left"] = "left",
+}
 -- National Dex when game.data is missing (borrowed move tells).
 Sprites.SPECIES_DEX = { DIGLETT = 50, DUGTRIO = 51 }
 -- Shared move tells: play another species' baked kit, never raw PMD.
@@ -261,7 +272,9 @@ function Sprites.parseKitMeta(text)
     return nil
   end
   local poses = {}
+  local poseOrder = {}
   local cell, cols = Sprites.KIT_CELL, Sprites.KIT_COLS
+  local faces = Sprites.KIT_FACES or 4
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
     line = line:gsub("^%s+", ""):gsub("%s+$", "")
     if line ~= "" and not line:match("^#") then
@@ -273,6 +286,9 @@ function Sprites.parseKitMeta(text)
       if kind == "kit" then
         cell = tonumber(words[2]) or cell
         cols = tonumber(words[3]) or cols
+        faces = tonumber(words[4]) or faces
+      elseif kind == "faces" then
+        faces = tonumber(words[2]) or faces
       elseif kind then
         local ticks = {}
         for i = 2, #words do
@@ -280,11 +296,78 @@ function Sprites.parseKitMeta(text)
         end
         if #ticks > 0 then
           poses[kind] = { frames = #ticks, ticks = ticks }
+          poseOrder[#poseOrder + 1] = kind
         end
       end
     end
   end
-  return { cell = cell, cols = cols, poses = poses }
+  if faces ~= 8 then
+    faces = 4
+  end
+  return { cell = cell, cols = cols, faces = faces, poses = poses, poseOrder = poseOrder }
+end
+
+function Sprites.countKitPoses(meta)
+  local n = 0
+  local poses = meta and meta.poses
+  if type(poses) == "table" then
+    for _ in pairs(poses) do
+      n = n + 1
+    end
+  end
+  if n < 1 and type(meta and meta.poseOrder) == "table" then
+    n = #meta.poseOrder
+  end
+  return n
+end
+
+--- Cell size from sidecar, or a divisor that tiles the PNG (rebake 40/45/…).
+function Sprites.inferKitCell(iw, ih, meta)
+  local tagged = meta and tonumber(meta.cell)
+  iw = tonumber(iw) or 0
+  ih = tonumber(ih) or 0
+  local maxCell = Sprites.KIT_CELL_MAX or 64
+  if tagged and tagged >= 16 and tagged <= maxCell
+      and (iw <= 0 or iw % tagged == 0)
+      and (ih <= 0 or ih % tagged == 0) then
+    return tagged
+  end
+  for try = maxCell, 16, -1 do
+    if iw > 0 and ih > 0 and iw % try == 0 and ih % try == 0 then
+      local cols = iw / try
+      local rows = ih / try
+      if cols >= 4 and rows >= 4 and rows % 4 == 0 then
+        return try
+      end
+    end
+  end
+  return tagged or Sprites.KIT_CELL
+end
+
+--- 8-face rebakes are 8 rows/pose. A stale faces=4 sidecar must not win.
+function Sprites.kitFacesFromSheet(iw, ih, cell, meta)
+  cell = tonumber(cell) or (meta and tonumber(meta.cell))
+  ih = tonumber(ih)
+  local nposes = Sprites.countKitPoses(meta)
+  if ih and cell and cell > 0 and nposes > 0 then
+    local per = (ih / cell) / nposes
+    if per >= 7.5 then
+      return 8
+    end
+    if per >= 3.5 then
+      return 4
+    end
+  end
+  if meta and tonumber(meta.faces) == 8 then
+    return 8
+  end
+  if ih and cell and cell > 0 then
+    local rows = ih / cell
+    if rows % 8 == 0 and rows >= 80 then
+      return 8
+    end
+  end
+  return 4
 end
 
 local function readTextFile(path)
@@ -395,10 +478,11 @@ local function pixelAlpha(data, x, y)
   return a
 end
 
-function Sprites.kitColsFromImage(path, img, blocks, cols, cell)
+function Sprites.kitColsFromImage(path, img, blocks, cols, cell, faces)
   cell = cell or Sprites.KIT_CELL
   blocks = math.max(1, math.floor(tonumber(blocks) or 1))
   cols = math.max(1, math.floor(tonumber(cols) or 1))
+  faces = (tonumber(faces) == 8) and 8 or 4
   local data
   if love and love.image and type(love.image.newImageData) == "function" and path then
     local ok, got = pcall(love.image.newImageData, path)
@@ -422,10 +506,10 @@ function Sprites.kitColsFromImage(path, img, blocks, cols, cell)
     for col = 0, cols - 1 do
       local found = false
       local x0 = col * cell
-      local y0 = b * 4 * cell
+      local y0 = b * faces * cell
       if x0 < iw and y0 < ih then
         local x1 = math.min(x0 + cell - 1, iw - 1)
-        local y1 = math.min(y0 + 4 * cell - 1, ih - 1)
+        local y1 = math.min(y0 + faces * cell - 1, ih - 1)
         for y = y0, y1, 2 do
           for x = x0, x1, 2 do
             if pixelAlpha(data, x, y) > 0.04 then
@@ -636,6 +720,7 @@ function Sprites.kitSheetFromPath(path)
     frameHeight = cell,
     kit = true,
     kitMeta = meta,
+    faces = (meta and tonumber(meta.faces)) or Sprites.KIT_FACES,
   }
 end
 
@@ -663,10 +748,16 @@ function Sprites.kitBlockForAnim(anim, blocks, ent)
   end
   local name = (Sprites.KIT_POSE_NAME and Sprites.KIT_POSE_NAME[anim]) or anim
   local mapped = ent and ent._kitPoseBlock
-  if type(mapped) == "table" then
+  local hasMap = type(mapped) == "table" and next(mapped) ~= nil
+  if hasMap then
     local got = mapped[name] or mapped[anim]
     if got ~= nil and got < blocks then
       return got
+    end
+    -- Sidecar has poses but not this one. Do not use a hardcoded index:
+    -- a skipped Idle would sample Faint (block 6 on the PNG).
+    if (anim == "idle" or name == "idle") and mapped.idle == nil then
+      return 0
     end
   end
   local want = Sprites.KIT_BLOCK[anim or "idle"] or 0
@@ -881,10 +972,55 @@ function Sprites.kitCellSize(ent)
   return Sprites.KIT_CELL
 end
 
+function Sprites.kitFaceRows(ent)
+  local tagged = tonumber(ent and ent._kitFaces)
+  if not tagged and ent and ent.sprite then
+    tagged = tonumber(ent.sprite.kitFaces)
+    if not tagged and type(ent.sprite.def) == "table" then
+      tagged = tonumber(ent.sprite.def.kitFaces)
+    end
+  end
+  local img = ent and ent.sprite and (ent.sprite.image
+      or (type(ent.sprite.def) == "table" and ent.sprite.def.kitImage))
+  local ih = img and img.getHeight and img:getHeight()
+  local cell = Sprites.kitCellSize(ent)
+  local nposes = 0
+  if type(ent and ent._kitPoseBlock) == "table" then
+    for _ in pairs(ent._kitPoseBlock) do
+      nposes = nposes + 1
+    end
+  end
+  local meta = { faces = tagged, poses = {} }
+  for i = 1, nposes do
+    meta.poses[i] = true
+  end
+  return Sprites.kitFacesFromSheet(nil, ih, cell, meta)
+end
+
+function Sprites.cardinalFacing(facing)
+  if facing == "up" or facing == "down" or facing == "left" or facing == "right" then
+    return facing
+  end
+  local snap = Sprites.KIT_FACE_SNAP and Sprites.KIT_FACE_SNAP[facing]
+  if snap then
+    return snap
+  end
+  return "down"
+end
+
+function Sprites.kitFaceIndex(ent, facing)
+  facing = facing or (ent and ent.facing) or "down"
+  if Sprites.kitFaceRows(ent) < 8 then
+    facing = Sprites.cardinalFacing(facing)
+  end
+  return Sprites.KIT_FACE[facing] or Sprites.KIT_FACE[Sprites.cardinalFacing(facing)] or 0
+end
+
 function Sprites.kitCellOrigin(ent, facing)
   local cell = Sprites.kitCellSize(ent)
-  local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
-  local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
+  local faces = Sprites.kitFaceRows(ent)
+  local face = Sprites.kitFaceIndex(ent, facing)
+  local row = (tonumber(ent and ent._kitBlock) or 0) * faces + face
   local col = tonumber(ent and ent._kitCol) or 0
   return col * cell, row * cell
 end
@@ -893,8 +1029,9 @@ end
 -- so hops and lunges don't lift the voxel shadow with the body.
 function Sprites.kitShadowOrigin(ent, facing)
   local cell = Sprites.kitCellSize(ent)
-  local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
-  local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
+  local faces = Sprites.kitFaceRows(ent)
+  local face = Sprites.kitFaceIndex(ent, facing)
+  local row = (tonumber(ent and ent._kitBlock) or 0) * faces + face
   return 0, row * cell
 end
 
@@ -913,13 +1050,11 @@ end
 --- left; kits already have a right row, so that extra mirror makes both
 --- battlers look the same way.
 function Sprites.billboardFacing(facing, kit)
-  if facing ~= "up" and facing ~= "down" and facing ~= "left" and facing ~= "right" then
-    facing = "down"
-  end
-  if kit and facing == "right" then
+  local card = Sprites.cardinalFacing(facing)
+  if kit and (card == "right" or card == "left") then
     return "left"
   end
-  return facing
+  return card
 end
 
 local function stampOwnKit(ent, sprite)
@@ -965,6 +1100,7 @@ local function syncKitPose(ent, moving)
       _kitColsByBlock = borrow.kitColsByBlock,
       _kitTicksByBlock = borrow.kitTicksByBlock,
       _kitPoseBlock = borrow.kitPoseBlock,
+      _kitFaces = borrow.kitFaces,
       sprite = borrow.sprite,
     }
     ent._kitBlock = Sprites.kitBlockForAnim(spec.anim, borrow.kitBlocks or 1, actor)
@@ -1281,11 +1417,28 @@ local function voxelFacing(facing)
   return "down"
 end
 
-local function faceFromDelta(dx, dy)
-  if math.abs(dx or 0) >= math.abs(dy or 0) then
-    return (dx or 0) >= 0 and "right" or "left"
+-- 8-way: diagonal when both axes are at least ~22.5° off a cardinal.
+function Sprites.faceFromDelta(dx, dy)
+  dx = tonumber(dx) or 0
+  dy = tonumber(dy) or 0
+  if dx == 0 and dy == 0 then
+    return "down"
   end
-  return (dy or 0) >= 0 and "down" or "up"
+  local ax, ay = math.abs(dx), math.abs(dy)
+  if ay < ax * 0.41 then
+    return dx >= 0 and "right" or "left"
+  end
+  if ax < ay * 0.41 then
+    return dy >= 0 and "down" or "up"
+  end
+  if dy >= 0 then
+    return dx >= 0 and "down-right" or "down-left"
+  end
+  return dx >= 0 and "up-right" or "up-left"
+end
+
+local function faceFromDelta(dx, dy)
+  return Sprites.faceFromDelta(dx, dy)
 end
 
 -- Seismic Toss: both mons grab, shoot high, hang, then crash. Keep this
@@ -1795,7 +1948,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     self.cellY = finiteCoord(self.cellY, math.floor(self.py / 16))
     self.cellX = math.floor(self.cellX + 0.5)
     self.cellY = math.floor(self.cellY + 0.5)
-    self.facing = voxelFacing(self.facing)
+    if not (sprite and sprite.kit) then
+      self.facing = voxelFacing(self.facing)
+    end
     -- Wilds may wrap SpriteBillboards after we do; re-assert kit UVs each pose.
     pcall(Sprites.installKitBillboards, self._spriteMod)
     if sprite and sprite.kit then
@@ -2787,7 +2942,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
 
     self.px = finiteCoord(self.basePx + ox, finiteCoord(self.basePx, 0))
     self.py = finiteCoord(self.basePy + oy, finiteCoord(self.basePy, 0))
-    self.facing = voxelFacing(self.facing)
+    if not (self.sprite and self.sprite.kit) then
+      self.facing = voxelFacing(self.facing)
+    end
     if self._walkFrame ~= 1 then
       self._walkFrame = 0
     end
@@ -2831,11 +2988,19 @@ local function applyVisual(ent, visual)
   ent._kitColsByBlock = visual.kitColsByBlock
   ent._kitTicksByBlock = visual.kitTicksByBlock
   ent._kitPoseBlock = visual.kitPoseBlock
+  ent._kitFaces = visual.kitFaces
+      or (visual.sprite and visual.sprite.kitFaces)
+      or (visual.sprite and visual.sprite.def and visual.sprite.def.kitFaces)
+      or Sprites.KIT_FACES
   ent._kitCell = visual.kitCell or (visual.sprite and visual.sprite.kitCell)
       or Sprites.KIT_CELL
   if visual.sprite and visual.sprite.kit then
     visual.sprite.kitBlock = ent._kitBlock or 0
     visual.sprite.kitCol = ent._kitCol or 0
+    visual.sprite.kitFaces = ent._kitFaces
+    if type(visual.sprite.def) == "table" then
+      visual.sprite.def.kitFaces = ent._kitFaces
+    end
   end
 end
 
@@ -2846,25 +3011,26 @@ local function kitToVisual(sheet, img, side)
   if not sheet.kitMeta and sheet.image then
     sheet.kitMeta = Sprites.kitMetaFromPath(sheet.image)
   end
-  local cell = (sheet.kitMeta and tonumber(sheet.kitMeta.cell)) or Sprites.KIT_CELL
   local iw, ih = img:getDimensions()
+  local cell = Sprites.inferKitCell(iw, ih, sheet.kitMeta)
+  local faces = Sprites.kitFacesFromSheet(iw, ih, cell, sheet.kitMeta)
   if iw < cell or ih < cell then
     return nil
   end
   local rows = math.max(1, math.floor(ih / cell))
   local cols = math.max(1, math.floor(iw / cell))
-  local blocks = math.max(1, math.floor(rows / 4))
+  local blocks = math.max(1, math.floor(rows / faces))
   local colsByBlock, ticksByBlock, poseBlock = Sprites.kitMetaBlockTables(sheet.kitMeta)
   local kitCols = (sheet.kitMeta and tonumber(sheet.kitMeta.cols)) or cols
   if next(colsByBlock) == nil and cols > Sprites.KIT_COLS then
     -- Sidecar missing: count opaque cells so short poses do not play pad.
-    local scanned = Sprites.kitColsFromImage(sheet.image, img, blocks, cols, cell)
+    local scanned = Sprites.kitColsFromImage(sheet.image, img, blocks, cols, cell, faces)
     if scanned then
       colsByBlock = scanned
     end
   end
   local quads = {}
-  for row = 0, blocks * 4 - 1 do
+  for row = 0, blocks * faces - 1 do
     quads[row] = {}
     for col = 0, cols - 1 do
       quads[row][col] = love.graphics.newQuad(
@@ -2874,7 +3040,7 @@ local function kitToVisual(sheet, img, side)
   local def = {
     id = "ar_fbv_kit_" .. tostring(side) .. "_" .. tostring(sheet.surface or "land"),
     image = sheet.image,
-    frames = blocks * 4,
+    frames = blocks * faces,
     walker = true,
     trueColor = true,
     frameWidth = cell,
@@ -2887,6 +3053,7 @@ local function kitToVisual(sheet, img, side)
     kitShadowU = 0,
     kitShadowV = 0,
     kitImage = img,
+    kitFaces = faces,
   }
   local sprite = {
     def = def,
@@ -2899,6 +3066,7 @@ local function kitToVisual(sheet, img, side)
     kitColsByBlock = colsByBlock,
     kitTicksByBlock = ticksByBlock,
     kitPoseBlock = poseBlock,
+    kitFaces = faces,
     image = img,
     resolveImage = function()
       return img
@@ -2908,8 +3076,8 @@ local function kitToVisual(sheet, img, side)
   local function cellAt(facing, block, col)
     block = math.max(0, math.min(blocks - 1, tonumber(block) or 0))
     col = math.max(0, math.min(cols - 1, tonumber(col) or 0))
-    local face = Sprites.KIT_FACE[facing or "down"] or 0
-    local row = block * 4 + face
+    local face = Sprites.kitFaceIndex({ _kitFaces = faces }, facing)
+    local row = block * faces + face
     return row, col, quads[row] and quads[row][col]
   end
 
@@ -2982,6 +3150,7 @@ local function kitToVisual(sheet, img, side)
     kitColsByBlock = colsByBlock,
     kitTicksByBlock = ticksByBlock,
     kitPoseBlock = poseBlock,
+    kitFaces = faces,
   }
 end
 
@@ -2993,10 +3162,10 @@ local function isKitSheet(sheet, img)
     return false
   end
   local iw, ih = img:getDimensions()
-  local cell = (sheet and sheet.kitMeta and tonumber(sheet.kitMeta.cell))
-      or Sprites.KIT_CELL
-  return iw >= cell * 4 and ih >= cell * 4
-      and (iw % cell) == 0 and (ih % (cell * 4)) == 0
+  local cell = Sprites.inferKitCell(iw, ih, sheet and sheet.kitMeta)
+  local faces = Sprites.kitFacesFromSheet(iw, ih, cell, sheet and sheet.kitMeta)
+  return iw >= cell * 4 and ih >= cell * faces
+      and (iw % cell) == 0 and (ih % (cell * faces)) == 0
 end
 
 local function sheetToVisual(sheet, side)
@@ -3122,12 +3291,14 @@ function Sprites.borrowKitVisual(mod, game, species)
       kitColsByBlock = colsByBlock,
       kitTicksByBlock = ticksByBlock,
       kitPoseBlock = poseBlock,
+      kitFaces = (meta and tonumber(meta.faces)) or Sprites.KIT_FACES,
       sprite = {
         kit = true,
         image = nil,
         def = { kit = true, image = sheet.image },
         kitBlocks = blocks,
         kitCell = (meta and tonumber(meta.cell)) or Sprites.KIT_CELL,
+        kitFaces = (meta and tonumber(meta.faces)) or Sprites.KIT_FACES,
       },
     }
   end

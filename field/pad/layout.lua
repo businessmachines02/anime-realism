@@ -95,6 +95,18 @@ function Layout.opposite(facing)
     if facing == "right" then
         return "left"
     end
+    if facing == "up-left" then
+        return "down-right"
+    end
+    if facing == "up-right" then
+        return "down-left"
+    end
+    if facing == "down-left" then
+        return "up-right"
+    end
+    if facing == "down-right" then
+        return "up-left"
+    end
     return "down"
 end
 

@@ -2277,6 +2277,49 @@ function tests.asleep_mons_sleepwalk()
   Lifecycle._testUnbind(battle)
 end
 
+function tests.idle_mons_face_each_other_diagonally()
+  local grid, plan = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v, anim = "idle",
+    facing = "right", _kitSheet = true,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v + 2, anim = "idle",
+    facing = "left", _kitSheet = true,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {
+    game = { overworld = { camera = { x = 0, y = 0 } } },
+    animPlaying = false,
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    plan = plan,
+    midX = plan.midX,
+    midY = plan.midY,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = {
+      Grid = Grid,
+      Sprites = Sprites,
+      Cast = { tick = function() end },
+      Cues = { pumpCurrent = function() end, tickReturns = function() end },
+      Anims = { cache = function() end },
+      Projectiles = { tick = function() end },
+    },
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.tick(battle, 0.20, session._deps)
+  eq(player.facing, "down-right", "idle player looks diagonally at an offset foe")
+  eq(enemy.facing, "up-left", "idle foe looks back along the same diagonal")
+  Lifecycle._testUnbind(battle)
+end
+
 function tests.trainers_park_on_the_fight_sideline()
   local grid, plan = sampleGrid()
   local pHome = grid.home.player
@@ -7440,6 +7483,74 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(u, 38, "large-mon kits use the sidecar cell size")
   eq(Sprites.kitCellSize({ _kitCell = 48 }), 48,
     "hop-overflow cells stay in range")
+  local eight = { _kitBlock = 0, _kitCol = 0, _kitFaces = 8 }
+  u, v = Sprites.kitCellOrigin(eight, "down-right")
+  eq(u, 0, "diagonal origin x")
+  eq(v, 128, "walk down-right is row 4 on an 8-face kit")
+  u, v = Sprites.kitCellOrigin({
+    _kitBlock = 3, _kitCol = 1, _kitFaces = 8, facing = "left",
+  }, "left")
+  eq(v, 800, "8-face physical left is row 25")
+  eq(Sprites.kitFaceIndex({ _kitFaces = 4 }, "down-right"), 2,
+    "4-face kits snap a diagonal to the side")
+end
+
+function tests.kit_idle_stays_on_idle_block_when_8face()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "kit 45 16 8",
+    "walk 8 10 8 10",
+    "dodge 2 2",
+    "brace 2 8",
+    "physical 4 2",
+    "special 2 8",
+    "hit 2 8",
+    "idle 40 2 2 2",
+    "faint 30 35",
+  }, "\n"))
+  eq(meta.faces, 8, "sidecar stores 8 faces")
+  eq(#meta.poses.idle.ticks, 4, "idle keeps every breathe column")
+  local colsBy, ticksBy, poseBlock = Sprites.kitMetaBlockTables(meta)
+  eq(poseBlock.idle, 6, "idle stays the 7th block")
+  eq(poseBlock.faint, 7, "faint stays after idle")
+  eq(colsBy[6], 4, "idle frame count is the sidecar row")
+  eq(#ticksBy[7], 2, "faint ticks do not replace idle")
+  local ent = {
+    _kitBlock = 6, _kitCol = 0, _kitFaces = 8, _kitCell = 45,
+    _kitBlocks = 18, _kitPoseBlock = poseBlock,
+    _kitColsByBlock = colsBy, _kitTicksByBlock = ticksBy,
+    _idleT = 0,
+  }
+  eq(Sprites.kitBlockForAnim("idle", 18, ent), 6, "standing uses idle")
+  eq(Sprites.kitFrameCount(ent, "idle"), 4, "all idle columns play")
+  local _, v = Sprites.kitCellOrigin(ent, "down")
+  eq(v, 6 * 8 * 45, "idle down is block 6 × 8 rows")
+  _, v = Sprites.kitCellOrigin(ent, "down-right")
+  eq(v, (6 * 8 + 4) * 45, "idle diagonal stays inside idle")
+  _, v = Sprites.kitCellOrigin({
+    _kitBlock = 7, _kitCol = 0, _kitFaces = 8, _kitCell = 45,
+  }, "down")
+  eq(v, 7 * 8 * 45, "faint is the next 8-row block")
+  eq(Sprites.kitFacesFromSheet(720, 6480, 45, meta), 8,
+    "18 poses × 144 rows is 8-face even if tagged 4")
+  local stale = Sprites.parseKitMeta("kit 45 16\nwalk 2\ndodge 2\nbrace 2\n"
+    .. "physical 2\nspecial 2\nhit 2\nidle 2\nfaint 2\n")
+  eq(stale.faces, 4, "old sidecar omits the 8")
+  eq(Sprites.kitFacesFromSheet(720, 6480, 45, stale), 8,
+    "image height beats a stale 4-face tag")
+  eq(Sprites.kitBlockForAnim("idle", 18, { _kitPoseBlock = { walk = 0, faint = 6 } }),
+    0, "missing Idle falls back to Walk, not Faint")
+end
+
+function tests.kit_face_from_delta_uses_diagonals()
+  eq(Sprites.faceFromDelta(10, 0), "right", "east is right")
+  eq(Sprites.faceFromDelta(0, 10), "down", "south is down")
+  eq(Sprites.faceFromDelta(10, 10), "down-right", "southeast is diagonal")
+  eq(Sprites.faceFromDelta(-8, -8), "up-left", "northwest is diagonal")
+  eq(Sprites.faceFromDelta(10, 2), "right", "shallow angle stays cardinal")
+  eq(Sprites.cardinalFacing("down-right"), "right", "voxel gets a cardinal")
+  eq(Sprites.billboardFacing("down-right", true), "left",
+    "kit diagonal does not GSC-flip")
+  eq(Sprites.billboardFacing("up", true), "up", "kit up stays up")
 end
 
 function tests.dig_borrows_diglett_walk()
@@ -7595,6 +7706,7 @@ function tests.kit_sheet_beats_wilds_when_present()
     "sidecar cell stays in the bake range")
   eq(sheet.frameWidth, cell, "sheet uses sidecar cell size")
   eq(sheet.trueColor, true, "true-color kit")
+  eq((meta and tonumber(meta.faces)) or 4, 8, "rebaked Pikachu kit is 8-face")
 end
 
 function tests.projectile_style_registry_is_public()

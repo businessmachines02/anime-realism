@@ -2438,7 +2438,31 @@ function Lifecycle.tick(battle, dt, deps)
     if session._faceAcc >= 0.15 then
         session._faceAcc = 0
         local grid = session.grid
-        local function faceToward(ent, other)
+        local Sprites = deps and deps.Sprites
+        local function facingFromDelta(dx, dy, diagonal)
+            local face
+            if Sprites and type(Sprites.faceFromDelta) == "function" then
+                face = Sprites.faceFromDelta(dx, dy)
+            elseif math.abs(dx or 0) >= math.abs(dy or 0) then
+                face = (dx or 0) >= 0 and "right" or "left"
+            else
+                face = (dy or 0) >= 0 and "down" or "up"
+            end
+            if diagonal then
+                return face
+            end
+            if Sprites and type(Sprites.cardinalFacing) == "function" then
+                return Sprites.cardinalFacing(face)
+            end
+            if face == "down-right" or face == "up-right" then
+                return "right"
+            end
+            if face == "down-left" or face == "up-left" then
+                return "left"
+            end
+            return face
+        end
+        local function faceToward(ent, other, diagonal)
             if not (ent and other) then
                 return
             end
@@ -2454,31 +2478,25 @@ function Lifecycle.tick(battle, dt, deps)
                 dx = (other.cellX or 0) - (ent.cellX or 0)
                 dy = (other.cellY or 0) - (ent.cellY or 0)
             end
-            if math.abs(dx) >= math.abs(dy) then
-                ent.facing = dx >= 0 and "right" or "left"
-            else
-                ent.facing = dy >= 0 and "down" or "up"
-            end
+            ent.facing = facingFromDelta(dx, dy, diagonal)
         end
-        local function faceCell(ent, worldX, worldY)
+        local function faceCell(ent, worldX, worldY, diagonal)
             if not ent or ent._stepTX or worldX == nil then
                 return
             end
             local dx = (worldX or 0) - (ent.cellX or 0)
             local dy = (worldY or 0) - (ent.cellY or 0)
-            if math.abs(dx) >= math.abs(dy) then
-                ent.facing = dx >= 0 and "right" or "left"
-            else
-                ent.facing = dy >= 0 and "down" or "up"
-            end
+            ent.facing = facingFromDelta(dx, dy, diagonal)
         end
+        -- Battle mons use 8-way so an off-axis idle still looks at the foe.
+        -- Trainers stay cardinal (no diagonal OW art).
         if playerMon and enemyMon and (not playerMon.anim or playerMon.anim == "idle")
             and monStatus(playerMon) ~= "SLP" then
-            faceToward(playerMon, enemyMon)
+            faceToward(playerMon, enemyMon, true)
         end
         if enemyMon and playerMon and (not enemyMon.anim or enemyMon.anim == "idle")
             and monStatus(enemyMon) ~= "SLP" then
-            faceToward(enemyMon, playerMon)
+            faceToward(enemyMon, playerMon, true)
         end
         -- Engaged trainers watch the duel: prefer facing each other; in wild
         -- fights the player faces the foe mon / fight mid.
