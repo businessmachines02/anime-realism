@@ -1,12 +1,13 @@
 -- Battle systems — traditional battle layer
 --
---   rules/   → Focus math, REACT pipeline, foe AI, dialogue rewrite
---   chrome/  → pick HUD, speech bubbles, trainer cameo, notice stack
+--   rules/   → Focus math, REACT pipeline, foe AI, dialogue rewrite, mood
+--   chrome/  → pick HUD, speech bubbles, trainer cameo, notice stack, portraits
 --   fx.lua   → classic vs FIELD animation policy
 --   strings.lua → callout / banter copy
 --
 -- Sibling files load via env.load (zip-safe). Public surface stays
--- Battle.ReactiveDefense / FoeAi / React / Fx / Dialogue / Strings.
+-- Battle.ReactiveDefense / FoeAi / React / Fx / Dialogue / Strings /
+-- Emotions / Portraits.
 
 return function(env)
     local loadFile = env and env.load
@@ -21,6 +22,7 @@ return function(env)
         "callout_pick",
         "react_hud",
         "focus_bar",
+        "battle_faces",
         "dev_overlay",
     }
 
@@ -44,6 +46,11 @@ return function(env)
     local Pick = loadMod("chrome/pick.lua")
     local BubblesChrome = loadMod("chrome/bubbles.lua")
     local Notices = loadMod("chrome/notices.lua")
+    local Emotions = loadMod("rules/emotions.lua")
+    local Portraits = loadMod("chrome/portraits.lua")
+    if Portraits and Emotions and type(Portraits.bind) == "function" then
+        Portraits.bind({ Emotions = Emotions })
+    end
     local React = loadMod("rules/react.lua")
     local Fx = loadMod("fx.lua")
     local Strings = loadMod("strings.lua")
@@ -63,6 +70,8 @@ return function(env)
     Battle.Dialogue = Dialogue
     Battle.Strings = Strings
     Battle.Notices = Notices
+    Battle.Emotions = Emotions
+    Battle.Portraits = Portraits
 
     function Battle.ownsOption(key)
         for i = 1, #Battle.OPTION_KEYS do

@@ -5,7 +5,8 @@ Battle never loads AnimData.xml or *-Anim.png. Each pose keeps every frame
 in its PMD row (sheet width = longest pose × cell). Shadow.png / Offsets.png
 plant each frame's feet and keep side-lunge travel from the shadow X.
 A sidecar `.kit` file stores per-pose tick counts (60/sec) so the pad can
-play the whole strip.
+play the whole strip. Shadow.png is the plant, not the lowest pixel —
+feet often hang a few rows below it, so dest_ay leaves that room.
 
     python3 assets/followers/bake_pmd.py 0005
     python3 assets/followers/bake_pmd.py        # every pack under this folder
@@ -58,10 +59,10 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
 # Dex → max px. Clamped to CELL_MAX, not FIT_MIN.
 FIT_MAX_BY_DEX: dict[int, int] = {
     15: 23,   # Beedrill - a bit smaller
-    3: 32,    #  Venusaur - make a bit bigger
+    3: 33,    #  Venusaur - make a bit bigger
     5: 23,    # charmeleon - make a bit smaller
-    6: 29,    # Charizard - make a bit bigger
-    9: 29,    # Blastoise - make a bit bigger
+    6: 31,    # Charizard - make a bit bigger
+    9: 31,    # Blastoise - make a bit bigger
     19: 20,   # ratata 
     20: 23,   # raticate - a bit smaller
     25: 20,   # pikachu - make smaller, like Growlite
@@ -71,10 +72,10 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     34: 27,  # nidoking
     38: 27,   # Ninetales
     58: 22,   # Growlithe
-    133: 20,  # Eevee
-    134: 22,  # Vaporeon (1.0m would otherwise sit in the 24px band)
-    135: 22,  # Jolteon
-    136: 22,  # Flareon
+    133: 22,  # Eevee (a bit bigger)
+    134: 24,  # Vaporeon (a bit bigger; 1.0m would otherwise sit in the 24px band)
+    135: 24,  # Jolteon (a bit bigger)
+    136: 24,  # Flareon (a bit bigger)
     196: 22,  # Espeon
     197: 22,  # Umbreon
     95: 38,    # Onix
@@ -84,7 +85,7 @@ FIT_MAX_BY_DEX: dict[int, int] = {
 # Gen 1 Pokédex height in meters. Index 0 unused.
 HEIGHT_M = [
     0,
-    0.7, 1.0, 2.4, 0.6, 1.1, 1.7, 0.5, 1.0, 1.6, 0.3,  # 1–10
+    0.7, 1.0, 2.4, 0.6, 1.1, 2.2, 0.5, 1.0, 2.0, 0.3,  # 1–10
     0.7, 1.1, 0.3, 0.6, 1.0, 0.3, 1.1, 1.5, 0.3, 0.7,  # 11–20
     0.3, 1.2, 2.0, 3.5, 0.4, 0.8, 0.6, 1.0, 0.4, 0.8,  # 21–30
     1.3, 0.5, 0.9, 1.4, 0.6, 1.3, 0.6, 1.1, 0.5, 1.0,  # 31–40
@@ -379,6 +380,11 @@ def place_anchored(frame: Image.Image, bbox: tuple[int, int, int, int] | None,
         ox, oy = float(origin[0]), float(origin[1])
     paste_x = int(round(dest_ax - (ox - bbox[0]) * scale + extra[0]))
     paste_y = int(round(dest_ay - (oy - bbox[1]) * scale + extra[1]))
+    # Rounding can drop a foot row past the cell; slide up rather than clip.
+    if paste_y + nh > cell:
+        paste_y -= paste_y + nh - cell
+    if paste_y < 0 and nh <= cell:
+        paste_y = 0
     canvas.paste(resized, (paste_x, paste_y), resized)
     return canvas
 
@@ -410,6 +416,20 @@ def lunge_ax(anchor: tuple[int, int] | None, ref: tuple[float, float],
     if not anchor:
         return cell / 2.0
     return cell / 2.0 + (anchor[0] - ref[0]) * scale * MOTION_AMP
+
+
+def sprite_extents(bbox, origin, scale: float) -> tuple[float, float]:
+    """Pixels of ink above / below the plant (shadow or bbox feet)."""
+    if not bbox:
+        return 0.0, 0.0
+    if origin is None:
+        oy = float(bbox[3] - 1)
+    else:
+        oy = float(origin[1])
+    above = max(0.0, (oy - bbox[1]) * scale)
+    # PIL bbox lower is exclusive; match paste_rect's py + nh.
+    below = max(0.0, (bbox[3] - oy) * scale)
+    return above, below
 
 
 def paste_rect(bbox, origin, scale: float, dest_ax: float, dest_ay: float):
@@ -497,13 +517,16 @@ def _read_block_frames(pack_dir: Path, anim: dict, faces: int = BLOCK_ROWS):
 
 
 def _fit_faces(frames: list, max_px: int | None, cell: int, nudge: bool = True):
-    dest_ay = float(cell - 1)
     nfaces = _nfaces(frames)
     by_face: list[list] = [[] for _ in range(nfaces)]
     for face, col, raw, bbox, anchor in frames:
         if 0 <= face < nfaces:
             by_face[face].append((col, raw, bbox, anchor))
-    fitted = []
+    face_scales: list[float] = []
+    face_origins: list[list] = []
+    face_refs: list[tuple[float, float]] = []
+    rest_below = 0.0
+    max_below = 0.0
     for face in range(nfaces):
         face_frames = by_face[face]
         rest_bb = None
@@ -517,10 +540,31 @@ def _fit_faces(frames: list, max_px: int | None, cell: int, nudge: bool = True):
                     rest_bb = item[2]
                     break
         face_scale = pose_scale([rest_bb], max_px, cell)
+        face_scales.append(face_scale)
         ref = facing_origin(
             [item[3] for item in face_frames],
             [item[2] for item in face_frames], cell)
+        face_refs.append(ref)
         origins = [plant_origin(item[3], item[2], cell) for item in face_frames]
+        face_origins.append(origins)
+        for item, origin in zip(face_frames, origins):
+            _above, below = sprite_extents(item[2], origin, face_scale)
+            if below > max_below:
+                max_below = below
+            # Column 0 is the stand/rest plant. Combat frames with more
+            # ink below the shadow must not lift that ground line.
+            if item[0] == 0 and below > rest_below:
+                rest_below = below
+    plant_below = rest_below if rest_below > 0 else max_below
+    dest_ay = min(float(cell - 1), float(cell) - math.ceil(plant_below + 0.01))
+    if dest_ay < 0:
+        dest_ay = 0.0
+    fitted = []
+    for face in range(nfaces):
+        face_frames = by_face[face]
+        face_scale = face_scales[face]
+        origins = face_origins[face]
+        ref = face_refs[face]
         dests = []
         for item, origin in zip(face_frames, origins):
             dest_ax = lunge_ax(item[3], ref, face_scale, cell)
@@ -541,6 +585,7 @@ def measure_needed_cell(frames: list, max_px: int | None, probe: int) -> int:
     fitted = _fit_faces(frames, max_px, probe, nudge=False)
     extra_top = 0
     max_nw = max_nh = 0
+    max_above = max_below = 0.0
     for face, col, _raw, bbox, anchor in frames:
         if not bbox:
             continue
@@ -551,9 +596,17 @@ def measure_needed_cell(frames: list, max_px: int | None, probe: int) -> int:
         _px, py, nw, nh = paste_rect(bbox, origin, face_scale, dest_ax, dest_ay)
         max_nw = max(max_nw, nw)
         max_nh = max(max_nh, nh)
+        above, below = sprite_extents(bbox, origin, face_scale)
+        if above > max_above:
+            max_above = above
+        if below > max_below:
+            max_below = below
         if py < 0:
             extra_top = max(extra_top, int(math.ceil(-py)))
-    needed = max(probe, max_nw, max_nh, probe + extra_top)
+    needed = max(
+        probe, max_nw, max_nh, probe + extra_top,
+        int(math.ceil(max_above + max_below + 1)),
+    )
     return min(CELL_MAX, needed)
 
 

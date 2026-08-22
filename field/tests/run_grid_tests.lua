@@ -590,6 +590,17 @@ function tests.status_chip_abbreviations()
   eq(battle._arStatusChips.enemy.text, "MISS", "accuracy miss arms a MISS chip")
 end
 
+function tests.mood_portrait_sits_beside_the_sprite()
+  local px, py = UI.faceAnchor("player", 40, 80, 28, 12)
+  eq(px, 0, "player face is left of the body")
+  eq(py, 66, "face is vertically centered on the body")
+  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, 12)
+  eq(ex, 132, "foe face is right of the body")
+  eq(ey, 66, "foe face shares the body midline")
+  truthy(px + 28 <= 40, "player face does not overlap body x")
+  truthy(ex >= 120, "foe face does not overlap body x")
+end
+
 function tests.move_hud_shows_b_pause_hint()
   local drawn = {}
   package.loaded["src.render.Font"] = {
@@ -7269,6 +7280,27 @@ function tests.physical_kit_prefers_specialized_strips()
     "attack", "no sidecar extras stay on Attack")
 end
 
+function tests.pose_keeps_kit_on_the_plant()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitCell = 32
+  player._fieldBarLift = 24
+  player.px, player.py = 16, 64
+  local sprite, vx, vy = player:pose()
+  truthy(sprite, "pose returns a sprite")
+  eq(vx, 16, "vx stays on the plant x")
+  eq(vy, 64, "vy stays on py so the body does not float off its shadow")
+end
+
 function tests.kit_pose_requires_combat_block()
   local kit = { _kitSheet = true, _kitBlocks = 6 }
   truthy(Sprites.usesKitPose(kit, "dodge"), "full kit plays dodge")
@@ -7645,6 +7677,8 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
   }, 2)
   eq(kitMesh.via, "kit", "kit def does not use Wilds column-0 card")
   truthy(lastVerts and lastVerts[1], "kit card has verts")
+  eq(lastVerts[1][2], 0, "body quad plants at y=0")
+  eq(lastVerts[3][2], 32, "32px body top is the cell height")
   local u0 = lastVerts[1][4]
   local expect = (32 + 0.02) / 128
   assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
@@ -7660,6 +7694,7 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
     frameHeight = 32,
   }, 2)
   eq(shadowMesh.via, "kit", "kit shadow stays on the kit sheet")
+  eq(lastVerts[1][2], 0, "shadow quad stays planted at y=0")
   local shadowU = lastVerts[1][4]
   local planted = (0 + 0.02) / 128
   assert(math.abs(shadowU - planted) < 1e-6, "ground blob samples planted column 0")
@@ -7916,6 +7951,171 @@ do
     follow = BattleFx.pickAgainCallMove(battle, battle.player, { id = "PSYCHIC" })
     eq(follow and follow.id, "PSYCHIC", "same move is used when the pool has no alt")
   end
+end
+
+local function loadEmotions()
+  return assert(loadfile(root .. "/../battle/rules/emotions.lua"))()
+end
+
+local function loadPortraits()
+  return assert(loadfile(root .. "/../battle/chrome/portraits.lua"))()
+end
+
+local function moodBattle(php, pmax, ehp, emax)
+  return {
+    player = {
+      isPlayer = true,
+      mon = { hp = php, stats = { hp = pmax }, name = "CHARMANDER", dex = 4 },
+    },
+    enemy = {
+      mon = { hp = ehp, stats = { hp = emax }, name = "SQUIRTLE", dex = 7 },
+    },
+  }
+end
+
+function tests.emotions_low_hp_is_pain()
+  local E = loadEmotions()
+  local battle = moodBattle(10, 100, 80, 100)
+  E.refresh(battle)
+  eq(E.mood(battle, true), "pain", "player at 10% is tired")
+  eq(E.mood(battle, false), "normal", "healthy foe stays normal")
+  E.clear(battle)
+end
+
+function tests.emotions_two_misses_make_angry()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  eq(E.mood(battle, true), "sigh", "first miss flashes sigh")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "normal", "one miss is not angry yet")
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "two misses become angry")
+  local mods = E.modifiers(battle, true)
+  eq(type(mods), "table", "modifiers is a table")
+  eq(next(mods), nil, "v1 modifiers stay empty")
+  E.clear(battle)
+end
+
+function tests.emotions_crit_stuns_then_angers()
+  local E = loadEmotions()
+  local battle = moodBattle(70, 100, 70, 100)
+  E.note(battle, { kind = "crit", side = "player" })
+  eq(E.mood(battle, true), "stunned", "received crit flashes stunned")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "after the flash the mon stays angry")
+  E.clear(battle)
+end
+
+function tests.emotions_hp_lead_and_hit_is_determined()
+  local E = loadEmotions()
+  local battle = moodBattle(90, 100, 40, 100)
+  E.note(battle, { kind = "hit", user = "player", target = "enemy", damage = 10, maxHp = 100 })
+  eq(E.mood(battle, true), "determined", "HP lead plus a landed hit is determined")
+  eq(E.mood(battle, false), "worried", "the trailing foe looks worried")
+  E.clear(battle)
+end
+
+function tests.emotions_switch_clears_mood()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "setup: angry from misses")
+  E.note(battle, { kind = "switch", side = "player" })
+  eq(E.mood(battle, true), "normal", "switch resets the incoming mon")
+  E.clear(battle)
+end
+
+function tests.portraits_resolve_gen1_root_path()
+  local P = loadPortraits()
+  eq(P.relPath(4, "angry"), "assets/portrait/0004/Angry.png", "dex 4 angry")
+  eq(P.relPath(1, "normal"), "assets/portrait/0001/Normal.png", "dex 1 normal")
+  eq(P.emotionFile("pain"), "Pain", "pain file")
+  local battle = moodBattle(80, 100, 80, 100)
+  eq(P.dexOf(battle, battle.player), 4, "reads mon.dex")
+end
+
+function tests.emotions_chip_colors_match_mood()
+  local E = loadEmotions()
+  local angry = E.chip("angry")
+  eq(angry.text, "ANGRY", "angry chip label")
+  truthy(angry.fill and angry.fill[1] > 0.6, "angry fill is red")
+  eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
+  eq(E.chip("determined").text, "FIRM", "determined chip is FIRM")
+  eq(E.chip("normal"), nil, "normal has no chip")
+end
+
+function tests.emotions_portrait_flashes_then_goes()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "setup angry")
+  eq(E.consumeChange(battle, true), "angry", "first change arms a portrait")
+  eq(E.consumeChange(battle, true), nil, "same mood does not re-flash")
+  truthy(E.portraitAlpha(battle, true) > 0.9, "portrait is up right after the change")
+  local side = E.side(battle, true)
+  side.portraitAt = (os.clock()) - 8
+  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after a couple seconds")
+  E.clear(battle)
+end
+
+function tests.emotions_announce_is_not_dialogue()
+  local E = loadEmotions()
+  local pushed = 0
+  E.bind({
+    facesOn = function()
+      return true
+    end,
+    pushNotice = function()
+      pushed = pushed + 1
+    end,
+  })
+  local battle = moodBattle(10, 100, 80, 100)
+  E.announce(battle)
+  eq(E.mood(battle, true), "pain", "low HP is pain")
+  eq(pushed, 0, "mood does not push a notice line")
+  E.clear(battle)
+end
+
+function tests.mood_aura_paints_when_angry()
+  local rects = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      rectangle = function()
+        rects = rects + 1
+      end,
+      circle = function() end,
+      ellipse = function() end,
+      line = function() end,
+    },
+    timer = { getTime = function() return 1.4 end },
+  }
+  Projectiles.moodOf = function(_, isPlayer)
+    return isPlayer and "angry" or "normal"
+  end
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32 },
+    enemyMon = { px = 80, py = 32 },
+  }
+  Projectiles.drawMoodAuras(session, {}, 0, 0)
+  truthy(rects > 0, "angry paints rising heat ticks")
+  Projectiles.moodOf = function()
+    return "normal"
+  end
+  rects = 0
+  Projectiles.drawMoodAuras(session, {}, 0, 0)
+  eq(rects, 0, "normal mood has no body aura")
+  Projectiles.moodOf = nil
+  love = prevLove
 end
 
 local count = 0

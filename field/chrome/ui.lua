@@ -190,6 +190,23 @@ UI.HP_LETTER_W = 6
 UI.HP_BAR_W = 20
 UI.HP_CHIP_W = UI.HP_LETTER_W + 1 + UI.HP_BAR_W
 UI.HP_CHIP_H = 7
+UI.FACE_SIZE = 28
+UI.FACE_GAP = 12
+
+-- Player face sits left of the sprite; foe sits right. Returns top-left.
+function UI.faceAnchor(side, bodyX, bodyY, size, gap)
+    size = tonumber(size) or UI.FACE_SIZE
+    gap = tonumber(gap) or UI.FACE_GAP
+    bodyX = tonumber(bodyX) or 0
+    bodyY = tonumber(bodyY) or 0
+    local fx
+    if side == "player" then
+        fx = bodyX - gap - size
+    else
+        fx = bodyX + gap
+    end
+    return fx, bodyY - math.floor(size / 2)
+end
 UI.HP_CHIP_TOP = 2
 UI.FOCUS_BAR_H = 3
 UI.FOCUS_BAR_GAP = 0 -- in pixels. this is either 1 or 0 ~ cannot have a half pixel unfortunately :)
@@ -380,6 +397,48 @@ local function statusChip(battle, side)
     return chip
 end
 
+function UI.drawFace(g, img, x, y, size, alpha)
+    if not (g and img and type(g.draw) == "function") then
+        return
+    end
+    size = tonumber(size) or UI.FACE_SIZE
+    alpha = tonumber(alpha)
+    if alpha == nil then
+        alpha = 1
+    end
+    if alpha <= 0.02 then
+        return
+    end
+    local iw = 40
+    if type(img.getWidth) == "function" then
+        iw = tonumber(img:getWidth()) or iw
+    end
+    local scale = size / math.max(1, iw)
+    if img.setFilter then
+        pcall(img.setFilter, img, "nearest", "nearest")
+    end
+    g.setColor(1, 1, 1, alpha)
+    g.draw(img, math.floor(x + 0.5), math.floor(y + 0.5), 0, scale, scale)
+end
+
+function UI.moodChipSpec(mood)
+    if type(UI.moodChip) == "function" then
+        return UI.moodChip(mood)
+    end
+    return nil
+end
+
+local function moodChipOf(battle, isPlayer)
+    if type(UI.moodOf) ~= "function" then
+        return nil
+    end
+    local mood = UI.moodOf(battle, isPlayer)
+    if not mood or mood == "normal" then
+        return nil
+    end
+    return UI.moodChipSpec(mood), mood
+end
+
 local function drawStatusChip(g, Font, chip, x, y, canvasW)
     local text = chip.text
     local tw = (#text) * 8
@@ -397,9 +456,11 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
     if y < 1 then
         y = 1
     end
-    g.setColor(1, 1, 0.94, 1)
+    local fill = chip.fill or { 1, 1, 0.94 }
+    local ink = chip.ink or { 0, 0, 0 }
+    g.setColor(fill[1], fill[2], fill[3], 1)
     g.rectangle("fill", cx, y, w, h)
-    g.setColor(0, 0, 0, 1)
+    g.setColor(ink[1], ink[2], ink[3], 1)
     g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
     if Font and type(Font.draw) == "function" then
         Font.draw(text, cx + 3, y + 2)
@@ -457,7 +518,14 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
             end
             local chip = statusChip(battle, item.side)
-            local chipTop = chip and (UI.CHIP_H + 1) or 0
+            local moodSpec = select(1, moodChipOf(battle, item.side == "player"))
+            local chipCount = (chip and 1 or 0) + (moodSpec and 1 or 0)
+            local chipTop = chipCount * (UI.CHIP_H + 1)
+            local faceOn = type(UI.faceEnabled) == "function" and UI.faceEnabled(battle)
+            local faceImg, faceA
+            if faceOn and type(UI.faceFlash) == "function" then
+                faceImg, faceA = UI.faceFlash(battle, item.side == "player")
+            end
             x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop + chipTop)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
@@ -506,8 +574,34 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             hpBar(g, left + letterW + 1, y, barW, ratio, fills[item.side])
             g.setColor(0.12, 0.09, 0.08, 1)
             g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
+            local stackY = y - extraTop
             if chip then
-                drawStatusChip(g, Font, chip, x, y - extraTop - chipTop, canvasW)
+                stackY = stackY - (UI.CHIP_H + 1)
+                drawStatusChip(g, Font, chip, x, stackY, canvasW)
+            end
+            if moodSpec then
+                stackY = stackY - (UI.CHIP_H + 1)
+                drawStatusChip(g, Font, moodSpec, x, stackY, canvasW)
+            end
+            if faceImg and (faceA or 1) > 0.02 then
+                local fs = UI.FACE_SIZE or 28
+                local bx = (ent.px or 0) - camX + 8
+                local by = (ent.py or 0) - camY + 4
+                if mode == "ui" and Coords and type(Coords.worldViewToUi) == "function" then
+                    bx, by = Coords.worldViewToUi(bx, by, ren)
+                end
+                local fx, fy = UI.faceAnchor(item.side, bx, by, fs, UI.FACE_GAP)
+                if fx < 1 then
+                    fx = 1
+                elseif fx + fs > canvasW - 1 then
+                    fx = canvasW - 1 - fs
+                end
+                if fy < 1 then
+                    fy = 1
+                elseif fy + fs > canvasH - 1 then
+                    fy = canvasH - 1 - fs
+                end
+                UI.drawFace(g, faceImg, fx, fy, fs, faceA)
             end
         end
     end

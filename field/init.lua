@@ -648,12 +648,33 @@ return function(env)
   end
 
   function FBV.bind(packages)
-    local RD = packages and packages.battle and packages.battle.ReactiveDefense
+    local bat = packages and packages.battle
+    local RD = bat and bat.ReactiveDefense
     deps.ReactiveDefense = RD
     FBV.ReactiveDefense = RD
-    local React = packages and packages.battle and packages.battle.React
+    local React = bat and bat.React
     deps.React = React
     FBV.React = React
+    deps.Emotions = bat and bat.Emotions
+    FBV.Emotions = bat and bat.Emotions
+    deps.Portraits = bat and bat.Portraits
+    FBV.Portraits = bat and bat.Portraits
+    deps.Notices = bat and bat.Notices
+    FBV.Notices = bat and bat.Notices
+    if Projectiles then
+      Projectiles.moodOf = function(battle, isPlayer)
+        local E = bat and bat.Emotions
+        if E and type(E.mood) == "function" then
+          return E.mood(battle, isPlayer)
+        end
+      end
+      Projectiles.moodColor = function(mood)
+        local E = bat and bat.Emotions
+        if E and type(E.color) == "function" then
+          return E.color(mood)
+        end
+      end
+    end
     if packages and packages.log then
       FBV.setLog(packages.log)
     end

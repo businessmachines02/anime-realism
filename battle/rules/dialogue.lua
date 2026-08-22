@@ -279,6 +279,7 @@ function Dialogue.wrapBattleSay(methodName)
             -- host forgot to return two values
         end
         local displayText = Dialogue.rewriteBattleText(self, text)
+        hostCall("noteBattleLine", self, text or displayText)
         local pendingNpcOrder
         if hostCall("fieldFlowsText", self) and mon and isEnemy then
             local narrative = Dialogue.rewriteLevelUpText(text)

@@ -4369,6 +4369,133 @@ local function drawStatusAura(g, x, y, status, phase)
   end
 end
 
+local MOOD_COLOR = {
+  angry = { 0.82, 0.22, 0.16 },
+  pain = { 0.56, 0.34, 0.40 },
+  determined = { 0.90, 0.70, 0.16 },
+  worried = { 0.86, 0.78, 0.30 },
+  stunned = { 0.70, 0.66, 0.88 },
+  sigh = { 0.60, 0.66, 0.72 },
+  surprised = { 0.96, 0.84, 0.22 },
+}
+
+local function moodColor(mood)
+  local fn = Projectiles.moodColor
+  if type(fn) == "function" then
+    local c = fn(mood)
+    if type(c) == "table" and c[1] then
+      return c
+    end
+  end
+  return MOOD_COLOR[tostring(mood or "")]
+end
+
+local function drawMoodAura(g, x, y, mood, phase, c)
+  if not (g and c) then
+    return
+  end
+  mood = tostring(mood or "")
+  if mood == "angry" then
+    for i = 1, 3 do
+      local drift = (phase * 0.9 + i * 0.28) % 1
+      local px = x + math.sin(phase * 3 + i * 2.1) * 5.2
+      local py = y + 3 - drift * 12
+      local a = 0.22 + 0.45 * (1 - drift)
+      g.setColor(c[1], c[2], c[3], a)
+      g.rectangle("fill", px, py, 1.4, 2.4 + (1 - drift))
+    end
+  elseif mood == "determined" then
+    local pulse = 0.18 + 0.16 * (0.5 + 0.5 * math.sin(phase * 5))
+    g.setColor(c[1], c[2], c[3], pulse)
+    g.setLineWidth(1)
+    local r = 8.2 + math.sin(phase * 5) * 0.8
+    if g.ellipse then
+      g.ellipse("line", x, y - 1, r, r * 0.72)
+    else
+      g.circle("line", x, y - 1, r)
+    end
+  elseif mood == "worried" or mood == "pain" then
+    for i = 1, 2 do
+      local drift = (phase * 0.42 + i * 0.4) % 1
+      local px = x + 3 + i * 2 + math.sin(phase + i) * 1.1
+      local py = y - 2 + drift * 8
+      local a = 0.20 + 0.40 * (1 - drift)
+      g.setColor(c[1], c[2], c[3], a)
+      g.circle("fill", px, py, 1.1)
+      g.setColor(1, 1, 1, a * 0.35)
+      g.circle("fill", px - 0.3, py - 0.3, 0.4)
+    end
+  elseif mood == "stunned" then
+    for i = 1, 2 do
+      local a = phase * 3.4 + i * math.pi
+      local px = x + math.cos(a) * 7.2
+      local py = y - 5 + math.sin(a) * 2.6
+      local flash = 0.30 + 0.40 * math.abs(math.sin(phase * 7 + i))
+      g.setColor(c[1], c[2], c[3], flash)
+      g.circle("fill", px, py, 1.3)
+      g.setColor(1, 1, 1, flash * 0.6)
+      g.circle("fill", px, py, 0.5)
+    end
+  elseif mood == "sigh" then
+    for i = 1, 2 do
+      local drift = (phase * 0.28 + i * 0.45) % 1
+      local px = x - 2 + math.sin(phase * 1.4 + i) * 3
+      local py = y - 1 - drift * 10
+      local a = 0.16 + 0.28 * (1 - drift)
+      g.setColor(c[1], c[2], c[3], a)
+      if g.ellipse then
+        g.ellipse("fill", px, py, 2.4 + drift, 1.1)
+      else
+        g.circle("fill", px, py, 1.4)
+      end
+    end
+  elseif mood == "surprised" then
+    local t = (phase * 1.6) % 1
+    g.setColor(c[1], c[2], c[3], 0.35 * (1 - t))
+    g.setLineWidth(1)
+    local r = 5 + t * 7
+    g.circle("line", x, y - 1, r)
+  end
+end
+
+function Projectiles.drawMoodAuras(session, battle, camX, camY, mapFn)
+  if not (session and session.live and love and love.graphics) then
+    return
+  end
+  local moodOf = Projectiles.moodOf
+  if type(moodOf) ~= "function" then
+    return
+  end
+  local g = love.graphics
+  local phase = now()
+  camX, camY = camX or 0, camY or 0
+  local function mapPt(wx, wy)
+    local x = wx - camX
+    local y = wy - camY
+    if type(mapFn) == "function" then
+      x, y = mapFn(x, y)
+    end
+    return x, y
+  end
+  for _, item in ipairs({
+    { ent = session.playerMon, isPlayer = true },
+    { ent = session.enemyMon, isPlayer = false },
+  }) do
+    local ent = item.ent
+    if ent and not ent.hidden and not ent._removed and not ent._fainting then
+      local mood = moodOf(battle, item.isPlayer)
+      local c = mood and moodColor(mood)
+      if c then
+        local wx, wy = center(session, ent)
+        if wx then
+          local x, y = mapPt(wx, wy)
+          drawMoodAura(g, x, y, mood, phase, c)
+        end
+      end
+    end
+  end
+end
+
 local function spawn(session, spec)
   if not (session and session.live and session._battle) then
     return nil
@@ -4692,6 +4819,7 @@ function Projectiles.drawUi(session, battle)
   end
   Projectiles.drawHazeLanes(session, camX, camY, mapFn)
   Projectiles.drawStatusAuras(session, battle, camX, camY, mapFn)
+  Projectiles.drawMoodAuras(session, battle, camX, camY, mapFn)
   Projectiles.draw(session, camX, camY, mapFn)
 end
 

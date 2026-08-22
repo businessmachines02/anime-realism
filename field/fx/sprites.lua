@@ -3429,7 +3429,7 @@ local function kitBillboardMesh(def, Voxel3D, cache, shadow)
   elseif y + cell > ih then
     y = ih - cell
   end
-  local key = table.concat({ tostring(def.image), x, y }, "#")
+  local key = table.concat({ tostring(def.image), x, y, shadow and "s" or "b" }, "#")
   if cache[key] then
     return cache[key]
   end
@@ -3438,11 +3438,13 @@ local function kitBillboardMesh(def, Voxel3D, cache, shadow)
   local v0 = (y + 0.05) / ih
   local v1 = (y + cell - 0.05) / ih
   local ax = cell / 2
-  local ay = cell
   local x0 = 8 - ax
   local x1 = x0 + cell
-  local y0 = ay - cell
-  local y1 = ay
+  -- Feet are the cell bottom (bake plants the shadow with room for
+  -- pixels below it). Do not raise this quad — DS height floats the body
+  -- off the ground blob.
+  local y0 = 0
+  local y1 = cell
   local verts = {
     { x0, y0, 0, u0, v1, 1 }, { x1, y0, 0, u1, v1, 1 },
     { x1, y1, 0, u1, v0, 1 }, { x0, y1, 0, u0, v0, 1 },

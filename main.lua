@@ -254,6 +254,12 @@ return function(mod)
                 default = true,
             },
             {
+                key = "battle_faces",
+                type = "toggle",
+                label = "BATTLE FACES",
+                default = true,
+            },
+            {
                 key = "dev_overlay",
                 type = "toggle",
                 label = "DEV OVERLAY",
@@ -341,6 +347,27 @@ return function(mod)
                     end
                     return math.max(0, math.min(1, (tonumber(side.focus) or 0) / cap))
                 end
+                UI.faceEnabled = function()
+                    return mod.options:get("battle_faces") ~= false
+                end
+                UI.faceFlash = function(battle, isPlayer)
+                    local Portraits = Battle and Battle.Portraits
+                    if Portraits and type(Portraits.flash) == "function" then
+                        return Portraits.flash(battle, isPlayer)
+                    end
+                end
+                UI.moodOf = function(battle, isPlayer)
+                    local E = Battle and Battle.Emotions
+                    if E and type(E.mood) == "function" then
+                        return E.mood(battle, isPlayer)
+                    end
+                end
+                UI.moodChip = function(mood)
+                    local E = Battle and Battle.Emotions
+                    if E and type(E.chip) == "function" then
+                        return E.chip(mood)
+                    end
+                end
             end
         end
 
@@ -375,6 +402,21 @@ return function(mod)
             lines[#lines + 1] = msg
             while #lines > dev.linesMax do
                 table.remove(lines, 1)
+            end
+        end
+
+        function dev.noteMood(battle, ev)
+            local E = Battle and Battle.Emotions
+            if not E or type(battle) ~= "table" then
+                return
+            end
+            if ev then
+                E.note(battle, ev)
+            elseif type(E.refresh) == "function" then
+                E.refresh(battle)
+            end
+            if type(E.announce) == "function" then
+                E.announce(battle)
             end
         end
 
@@ -868,6 +910,11 @@ return function(mod)
                     ReactiveDefense.clear(ev.battle)
                     ReactiveDefense.state(ev.battle)
                 end
+                if Battle and Battle.Emotions then
+                    Battle.Emotions.clear(ev.battle)
+                    Battle.Emotions.state(ev.battle)
+                    Battle.Emotions.refresh(ev.battle)
+                end
                 dev.log(ev.battle, "BATTLE start", battleStage())
             end
         end)
@@ -880,6 +927,9 @@ return function(mod)
                 clearAmbientStance(ev.battle)
                 if Battle and Battle.Notices and type(Battle.Notices.clear) == "function" then
                     Battle.Notices.clear(ev.battle)
+                end
+                if Battle and Battle.Emotions then
+                    Battle.Emotions.clear(ev.battle)
                 end
                 ev.battle._arRestoreMap = nil
                 if type(dev.clearFocusCoverVisual) == "function" then
@@ -1005,6 +1055,7 @@ return function(mod)
             end
             -- New battler may already be low.
             checkLowHp(battle, ev.battler)
+            dev.noteMood(battle, { kind = "switch", side = side })
         end)
 
         mod.events:on("battle.move_used", function(ev)
@@ -1031,10 +1082,31 @@ return function(mod)
                 clearCalloutPickState(ev.battle)
                 revealPlayerPic(ev.battle, false)
             end
+            dev.noteMood(ev.battle, { kind = "faint", side = ev.battler })
         end)
 
         mod.events:on("battle.damage_dealt", function(ev)
             checkLowHp(ev and ev.battle, ev and ev.target)
+            if ev and ev.battle and ev.target and (ev.damage or 0) > 0 then
+                ev.battle._arLastHitSide = ev.target.isPlayer and "player" or "enemy"
+                local maxHP = ev.target.mon and ev.target.mon.stats and ev.target.mon.stats.hp
+                local crit = ev.critical or ev.crit or ev.isCrit or ev.wasCrit
+                if crit then
+                    dev.noteMood(ev.battle, {
+                        kind = "crit",
+                        side = ev.target,
+                        user = ev.user,
+                    })
+                else
+                    dev.noteMood(ev.battle, {
+                        kind = "hit",
+                        user = ev.user,
+                        target = ev.target,
+                        damage = ev.damage,
+                        maxHp = maxHP,
+                    })
+                end
+            end
             if not ev or not ev.battle then
                 return
             end
@@ -1107,6 +1179,10 @@ return function(mod)
                 return
             end
             battle._arAccuracyMissSide = user.isPlayer and "player" or "enemy"
+            dev.noteMood(battle, {
+                kind = "miss",
+                side = battle._arAccuracyMissSide,
+            })
             if not opt("momentum_counter") then
                 return
             end
@@ -1312,6 +1388,7 @@ return function(mod)
             if ReactiveDefense and opt("momentum_counter") then
                 ReactiveDefense.endTurn(battle)
             end
+            dev.noteMood(battle, { kind = "turn" })
             -- Quiet beat: occasional trainer chatter when nothing's in cover.
             if maybeEnqueueIdleBanter then
                 maybeEnqueueIdleBanter(battle)
@@ -4187,6 +4264,24 @@ return function(mod)
             })
             pcall(React.install, mod)
         end
+        if Battle and Battle.Emotions and type(Battle.Emotions.bind) == "function" then
+            Battle.Emotions.bind({
+                lowHpRatio = lowHpRatio,
+                facesOn = function()
+                    return mod.options:get("battle_faces") ~= false
+                end,
+            })
+            pcall(Battle.Emotions.install, mod)
+        end
+        if Battle and Battle.Portraits and type(Battle.Portraits.bind) == "function" then
+            Battle.Portraits.bind({
+                Emotions = Battle.Emotions,
+                mod = mod,
+                facesOn = function()
+                    return mod.options:get("battle_faces") ~= false
+                end,
+            })
+        end
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
             if hud.fieldCompactActive(battle) then
@@ -4203,6 +4298,9 @@ return function(mod)
             end
             if Battle and Battle.Notices and type(Battle.Notices.draw) == "function" then
                 Battle.Notices.draw(battle)
+            end
+            if Battle and Battle.Portraits and type(Battle.Portraits.draw) == "function" then
+                Battle.Portraits.draw(battle)
             end
         end)
 
@@ -4971,6 +5069,20 @@ return function(mod)
                 isDodgeFailNarrator = isDodgeFailNarrator,
                 enqueueAutoAfter = enqueueAutoAfter,
                 playerMonName = playerMonName,
+                noteBattleLine = function(battle, text)
+                    if type(text) ~= "string" or not battle then
+                        return
+                    end
+                    local lower = text:lower()
+                    if not lower:find("critical", 1, true) then
+                        return
+                    end
+                    local side = battle._arLastHitSide
+                    if side ~= "player" and side ~= "enemy" then
+                        side = "enemy"
+                    end
+                    dev.noteMood(battle, { kind = "crit", side = side })
+                end,
                 tryVanishEvasion = tryVanishEvasion,
                 enqueueDodgeHideAnim = enqueueDodgeHideAnim,
             })
