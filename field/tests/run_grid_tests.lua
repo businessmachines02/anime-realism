@@ -7171,6 +7171,59 @@ function tests.kit_move_override_flaps_when_flying()
   eq(pidgeot._flapWalk, nil, "next walk can roll flap again")
 end
 
+function tests.physical_kit_prefers_specialized_strips()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "kit 32 8",
+    "walk 8 10 8 10",
+    "physical 2 4 2 2",
+    "idle 8 8",
+    "faint 8 8",
+    "flap 4 4 4 4",
+    "kick 2 2 2 4",
+    "punch 2 6 2",
+    "multi 2 2 2 2 2",
+  }, "\n"))
+  local _, _, poseBlock = Sprites.kitMetaBlockTables(meta)
+  eq(poseBlock.flap, 17, "flap stays on its fixed row")
+  eq(poseBlock.kick, 18, "kick follows flap")
+  eq(poseBlock.punch, 19, "punch follows kick")
+  eq(poseBlock.multi, 20, "multi follows punch")
+  local noFlap = Sprites.parseKitMeta(table.concat({
+    "kit 32 8",
+    "walk 8 10 8 10",
+    "physical 2 4 2 2",
+    "multi 2 2 2 2",
+  }, "\n"))
+  local _, _, noFlapBlocks = Sprites.kitMetaBlockTables(noFlap)
+  eq(noFlapBlocks.multi, 17, "multi takes the flap slot when flap is missing")
+  local ent = {
+    _kitSheet = true,
+    _kitBlocks = 21,
+    _kitPoseBlock = poseBlock,
+  }
+  truthy(Sprites.kitHasPose(ent, "multi"), "sidecar lists multi")
+  truthy(Sprites.usesKitPose(ent, "kick"), "kick row is a combat pose")
+  eq(Cues.physicalKitAnim(ent, { moveId = "TACKLE" }, Sprites), "attack",
+    "generic contact keeps Attack when both exist")
+  eq(Cues.physicalKitAnim(ent, { moveId = "FURY_ATTACK" }, Sprites), "multi",
+    "multi-hit uses MultiStrike / Double")
+  eq(Cues.physicalKitAnim(ent, { moveId = "DOUBLE_KICK" }, Sprites), "multi",
+    "Double Kick prefers multi over kick")
+  eq(Cues.physicalKitAnim(ent, { moveId = "LOW_KICK" }, Sprites), "kick",
+    "single kick uses Kick")
+  eq(Cues.physicalKitAnim(ent, { moveId = "MEGA_PUNCH" }, Sprites), "punch",
+    "punch move uses Punch")
+  local kickOnly = {
+    _kitSheet = true,
+    _kitBlocks = 19,
+    _kitPoseBlock = { physical = 3, kick = 18 },
+  }
+  eq(Cues.physicalKitAnim(kickOnly, { moveId = "DOUBLE_KICK" }, Sprites), "kick",
+    "multi-hit falls back to Kick when Multi is missing")
+  eq(Cues.physicalKitAnim({ _kitSheet = true }, { moveId = "FURY_ATTACK" }, Sprites),
+    "attack", "no sidecar extras stay on Attack")
+end
+
 function tests.kit_pose_requires_combat_block()
   local kit = { _kitSheet = true, _kitBlocks = 6 }
   truthy(Sprites.usesKitPose(kit, "dodge"), "full kit plays dodge")

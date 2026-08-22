@@ -54,7 +54,10 @@ Then copy the `*-Anim.png` files from that same `sprite/0005/` folder.
 | Idle / walk | Idle, Walk |
 | Dodge | Hop, Rotate, LeapForth |
 | Brace | Cringe, LostBalance, Hurt |
-| Physical | Attack, Strike, Swing, Kick |
+| Physical | Attack, then Kick / Punch / Multi / Stomp / Jab, then Strike, Swing |
+| Kick (optional) | Kick, Stomp |
+| Punch (optional) | Punch, Jab |
+| Multi (optional) | MultiStrike, MultiScratch, MultiAttack, Double |
 | Special (Shoot) | Shoot, Charge, SpAttack |
 | Hit | Pain, Hurt, Cringe |
 | Faint | Faint, Sleep, EventSleep |
@@ -68,6 +71,8 @@ Then copy the `*-Anim.png` files from that same `sprite/0005/` folder.
 | Float | Float, Hop, Idle |
 | TumbleBack | TumbleBack, Tumble, Pain |
 | Flap (Flying move) | FlapAround, Hover |
+
+Kick, Punch, and Multi are extra rows after Flap when that PMD strip exists. The pad keeps generic Attack for a single hit, then plays Multi for Fury Attack / Pin Missile / Double Kick (and Kick / Punch when those match and Multi is missing). Re-bake after unpacking so those rows land on the sheet.
 
 Eight-direction sheets use south / east / north / west (skip diagonals). The baker copies every column of the chosen strip — it does not pick four keyframes. Frame timing is written into `follower_XXX.kit` from `AnimData.xml` (60 ticks per second). The pad loads that sidecar next to the PNG; it still never opens the XML or `*-Anim.png` in a fight.
 

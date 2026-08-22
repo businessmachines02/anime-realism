@@ -4,7 +4,7 @@
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
 -- rows play dodge / brace / physical / special / hit, then idle, then faint,
 -- then charge / jump / counter / miss / sleep / freeze / confuse / float,
--- then tumble, then optional flap. Hand-drawn kits stay 4 columns (128px).
+-- then tumble, then optional flap / kick / punch / multi. Hand-drawn kits stay 4 columns (128px).
 -- Baked PMD kits keep every frame in the row; width is longest-pose × 32.
 -- A sidecar `follower_XXX.kit` stores per-pose ticks (60/sec). FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
@@ -225,6 +225,16 @@ Sprites.KIT_BLOCK = {
   flap = 17,
 }
 
+-- Optional combat strips after flap. A missing flap does not eat these
+-- indices — kitPoseBlockMap places them on the next free row.
+Sprites.KIT_TRAILING = { "kick", "punch", "multi" }
+Sprites.KIT_POSE_NAME = {
+  attack = "physical", physical = "physical",
+  cast = "special", special = "special", shoot = "special",
+  selfhit = "hit",
+  tumbleback = "tumble",
+}
+
 -- Missing extra rows reuse an earlier combat strip instead of walk.
 Sprites.KIT_FALLBACK = {
   jump = 3, counter = 3, miss = 3,
@@ -232,6 +242,7 @@ Sprites.KIT_FALLBACK = {
   sleep = 6, freeze = 6, confuse = 6,
   float = 1,
   tumble = 5, tumbleback = 5,
+  kick = 3, punch = 3, multi = 3,
 }
 
 -- Kit faint: four collapse frames, then hold the crumpled pose.
@@ -239,7 +250,8 @@ Sprites.KIT_FAINT_PLAY = 0.60
 Sprites.KIT_FAINT_HOLD = 0.28
 
 local KIT_ANIM_DUR = {
-  attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
+  attack = 0.34, kick = 0.34, punch = 0.34, multi = 0.34,
+  jump = 0.46, counter = 0.52, miss = 0.42,
   cast = 0.48, brace = 0.40, selfhit = 0.46, tumble = 0.58,
   faint = Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD,
 }
@@ -304,6 +316,33 @@ function Sprites.kitMetaFromPath(pngPath)
   return Sprites.parseKitMeta(readTextFile(metaPath))
 end
 
+function Sprites.kitPoseBlockMap(meta)
+  local poses = meta and meta.poses
+  local map = {}
+  if type(poses) ~= "table" then
+    return map
+  end
+  for pose, _ in pairs(poses) do
+    local block = Sprites.KIT_BLOCK[pose]
+    if block ~= nil then
+      map[pose] = block
+    end
+  end
+  local nextBlock = Sprites.KIT_BLOCK.flap or 17
+  if map.flap ~= nil then
+    nextBlock = map.flap + 1
+  end
+  local trailing = Sprites.KIT_TRAILING or {}
+  for i = 1, #trailing do
+    local pose = trailing[i]
+    if poses[pose] then
+      map[pose] = nextBlock
+      nextBlock = nextBlock + 1
+    end
+  end
+  return map
+end
+
 function Sprites.kitMetaBlockTables(meta)
   local colsByBlock = {}
   local ticksByBlock = {}
@@ -311,8 +350,9 @@ function Sprites.kitMetaBlockTables(meta)
   if type(poses) ~= "table" then
     return colsByBlock, ticksByBlock
   end
+  local poseBlock = Sprites.kitPoseBlockMap(meta)
   for pose, data in pairs(poses) do
-    local block = Sprites.KIT_BLOCK[pose]
+    local block = poseBlock[pose]
     if block ~= nil and type(data) == "table" then
       local ticks = data.ticks
       local frames = tonumber(data.frames)
@@ -327,7 +367,20 @@ function Sprites.kitMetaBlockTables(meta)
       end
     end
   end
-  return colsByBlock, ticksByBlock
+  return colsByBlock, ticksByBlock, poseBlock
+end
+
+function Sprites.kitHasPose(ent, anim)
+  if not (ent and type(ent._kitPoseBlock) == "table") then
+    return false
+  end
+  local name = (Sprites.KIT_POSE_NAME and Sprites.KIT_POSE_NAME[anim]) or anim
+  return ent._kitPoseBlock[name] ~= nil or ent._kitPoseBlock[anim] ~= nil
+end
+
+function Sprites.isPhysicalKitAnim(anim)
+  return anim == "attack" or anim == "jump"
+      or anim == "kick" or anim == "punch" or anim == "multi"
 end
 
 local function pixelAlpha(data, x, y)
@@ -608,6 +661,14 @@ function Sprites.kitBlockForAnim(anim, blocks, ent)
       return floatB
     end
   end
+  local name = (Sprites.KIT_POSE_NAME and Sprites.KIT_POSE_NAME[anim]) or anim
+  local mapped = ent and ent._kitPoseBlock
+  if type(mapped) == "table" then
+    local got = mapped[name] or mapped[anim]
+    if got ~= nil and got < blocks then
+      return got
+    end
+  end
   local want = Sprites.KIT_BLOCK[anim or "idle"] or 0
   if want < blocks then
     return want
@@ -623,6 +684,9 @@ end
 function Sprites.usesKitPose(ent, anim)
   if not (ent and ent._kitSheet) then
     return false
+  end
+  if Sprites.kitHasPose(ent, anim) then
+    return true
   end
   local want = Sprites.KIT_BLOCK[anim or "idle"] or 0
   if want <= 0 then
@@ -876,7 +940,7 @@ local function syncKitPose(ent, moving)
     return
   end
   local anim = ent.anim or "idle"
-  if (anim == "attack" or anim == "jump") and ent._pendingCloseStrike then
+  if Sprites.isPhysicalKitAnim(anim) and ent._pendingCloseStrike then
     anim = "idle"
   end
   if anim == "idle" and moving then
@@ -900,6 +964,7 @@ local function syncKitPose(ent, moving)
       _kitCols = borrow.kitCols,
       _kitColsByBlock = borrow.kitColsByBlock,
       _kitTicksByBlock = borrow.kitTicksByBlock,
+      _kitPoseBlock = borrow.kitPoseBlock,
       sprite = borrow.sprite,
     }
     ent._kitBlock = Sprites.kitBlockForAnim(spec.anim, borrow.kitBlocks or 1, actor)
@@ -1960,7 +2025,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
 
   function ent:play(kind)
     -- HUD confirm arms a close-the-gap walk; do not lunge until melee reach.
-    if (kind == "attack" or kind == "jump") and self._pendingCloseStrike then
+    if Sprites.isPhysicalKitAnim(kind) and self._pendingCloseStrike then
       return
     end
     self.anim = kind or "idle"
@@ -2190,7 +2255,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     end
 
     local anim = self.anim or "idle"
-    if (anim == "attack" or anim == "jump") and self._pendingCloseStrike then
+    if Sprites.isPhysicalKitAnim(anim) and self._pendingCloseStrike then
       anim = "idle"
       self.anim = "idle"
       self.animT = 0
@@ -2246,10 +2311,10 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.hidden = true
         self._pendingDetach = true
       end
-    elseif anim == "attack" then
+    elseif Sprites.isPhysicalKitAnim(anim) and anim ~= "jump" then
       self.animT = (self.animT or 0) + dt
-      local kit = Sprites.usesKitPose(self, "attack")
-      local dur = kit and Sprites.kitClipDuration(self, "attack", 0.34) or 0.34
+      local kit = Sprites.usesKitPose(self, anim)
+      local dur = kit and Sprites.kitClipDuration(self, anim, 0.34) or 0.34
       local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
       local tx = (towardX or self.basePx) - self.basePx
@@ -2765,6 +2830,7 @@ local function applyVisual(ent, visual)
   ent._kitCols = visual.kitCols or Sprites.KIT_COLS
   ent._kitColsByBlock = visual.kitColsByBlock
   ent._kitTicksByBlock = visual.kitTicksByBlock
+  ent._kitPoseBlock = visual.kitPoseBlock
   ent._kitCell = visual.kitCell or (visual.sprite and visual.sprite.kitCell)
       or Sprites.KIT_CELL
   if visual.sprite and visual.sprite.kit then
@@ -2788,7 +2854,7 @@ local function kitToVisual(sheet, img, side)
   local rows = math.max(1, math.floor(ih / cell))
   local cols = math.max(1, math.floor(iw / cell))
   local blocks = math.max(1, math.floor(rows / 4))
-  local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(sheet.kitMeta)
+  local colsByBlock, ticksByBlock, poseBlock = Sprites.kitMetaBlockTables(sheet.kitMeta)
   local kitCols = (sheet.kitMeta and tonumber(sheet.kitMeta.cols)) or cols
   if next(colsByBlock) == nil and cols > Sprites.KIT_COLS then
     -- Sidecar missing: count opaque cells so short poses do not play pad.
@@ -2832,6 +2898,7 @@ local function kitToVisual(sheet, img, side)
     kitCols = kitCols,
     kitColsByBlock = colsByBlock,
     kitTicksByBlock = ticksByBlock,
+    kitPoseBlock = poseBlock,
     image = img,
     resolveImage = function()
       return img
@@ -2914,6 +2981,7 @@ local function kitToVisual(sheet, img, side)
     kitCols = kitCols,
     kitColsByBlock = colsByBlock,
     kitTicksByBlock = ticksByBlock,
+    kitPoseBlock = poseBlock,
   }
 end
 
@@ -3035,7 +3103,7 @@ function Sprites.borrowKitVisual(mod, game, species)
   local visual = sheet and sheetToVisual(sheet, "borrow")
   if not visual and sheet then
     local meta = sheet.kitMeta or Sprites.kitMetaFromPath(sheet.image)
-    local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(meta)
+    local colsByBlock, ticksByBlock, poseBlock = Sprites.kitMetaBlockTables(meta)
     local blocks = 8
     if type(meta) == "table" and type(meta.poses) == "table" then
       local n = 0
@@ -3053,6 +3121,7 @@ function Sprites.borrowKitVisual(mod, game, species)
       kitCols = (meta and tonumber(meta.cols)) or Sprites.KIT_COLS,
       kitColsByBlock = colsByBlock,
       kitTicksByBlock = ticksByBlock,
+      kitPoseBlock = poseBlock,
       sprite = {
         kit = true,
         image = nil,

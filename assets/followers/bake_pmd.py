@@ -56,6 +56,7 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
 ]
 # Dex → max px. Clamped to CELL_MAX, not FIT_MIN.
 FIT_MAX_BY_DEX: dict[int, int] = {
+    15: 23,   # Beedrill - a bit smaller
     3: 32,    #  Venusaur - make a bit bigger
     5: 23,    # charmeleon - make a bit smaller
     6: 29,    # Charizard - make a bit bigger
@@ -105,7 +106,8 @@ POSES = [
     ("walk", ("Walk", "Idle")),
     ("dodge", ("Hop", "Rotate", "LeapForth", "Walk")),
     ("brace", ("Cringe", "LostBalance", "Hurt")),
-    ("physical", ("Attack", "Strike", "Swing", "Kick")),
+    ("physical", ("Attack", "Kick", "Punch", "MultiStrike", "MultiScratch",
+                  "MultiAttack", "Stomp", "Jab", "Strike", "Swing")),
     ("special", ("Shoot", "Charge", "SpAttack", "Strike")),
     ("hit", ("Pain", "Hurt", "Cringe")),
     ("idle", ("Idle", "Walk")),
@@ -124,8 +126,12 @@ EXTRA_POSES = [
     ("float", ("Float", "Hop", "Idle"), True, "dodge"),
     ("tumble", ("TumbleBack", "Tumble", "Pain", "Hurt"), True, "hit"),
     # Last and optional: skip when the pack has no FlapAround/Hover so
-    # Charizard does not grow a dummy flap block.
+    # Charizard does not grow a dummy flap block. Kick / Punch / Multi
+    # trail after flap so a missing flap does not shift those rows.
     ("flap", ("FlapAround", "Hover"), True, None),
+    ("kick", ("Kick", "Stomp"), True, None),
+    ("punch", ("Punch", "Jab"), True, None),
+    ("multi", ("MultiStrike", "MultiScratch", "MultiAttack", "Double"), True, None),
 ]
 
 PREFER_NAMED = {"idle", "faint"}

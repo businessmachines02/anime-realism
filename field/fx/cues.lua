@@ -173,7 +173,9 @@ function H.playMeleeStrike(session, side, ent, opts, jump)
         return Cues.TOSS_DUR
     end
     local leaping = jump or (ent and ent._attackJump)
-    H.playAnim(ent, leaping and "jump" or "attack")
+    local SpritesMod = session and session._deps and session._deps.Sprites
+    local pose = leaping and "jump" or Cues.physicalKitAnim(ent, opts, SpritesMod)
+    H.playAnim(ent, pose)
     return leaping and 0.56 or 0.48
 end
 
@@ -335,6 +337,81 @@ Cues.MULTI_HIT_MOVES = {
     BONE_RUSH = true,
     ROCK_BLAST = true,
 }
+
+Cues.KICK_MOVES = {
+    DOUBLE_KICK = true,
+    JUMP_KICK = true,
+    HI_JUMP_KICK = true,
+    HIGH_JUMP_KICK = true,
+    ROLLING_KICK = true,
+    LOW_KICK = true,
+    MEGA_KICK = true,
+    STOMP = true,
+}
+
+Cues.PUNCH_MOVES = {
+    MEGA_PUNCH = true,
+    FIRE_PUNCH = true,
+    ICE_PUNCH = true,
+    THUNDER_PUNCH = true,
+    COMET_PUNCH = true,
+    DIZZY_PUNCH = true,
+    MACH_PUNCH = true,
+}
+
+local function cueMoveKey(moveOrId)
+    if type(moveOrId) == "table" then
+        return cueMoveKey(moveOrId.id or moveOrId.moveId)
+    end
+    local id = tostring(moveOrId or ""):upper():gsub("%s+", "_")
+    if id == "" then
+        return nil
+    end
+    return id
+end
+
+function Cues.isKickMove(moveOrId)
+    local id = cueMoveKey(moveOrId)
+    return id and Cues.KICK_MOVES[id] == true
+end
+
+function Cues.isPunchMove(moveOrId)
+    local id = cueMoveKey(moveOrId)
+    return id and Cues.PUNCH_MOVES[id] == true
+end
+
+--- Dedicated Kick / Punch / Multi strips when the sidecar baked them.
+--- Multi-hit moves win if both a generic Attack row and Multi exist.
+function Cues.physicalKitAnim(ent, opts, SpritesMod)
+    opts = opts or {}
+    if opts.jump or (ent and ent._attackJump) then
+        return "jump"
+    end
+    SpritesMod = SpritesMod or opts.Sprites
+    local has = function(name)
+        return SpritesMod and type(SpritesMod.kitHasPose) == "function"
+            and SpritesMod.kitHasPose(ent, name)
+    end
+    local mid = H.cueMoveId(opts) or cueMoveKey(opts)
+    if Cues.isMultiHitMove(opts) or Cues.isMultiHitMove(mid) then
+        if has("multi") then
+            return "multi"
+        end
+        if Cues.isKickMove(mid) and has("kick") then
+            return "kick"
+        end
+        if Cues.isPunchMove(mid) and has("punch") then
+            return "punch"
+        end
+    end
+    if Cues.isKickMove(mid) and has("kick") then
+        return "kick"
+    end
+    if Cues.isPunchMove(mid) and has("punch") then
+        return "punch"
+    end
+    return "attack"
+end
 
 function Cues.isMultiHitMove(moveOrId)
     if type(moveOrId) == "table" then

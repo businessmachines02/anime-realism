@@ -163,6 +163,7 @@ Baked PMD blocks use the entire source row. Combat one-shots still finish in the
 | 1920–2047 | 61–64 | Float | 4 | Flying dodge (Ghost dodge still uses Dodge, paler). |
 | 2048–2175 | 65–68 | TumbleBack | 4 | Heavy knock / crit. |
 | 2176–2303 | 69–72 | Flap | 4 | Optional. FlapAround / Hover while moving (Flying types). |
+| after Flap | — | Kick / Punch / Multi | baked | Optional. Used for kick, punch, and multi-hit contact when the PMD pack has that strip. |
 
 ## Incremental sizes (32px cells)
 
