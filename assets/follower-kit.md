@@ -95,7 +95,7 @@ Cover-jumps, a melee COUNTER clash, and a whiff. Same four facings as Physical, 
 
 ### Sleep / Freeze / Confuse
 
-Standing still while afflicted. Sleep is a downed breathe, freeze is a held sit, confuse is a wobble or spin. Walking (sleepwalk) still uses Walk.
+Standing still while afflicted. Sleep is a downed breathe, freeze is a held sit, confuse is a wobble or spin. Asleep and frozen mons do not idle-wander.
 
 ### Hit
 

@@ -1716,7 +1716,7 @@ local function monStatus(ent)
     return nil
 end
 
-local function wanderBusy(ent, asleep)
+local function wanderBusy(ent)
     if not ent then
         return true
     end
@@ -1735,9 +1735,6 @@ local function wanderBusy(ent, asleep)
         or anim == "buried" or anim == "aloft" then
         return true
     end
-    if asleep then
-        return false
-    end
     return anim ~= "idle"
 end
 
@@ -1750,11 +1747,11 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         return
     end
     local status = monStatus(ent)
-    if status == "FRZ" then
+    if status == "FRZ" or status == "SLP" then
+        ent.wanderTx, ent.wanderTy = nil, nil
         return
     end
-    local asleep = status == "SLP"
-    if wanderBusy(ent, asleep) then
+    if wanderBusy(ent) then
         return
     end
     -- Still lerping to a cell target.
@@ -1766,7 +1763,7 @@ local function tickIdleWander(session, Grid, ent, side, dt)
             return
         end
     end
-    local wait = asleep and (1.2 + rand() * 0.8) or (2.5 + rand() * 1.5)
+    local wait = 2.5 + rand() * 1.5
     ent._wanderCD = (ent._wanderCD or wait) - dt
     if ent._wanderCD > 0 then
         return
@@ -1779,8 +1776,8 @@ local function tickIdleWander(session, Grid, ent, side, dt)
     local hazeOut = session.grid and Grid.hasHaze
         and Grid.hasHaze(session.grid)
     -- Awake mons often hold the lane. Hurt / glass cannons step away more.
-    -- A live hazard: always walk home. Sleepwalkers take the step.
-    if not asleep and not hazeOut and rand() > (0.35 + 0.45 * keep) then
+    -- A live hazard: always walk home.
+    if not hazeOut and rand() > (0.35 + 0.45 * keep) then
         ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
@@ -1792,9 +1789,9 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         end
     end
     if Grid.idleWander(session.grid, ent, side, foe) then
-        ent._wanderCD = asleep and (1.4 + rand() * 1.1) or (3.2 + rand() * 2.8)
+        ent._wanderCD = 3.2 + rand() * 2.8
     else
-        ent._wanderCD = asleep and (0.8 + rand() * 0.6) or (2.0 + rand() * 1.5)
+        ent._wanderCD = 2.0 + rand() * 1.5
     end
 end
 

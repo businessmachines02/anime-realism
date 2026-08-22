@@ -2223,13 +2223,13 @@ function tests.engaged_trainers_face_each_other()
   Lifecycle._testUnbind(battle)
 end
 
-function tests.asleep_mons_sleepwalk()
+function tests.asleep_mons_do_not_wander()
   local grid, plan = sampleGrid()
   local pHome = grid.home.player
   local eHome = grid.home.enemy
   local player = {
     id = "player", padU = pHome.u, padV = pHome.v, anim = "idle",
-    facing = "up", _wanderCD = 99,
+    facing = "up", _wanderCD = 0, wanderTx = 40, wanderTy = 40,
     _battleBattler = { mon = { status = "SLP" } },
   }
   local enemy = {
@@ -2262,11 +2262,13 @@ function tests.asleep_mons_sleepwalk()
   Lifecycle._testBind(battle, session)
   Lifecycle.tick(battle, 0.20, session._deps)
   eq(player.facing, "up", "sleep does not snap them to face the foe")
-  eq(player.padU, pHome.u, "asleep mon holds until a sleepwalk")
+  eq(player.padU, pHome.u, "asleep mon does not wander u")
+  eq(player.padV, pHome.v, "asleep mon does not wander v")
+  eq(player.wanderTx, nil, "sleep clears a queued wander")
   player._wanderCD = 0
   Lifecycle.tick(battle, 1 / 30, session._deps)
-  truthy(player.padU ~= pHome.u or player.padV ~= pHome.v,
-    "asleep mon sleepwalks a cell")
+  eq(player.padU, pHome.u, "asleep mon still holds u after cooldown")
+  eq(player.padV, pHome.v, "asleep mon still holds v after cooldown")
 
   player._battleBattler.mon.status = "FRZ"
   local frozenU, frozenV = player.padU, player.padV
@@ -7174,7 +7176,7 @@ function tests.kit_idle_override_follows_status()
   }, false), "sleep", "asleep standing uses sleep")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "SLP" } },
-  }, true), nil, "sleepwalk keeps walk")
+  }, true), nil, "a shove while asleep still uses walk")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "FRZ" } },
   }, false), "freeze", "frozen standing uses freeze")

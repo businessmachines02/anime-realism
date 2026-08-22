@@ -2323,7 +2323,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
           or 0
     end
     local moving = false
-    if tpx ~= nil and tpy ~= nil and status ~= "FRZ" then
+    if tpx ~= nil and tpy ~= nil and status ~= "FRZ" and status ~= "SLP" then
       local dx = tpx - self.basePx
       local dy = tpy - self.basePy
       local dist = math.sqrt(dx * dx + dy * dy)
@@ -2332,9 +2332,6 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         -- Leave _walkFrame alone so idle / cast can keep animating in place.
       else
         local gait = self.stepSpeed or 56
-        if status == "SLP" then
-          gait = math.max(16, gait * 0.42)
-        end
         local step = math.min(dist, gait * dt)
         self.basePx = self.basePx + dx / dist * step
         self.basePy = self.basePy + dy / dist * step
@@ -2418,9 +2415,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     if anim == "idle" and not self._fainting then
       -- Overworld-style idle: one stable frame with a gentle vertical bob.
       -- Closing a gap keeps the walk cycle from the pad lerp above.
-      -- Sleepwalkers keep the step frames so the shuffle reads.
       self._idleT = (self._idleT or 0) + dt
-      if not self._pendingCloseStrike and not (status == "SLP" and moving) then
+      if not self._pendingCloseStrike then
         self._walkFrame = 0
       end
     end
