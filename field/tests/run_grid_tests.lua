@@ -7535,7 +7535,12 @@ function tests.kit_sheet_beats_wilds_when_present()
   local sheet = Sprites.resolveSheet(mod, game, "PIKACHU")
   truthy(sheet and sheet.kit, "baked kit wins over Wilds")
   truthy(sheet.image:find("follower_025%.png$"), "dex kit path")
-  --  eq(sheet.frameWidth, 32, "32px cells")
+  local meta = Sprites.kitMetaFromPath(kit)
+  local cell = (meta and tonumber(meta.cell)) or Sprites.KIT_CELL
+  -- Hop overflow / large mons write 40+ into the sidecar; do not assume 32.
+  truthy(cell >= Sprites.KIT_CELL and cell <= Sprites.KIT_CELL_MAX,
+    "sidecar cell stays in the bake range")
+  eq(sheet.frameWidth, cell, "sheet uses sidecar cell size")
   eq(sheet.trueColor, true, "true-color kit")
 end
 
