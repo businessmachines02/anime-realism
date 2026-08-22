@@ -37,7 +37,7 @@ Baked PMD kits keep **every frame** in the source row. Width is `longest pose ×
 
 ## What each animation is
 
-Draw every pose in all four facings (front, left, right, back). A hand-drawn pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). A baked PMD pose is the entire source row in that order. Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MIN` / `FIT_BY_HEIGHT` in `bake_pmd.py`, never below 20px). The game still slides them on the pad.
+Draw every pose in all four facings (front, left, right, back). A hand-drawn pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). A baked PMD pose is the entire source row in that order. Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MAX_BY_DEX` / `FIT_BY_HEIGHT` in `bake_pmd.py`). The game still slides them on the pad.
 
 ### Walk
 
@@ -205,4 +205,4 @@ PMD Collab zips are **source**, not runtime. Unpack into `assets/followers/0005/
 ./assets/followers/run_bake.sh 0005
 ```
 
-That writes `follower_005.png` (every PMD frame × combat rows, extras after Idle/Faint) and `follower_005.kit` (per-pose ticks). Field battle loads those — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).
+That writes `follower_005.png` (every PMD frame × combat rows, extras after Idle/Faint) and `follower_005.kit` (per-pose ticks). Each frame's feet stay planted so hops rise; sideways shadow drift is kept so Attack still lunges. Field battle loads those — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).

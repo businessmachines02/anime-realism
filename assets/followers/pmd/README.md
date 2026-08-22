@@ -36,7 +36,7 @@ Bake after unpacking:
 
 1. Open the species on [sprites.pmdcollab.org](https://sprites.pmdcollab.org/#/0005?form=0).
 2. Download the sprite zip (or copy `sprite/0005/` from [SpriteCollab](https://github.com/PMDCollab/SpriteCollab)).
-3. Unpack so `AnimData.xml` and the `*-Anim.png` files sit in `assets/followers/0005/` (this is what the Charmeleon zip already looks like). Offsets and shadow PNGs are bake-time only (the white shadow pixel keeps hops and lunges on the ground). Nested `0000/` / `0001/` form folders can stay; the pad uses the files in the dex root. The fight still never opens those source strips.
+3. Unpack so `AnimData.xml` and the `*-Anim.png` files sit in `assets/followers/0005/` (this is what the Charmeleon zip already looks like). Offsets and shadow PNGs are bake-time only. The baker plants each frame's white shadow pixel so hops rise, and it keeps sideways shadow drift so Attack still lunges. Nested `0000/` / `0001/` form folders can stay; the pad uses the files in the dex root. The fight still never opens those source strips.
 
 Example from GitHub (Charmeleon):
 

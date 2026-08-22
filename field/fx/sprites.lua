@@ -792,6 +792,26 @@ function Sprites.kitCellOrigin(ent, facing)
   return col * cell, row * cell
 end
 
+-- Ground blob stays on column 0 of the live pose (planted / rest frame)
+-- so hops and lunges don't lift the voxel shadow with the body.
+function Sprites.kitShadowOrigin(ent, facing)
+  local cell = Sprites.KIT_CELL
+  local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
+  local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
+  return 0, row * cell
+end
+
+local function stampKitUVs(def, ent, facing)
+  if type(def) ~= "table" then
+    return
+  end
+  local u, v = Sprites.kitCellOrigin(ent, facing)
+  def.kitU, def.kitV = u, v
+  local su, sv = Sprites.kitShadowOrigin(ent, facing)
+  def.kitShadowU, def.kitShadowV = su, sv
+  def.kit = true
+end
+
 --- Facing handed to Dramatic Shape. GSC sheets draw right as a flip of
 --- left; kits already have a right row, so that extra mirror makes both
 --- battlers look the same way.
@@ -833,9 +853,7 @@ local function syncKitPose(ent, moving)
       sprite.kitCol = ent._kitCol
       local def = sprite.def
       if type(def) == "table" then
-        local u, v = Sprites.kitCellOrigin(ent, ent.facing)
-        def.kitU, def.kitV = u, v
-        def.kit = true
+        stampKitUVs(def, ent, ent.facing)
         def.kitImage = sprite.image or def.kitImage
       end
     end
@@ -849,9 +867,7 @@ local function syncKitPose(ent, moving)
     sprite.kitCol = ent._kitCol
     local def = sprite.def
     if type(def) == "table" then
-      local u, v = Sprites.kitCellOrigin(ent, ent.facing)
-      def.kitU, def.kitV = u, v
-      def.kit = true
+      stampKitUVs(def, ent, ent.facing)
       def.kitImage = sprite.image or def.kitImage
     end
   end
@@ -1659,9 +1675,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       sprite.kitCol = self._kitCol or 0
       local def = sprite.def
       if type(def) == "table" then
-        local u, v = Sprites.kitCellOrigin(self, self.facing)
-        def.kitU, def.kitV = u, v
-        def.kit = true
+        stampKitUVs(def, self, self.facing)
         def.kitImage = sprite.image or def.kitImage
         def.frameWidth = Sprites.KIT_CELL
         def.frameHeight = Sprites.KIT_CELL
@@ -2681,6 +2695,8 @@ local function kitToVisual(sheet, img, side)
     kit = true,
     kitU = 0,
     kitV = 0,
+    kitShadowU = 0,
+    kitShadowV = 0,
     kitImage = img,
   }
   local sprite = {
@@ -2954,7 +2970,7 @@ end
 
 local KIT_VOXEL_IDS = { "DRAMATIC_SHAPE", "DRAMALESS_SHAPE", "potato_voxel" }
 
-local function kitBillboardMesh(def, Voxel3D, cache)
+local function kitBillboardMesh(def, Voxel3D, cache, shadow)
   local img = def.kitImage
   if not (img and img.getDimensions) then
     img = loadImage(def.image)
@@ -2967,8 +2983,14 @@ local function kitBillboardMesh(def, Voxel3D, cache)
   if iw < cell or ih < cell then
     return nil
   end
-  local x = tonumber(def.kitU) or 0
-  local y = tonumber(def.kitV) or 0
+  local x, y
+  if shadow then
+    x = tonumber(def.kitShadowU) or 0
+    y = tonumber(def.kitShadowV) or 0
+  else
+    x = tonumber(def.kitU) or 0
+    y = tonumber(def.kitV) or 0
+  end
   -- Stay on the kit sheet. Falling through to Wilds' 1-column walker
   -- only has stand/step — that is the "two frames" look.
   if x < 0 then
@@ -3036,16 +3058,16 @@ local function wrapKitBillboards(SB, Voxel3D)
   SB.mesh = wrapper
   SB._arKitWrapper = wrapper
   SB._arKitMesh = true
-  if origShadow == orig or origShadow == nil then
-    SB.shadowQuad = wrapper
-  elseif type(origShadow) == "function" then
-    SB.shadowQuad = function(def, frame)
-      if type(def) == "table" and def.kit then
-        return kitBillboardMesh(def, Voxel3D, cache)
-      end
+  local function shadowWrapper(def, frame)
+    if type(def) == "table" and def.kit then
+      return kitBillboardMesh(def, Voxel3D, cache, true)
+    end
+    if type(origShadow) == "function" then
       return origShadow(def, frame)
     end
+    return orig(def, frame)
   end
+  SB.shadowQuad = shadowWrapper
   return true
 end
 

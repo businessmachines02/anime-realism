@@ -7383,6 +7383,14 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(v, 64, "walk right is its own row, not a flipped left")
 end
 
+function tests.kit_shadow_origin_stays_on_planted_column()
+  local u, v = Sprites.kitShadowOrigin({
+    _kitBlock = 1, _kitCol = 5, facing = "down",
+  }, "down")
+  eq(u, 0, "shadow uses column 0, not the hopped cell")
+  eq(v, 128, "shadow stays on the dodge front row")
+end
+
 function tests.kit_billboard_does_not_mirror_right()
   eq(Sprites.billboardFacing("right", true), "left",
     "kit right is drawn, not GSC-flipped")
@@ -7457,6 +7465,21 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
   local u0 = lastVerts[1][4]
   local expect = (32 + 0.02) / 128
   assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
+  local shadowMesh = SB.shadowQuad({
+    kit = true,
+    image = "kit.png",
+    kitImage = fakeImg,
+    kitU = 32,
+    kitV = 64,
+    kitShadowU = 0,
+    kitShadowV = 64,
+    frameWidth = 32,
+    frameHeight = 32,
+  }, 2)
+  eq(shadowMesh.via, "kit", "kit shadow stays on the kit sheet")
+  local shadowU = lastVerts[1][4]
+  local planted = (0 + 0.02) / 128
+  assert(math.abs(shadowU - planted) < 1e-6, "ground blob samples planted column 0")
   local vanilla = SB.mesh({ image = "npc.png", frames = 6 }, 3)
   eq(vanilla.via, "orig", "vanilla GSC strip still uses original mesh")
 end
