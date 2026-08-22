@@ -1,1 +1,1 @@
-2020-10-07 17:58:43.434146	CHUNSOFT	CUR	Unspecified	Walk,Attack,MultiScratch,Shoot,Twirl,Sleep,Hurt,Idle,Swing,Double,Hop,Charge,Rotate
+2023-12-11 18:59:07.522472	<@!157796074457661440>	CUR	PMDCollab_2	Idle,Walk,Sleep,Hurt,Attack,Charge,Shoot,MultiScratch,Twirl,Swing,Double,Rotate,Hop

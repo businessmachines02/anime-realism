@@ -7381,6 +7381,12 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(v, 0, "walk front origin y")
   u, v = Sprites.kitCellOrigin({ _kitBlock = 0, _kitCol = 0 }, "right")
   eq(v, 64, "walk right is its own row, not a flipped left")
+  u, v = Sprites.kitCellOrigin({
+    _kitBlock = 0, _kitCol = 1, _kitCell = 38,
+  }, "down")
+  eq(u, 38, "large-mon kits use the sidecar cell size")
+  eq(Sprites.kitCellSize({ _kitCell = 48 }), 48,
+    "hop-overflow cells stay in range")
 end
 
 function tests.dig_borrows_diglett_walk()

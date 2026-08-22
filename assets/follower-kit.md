@@ -33,11 +33,11 @@ When an attack is about to land, time slows and the trainer picks **dodge** or *
 
 Hand-drawn kits use the same **four columns**. Stack more four-row blocks under walking. Width stays 128 pixels.
 
-Baked PMD kits keep **every frame** in the source row. Width is `longest pose × 32`. Shorter poses sit on the left; unused cells stay empty. A `follower_XXX.kit` sidecar lists per-pose ticks (60/sec) so the pad plays the whole strip instead of four sampled cells.
+Baked PMD kits keep **every frame** in the source row. Width is `longest pose × cell` (32, or larger for Onix / Gyarados). Occupancy still sizes the rest frame (38px for those two); the cell grows if a hop or lunge would clip. Shorter poses sit on the left; unused cells stay empty. A `follower_XXX.kit` sidecar lists the cell size and per-pose ticks (60/sec) so the pad plays the whole strip instead of four sampled cells.
 
 ## What each animation is
 
-Draw every pose in all four facings (front, left, right, back). A hand-drawn pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). A baked PMD pose is the entire source row in that order. Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MAX_BY_DEX` / `FIT_BY_HEIGHT` in `bake_pmd.py`). The game still slides them on the pad.
+Draw every pose in all four facings (front, left, right, back). A hand-drawn pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). A baked PMD pose is the entire source row in that order. Keep the Pokémon inside the kit cell (32px, or larger when a rest-sized mon hops out of that box). The baker caps rest occupancy by Pokédex height (`FIT_MAX_BY_DEX` / `FIT_BY_HEIGHT` in `bake_pmd.py`) and grows the cell so later frames are not cropped. The game still slides them on the pad.
 
 ### Walk
 

@@ -186,6 +186,7 @@ end
 -- Hand-drawn kits are 4 columns (128px). Baked PMD kits are wider.
 -- Blocks 0–7 stay put so an older 8-block sheet still maps. 8+ append.
 Sprites.KIT_CELL = 32
+Sprites.KIT_CELL_MAX = 64
 Sprites.KIT_COLS = 4
 Sprites.KIT_TICK_HZ = 60
 -- PMD Idle often holds frame 0 for 40 ticks (~0.67s) then twitches.
@@ -572,13 +573,14 @@ function Sprites.kitSheetFromPath(path)
     return nil
   end
   local meta = Sprites.kitMetaFromPath(path)
+  local cell = (meta and tonumber(meta.cell)) or Sprites.KIT_CELL
   return {
     image = path,
     frames = (meta and meta.cols) or Sprites.KIT_COLS,
     walker = true,
     trueColor = true,
-    frameWidth = Sprites.KIT_CELL,
-    frameHeight = Sprites.KIT_CELL,
+    frameWidth = cell,
+    frameHeight = cell,
     kit = true,
     kitMeta = meta,
   }
@@ -797,8 +799,26 @@ function Sprites.kitColForAnim(ent, anim, moving)
   return Sprites.kitColFromUnit(u, n, ticks)
 end
 
+function Sprites.kitCellSize(ent)
+  local borrow = ent and ent._borrowVisual
+  local n = borrow and tonumber(borrow.kitCell)
+  if not n then
+    n = tonumber(ent and ent._kitCell)
+  end
+  if not n and ent and ent.sprite then
+    n = tonumber(ent.sprite.kitCell)
+    if not n and type(ent.sprite.def) == "table" then
+      n = tonumber(ent.sprite.def.frameWidth)
+    end
+  end
+  if n and n >= 16 and n <= (Sprites.KIT_CELL_MAX or 64) then
+    return n
+  end
+  return Sprites.KIT_CELL
+end
+
 function Sprites.kitCellOrigin(ent, facing)
-  local cell = Sprites.KIT_CELL
+  local cell = Sprites.kitCellSize(ent)
   local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
   local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
   local col = tonumber(ent and ent._kitCol) or 0
@@ -808,7 +828,7 @@ end
 -- Ground blob stays on column 0 of the live pose (planted / rest frame)
 -- so hops and lunges don't lift the voxel shadow with the body.
 function Sprites.kitShadowOrigin(ent, facing)
-  local cell = Sprites.KIT_CELL
+  local cell = Sprites.kitCellSize(ent)
   local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
   local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
   return 0, row * cell
@@ -895,8 +915,9 @@ local function syncKitPose(ent, moving)
         local borrowed = borrow.sprite
         def.kitImage = (borrowed and (borrowed.image or (borrowed.def and borrowed.def.kitImage)))
             or def.kitImage
-        def.frameWidth = Sprites.KIT_CELL
-        def.frameHeight = Sprites.KIT_CELL
+        local cell = Sprites.kitCellSize(ent)
+        def.frameWidth = cell
+        def.frameHeight = cell
       end
     end
     return
@@ -1725,8 +1746,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         else
           def.kitImage = sprite.image or def.kitImage
         end
-        def.frameWidth = Sprites.KIT_CELL
-        def.frameHeight = Sprites.KIT_CELL
+        local cell = Sprites.kitCellSize(self)
+        def.frameWidth = cell
+        def.frameHeight = cell
       end
     end
     local phase = (self._walkFrame == 1) and 1 or 0
@@ -2743,6 +2765,8 @@ local function applyVisual(ent, visual)
   ent._kitCols = visual.kitCols or Sprites.KIT_COLS
   ent._kitColsByBlock = visual.kitColsByBlock
   ent._kitTicksByBlock = visual.kitTicksByBlock
+  ent._kitCell = visual.kitCell or (visual.sprite and visual.sprite.kitCell)
+      or Sprites.KIT_CELL
   if visual.sprite and visual.sprite.kit then
     visual.sprite.kitBlock = ent._kitBlock or 0
     visual.sprite.kitCol = ent._kitCol or 0
@@ -2753,7 +2777,10 @@ local function kitToVisual(sheet, img, side)
   if not (img and love and love.graphics and love.graphics.newQuad) then
     return nil
   end
-  local cell = Sprites.KIT_CELL
+  if not sheet.kitMeta and sheet.image then
+    sheet.kitMeta = Sprites.kitMetaFromPath(sheet.image)
+  end
+  local cell = (sheet.kitMeta and tonumber(sheet.kitMeta.cell)) or Sprites.KIT_CELL
   local iw, ih = img:getDimensions()
   if iw < cell or ih < cell then
     return nil
@@ -2761,9 +2788,6 @@ local function kitToVisual(sheet, img, side)
   local rows = math.max(1, math.floor(ih / cell))
   local cols = math.max(1, math.floor(iw / cell))
   local blocks = math.max(1, math.floor(rows / 4))
-  if not sheet.kitMeta and sheet.image then
-    sheet.kitMeta = Sprites.kitMetaFromPath(sheet.image)
-  end
   local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(sheet.kitMeta)
   local kitCols = (sheet.kitMeta and tonumber(sheet.kitMeta.cols)) or cols
   if next(colsByBlock) == nil and cols > Sprites.KIT_COLS then
@@ -2803,6 +2827,7 @@ local function kitToVisual(sheet, img, side)
     kit = true,
     kitBlock = 0,
     kitCol = 0,
+    kitCell = cell,
     kitBlocks = blocks,
     kitCols = kitCols,
     kitColsByBlock = colsByBlock,
@@ -2884,6 +2909,7 @@ local function kitToVisual(sheet, img, side)
     drawer = drawer,
     lift = 24,
     kit = true,
+    kitCell = cell,
     kitBlocks = blocks,
     kitCols = kitCols,
     kitColsByBlock = colsByBlock,
@@ -2899,8 +2925,10 @@ local function isKitSheet(sheet, img)
     return false
   end
   local iw, ih = img:getDimensions()
-  local cell = Sprites.KIT_CELL
-  return iw >= 128 and ih >= 128 and (iw % cell) == 0 and (ih % 128) == 0
+  local cell = (sheet and sheet.kitMeta and tonumber(sheet.kitMeta.cell))
+      or Sprites.KIT_CELL
+  return iw >= cell * 4 and ih >= cell * 4
+      and (iw % cell) == 0 and (ih % (cell * 4)) == 0
 end
 
 local function sheetToVisual(sheet, side)
@@ -3020,6 +3048,7 @@ function Sprites.borrowKitVisual(mod, game, species)
     end
     visual = {
       kit = true,
+      kitCell = (meta and tonumber(meta.cell)) or Sprites.KIT_CELL,
       kitBlocks = blocks,
       kitCols = (meta and tonumber(meta.cols)) or Sprites.KIT_COLS,
       kitColsByBlock = colsByBlock,
@@ -3029,6 +3058,7 @@ function Sprites.borrowKitVisual(mod, game, species)
         image = nil,
         def = { kit = true, image = sheet.image },
         kitBlocks = blocks,
+        kitCell = (meta and tonumber(meta.cell)) or Sprites.KIT_CELL,
       },
     }
   end
@@ -3139,7 +3169,7 @@ local function kitBillboardMesh(def, Voxel3D, cache, shadow)
     return nil
   end
   local iw, ih = img:getDimensions()
-  local cell = Sprites.KIT_CELL
+  local cell = tonumber(def.frameWidth) or Sprites.KIT_CELL
   if iw < cell or ih < cell then
     return nil
   end

@@ -2,7 +2,7 @@
 """Flatten a PMD Collab pack into the field kit (follower_XXX.png + .kit).
 
 Battle never loads AnimData.xml or *-Anim.png. Each pose keeps every frame
-in its PMD row (sheet width = longest pose × 32). Shadow.png / Offsets.png
+in its PMD row (sheet width = longest pose × cell). Shadow.png / Offsets.png
 plant each frame's feet and keep side-lunge travel from the shadow X.
 A sidecar `.kit` file stores per-pose tick counts (60/sec) so the pad can
 play the whole strip.
@@ -13,6 +13,7 @@ play the whole strip.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -26,16 +27,14 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 CELL = 32
+CELL_MAX = 64
 COLS = 4
 BLOCK_ROWS = 4
 DEX_DIR = re.compile(r"^\d{3,4}$")
 
 # Occupancy: one scale per facing, from FIT_MAX_BY_DEX / FIT_BY_HEIGHT.
-# A long side view (Onix, Gyarados) must not shrink the front. Those
-# values are used as written (clamped only to the 32px cell). Each
-# frame's own shadow Y is planted so hops rise. Horizontal shadow drift
-# (side Attacks) is kept. Overflow clips the cell. Art smaller than its
-# cap stays that size unless FIT_UPSCALE is True.
+# Rest hits that cap. The sheet cell then grows (up to CELL_MAX) if a hop
+# or lunge would clip. A long side view must not shrink the front.
 FIT_MIN = 23
 FIT_MAX = 32
 FIT_UPSCALE = False
@@ -55,15 +54,15 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
     (2.0, 29),
     (2.5, 30),
 ]
-# Dex → max px. Clamped only to the 32px cell, not FIT_MIN.
+# Dex → max px. Clamped to CELL_MAX, not FIT_MIN.
 FIT_MAX_BY_DEX: dict[int, int] = {
-    3: 32,    # Venusaur - make a bit bigger
+    3: 32,    #  Venusaur - make a bit bigger
     5: 23,    # charmeleon - make a bit smaller
     6: 29,    # Charizard - make a bit bigger
     9: 29,    # Blastoise - make a bit bigger
-    19: 20,   # Rattata
-    25: 20,   # Pikachu - make smaller, like Growlithe
-    26: 25,   # Raichu - make the size of Ninetales
+    19: 20,   # ratata 
+    25: 20,   # pikachu - make smaller, like Growlite
+    26: 25,   # raichu - make the size of Ninetales
     37: 20,   # Vulpix
     38: 27,   # Ninetales
     58: 20,   # Growlithe
@@ -73,8 +72,8 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     136: 20,  # Flareon
     196: 20,  # Espeon
     197: 20,  # Umbreon
-    95: 32,    # Onix
-    130: 32,   # Gyarados
+    95: 38,    # Onix
+    130: 38,   # Gyarados
 }
 
 # Gen 1 Pokédex height in meters. Index 0 unused.
@@ -288,34 +287,48 @@ def fit_cap(dex: int | None) -> int:
                 if h < limit:
                     cap = px
                     break
-    return max(1, min(CELL, int(cap)))
+    return max(1, min(CELL_MAX, int(cap)))
 
 
-def pose_scale(bboxes: list[tuple[int, int, int, int] | None], max_px: int | None) -> float:
-    max_d = 1
+def kit_cell(cap: int | None) -> int:
+    """Minimum sheet cell: 32, or the occupancy cap for large mons."""
+    n = CELL if cap is None else int(cap)
+    return max(CELL, min(CELL_MAX, n))
+
+
+def pose_scale(bboxes: list[tuple[int, int, int, int] | None], max_px: int | None,
+               cell: int = CELL) -> float:
+    """Hit the occupancy cap on the rest/first frame. Later frames may be larger."""
+    ref = None
     for bb in bboxes:
-        if not bb:
-            continue
-        max_d = max(max_d, bb[2] - bb[0], bb[3] - bb[1])
-    cap = CELL if max_px is None else max(1, min(CELL, int(max_px)))
+        if bb:
+            ref = bb
+            break
+    if not ref:
+        return 1.0
+    max_d = max(1, ref[2] - ref[0], ref[3] - ref[1])
+    cap = cell if max_px is None else max(1, min(cell, int(max_px)))
     limit = cap / max_d
     return limit if FIT_UPSCALE else min(limit, 1.0)
 
 
 def place_anchored(frame: Image.Image, bbox: tuple[int, int, int, int] | None,
                    origin: tuple[float, float] | None, scale: float,
-                   dest_ax: float = CELL / 2, dest_ay: float = CELL - 1,
-                   extra: tuple[float, float] = (0.0, 0.0)) -> Image.Image:
+                   dest_ax: float | None = None, dest_ay: float | None = None,
+                   extra: tuple[float, float] = (0.0, 0.0),
+                   cell: int = CELL) -> Image.Image:
     """Map one source point to the cell feet; keep the rest of the pose."""
-    cell = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
+    dest_ax = cell / 2 if dest_ax is None else dest_ax
+    dest_ay = float(cell - 1) if dest_ay is None else dest_ay
+    canvas = Image.new("RGBA", (cell, cell), (0, 0, 0, 0))
     if not bbox:
-        return cell
+        return canvas
     trimmed = frame.crop(bbox)
     fw, fh = trimmed.size
     if fw < 1 or fh < 1:
-        return cell
-    nw = max(1, min(CELL, int(round(fw * scale))))
-    nh = max(1, min(CELL, int(round(fh * scale))))
+        return canvas
+    nw = max(1, min(cell, int(round(fw * scale))))
+    nh = max(1, min(cell, int(round(fh * scale))))
     resized = trimmed if (nw == fw and nh == fh) else trimmed.resize(
         (nw, nh), Image.Resampling.NEAREST)
     if origin is None:
@@ -324,35 +337,37 @@ def place_anchored(frame: Image.Image, bbox: tuple[int, int, int, int] | None,
         ox, oy = float(origin[0]), float(origin[1])
     paste_x = int(round(dest_ax - (ox - bbox[0]) * scale + extra[0]))
     paste_y = int(round(dest_ay - (oy - bbox[1]) * scale + extra[1]))
-    cell.paste(resized, (paste_x, paste_y), resized)
-    return cell
+    canvas.paste(resized, (paste_x, paste_y), resized)
+    return canvas
 
 
 def facing_origin(anchors: list[tuple[int, int] | None],
-                  bboxes: list[tuple[int, int, int, int] | None]):
+                  bboxes: list[tuple[int, int, int, int] | None],
+                  cell: int = CELL):
     for anchor in anchors:
         if anchor:
             return float(anchor[0]), float(anchor[1])
     for bbox in bboxes:
         if bbox:
             return (bbox[0] + bbox[2]) / 2.0, float(bbox[3] - 1)
-    return CELL / 2.0, float(CELL - 1)
+    return cell / 2.0, float(cell - 1)
 
 
 def plant_origin(anchor: tuple[int, int] | None,
-                 bbox: tuple[int, int, int, int] | None):
+                 bbox: tuple[int, int, int, int] | None,
+                 cell: int = CELL):
     if anchor:
         return float(anchor[0]), float(anchor[1])
     if bbox:
         return (bbox[0] + bbox[2]) / 2.0, float(bbox[3] - 1)
-    return CELL / 2.0, float(CELL - 1)
+    return cell / 2.0, float(cell - 1)
 
 
 def lunge_ax(anchor: tuple[int, int] | None, ref: tuple[float, float],
-             scale: float) -> float:
+             scale: float, cell: int = CELL) -> float:
     if not anchor:
-        return CELL / 2.0
-    return CELL / 2.0 + (anchor[0] - ref[0]) * scale * MOTION_AMP
+        return cell / 2.0
+    return cell / 2.0 + (anchor[0] - ref[0]) * scale * MOTION_AMP
 
 
 def paste_rect(bbox, origin, scale: float, dest_ax: float, dest_ay: float):
@@ -364,16 +379,16 @@ def paste_rect(bbox, origin, scale: float, dest_ax: float, dest_ay: float):
 
 
 def nudge_ax_into_cell(bbox, origin, scale: float, dest_ax: float,
-                       dest_ay: float) -> float:
-    """Keep a side lunge; pull it back if it would leave the 32px cell."""
+                       dest_ay: float, cell: int = CELL) -> float:
+    """Keep a side lunge; pull it back if it would leave the cell."""
     if not bbox:
         return dest_ax
     px, _, nw, _ = paste_rect(bbox, origin, scale, dest_ax, dest_ay)
     if px < 0:
         dest_ax += -px
     px, _, nw, _ = paste_rect(bbox, origin, scale, dest_ax, dest_ay)
-    if px + nw > CELL:
-        dest_ax -= (px + nw - CELL)
+    if px + nw > cell:
+        dest_ax -= (px + nw - cell)
     return dest_ax
 
 
@@ -400,7 +415,7 @@ def cell_anchor(shadow: Image.Image | None, offsets: Image.Image | None,
     return None
 
 
-def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None):
+def _read_block_frames(pack_dir: Path, anim: dict):
     png = pack_dir / f"{anim['source']}-Anim.png"
     if not png.is_file():
         return None
@@ -416,44 +431,21 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None)
             face_rows = FACE_ROWS_8 if dirs >= 8 else FACE_ROWS_4
             ticks = frame_ticks(anim, cols)
             frames: list[tuple[int, int, Image.Image, tuple | None, tuple | None]] = []
-            bboxes: list[tuple[int, int, int, int] | None] = []
             for face, pmd_row in enumerate(face_rows):
                 row = min(pmd_row, dirs - 1)
                 for col in range(cols):
                     raw = key_magenta(slice_frame(sheet, col, row, fw, fh))
                     bbox = raw.getbbox()
-                    bboxes.append(bbox)
                     anchor = cell_anchor(shadow, offsets, col, row, fw, fh, bbox)
                     frames.append((face, col, raw, bbox, anchor))
-            dest_ay = float(CELL - 1)
-            by_face: list[list] = [[] for _ in range(BLOCK_ROWS)]
-            for face, col, raw, bbox, anchor in frames:
-                by_face[face].append((col, raw, bbox, anchor))
-            fitted = []
-            for face in range(BLOCK_ROWS):
-                face_frames = by_face[face]
-                face_scale = pose_scale(
-                    [item[2] for item in face_frames], max_px)
-                ref = facing_origin(
-                    [item[3] for item in face_frames],
-                    [item[2] for item in face_frames])
-                origins = [plant_origin(item[3], item[2]) for item in face_frames]
-                dests = []
-                for item, origin in zip(face_frames, origins):
-                    dest_ax = nudge_ax_into_cell(
-                        item[2], origin, face_scale,
-                        lunge_ax(item[3], ref, face_scale), dest_ay)
-                    dests.append((dest_ax, dest_ay))
-                fitted.append((origins, dests, face_scale))
-            block = Image.new("RGBA", (CELL * cols, CELL * BLOCK_ROWS), (0, 0, 0, 0))
-            for face, col, raw, bbox, anchor in frames:
-                origins, dests, face_scale = fitted[face]
-                origin = origins[col] if col < len(origins) else plant_origin(anchor, bbox)
-                dest_ax, face_ay = dests[col] if col < len(dests) else (CELL / 2.0, dest_ay)
-                cell = place_anchored(
-                    raw, bbox, origin, face_scale, dest_ax, face_ay)
-                block.paste(cell, (col * CELL, face * CELL), cell)
-            return block, dirs, cols, ticks, fw, fh
+            return {
+                "frames": frames,
+                "cols": cols,
+                "dirs": dirs,
+                "ticks": ticks,
+                "fw": fw,
+                "fh": fh,
+            }
     finally:
         if shadow is not None:
             shadow.close()
@@ -461,10 +453,112 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None)
             offsets.close()
 
 
-def write_kit_meta(path: Path, max_cols: int, pose_ticks: list[tuple[str, list[int]]]) -> None:
+def _fit_faces(frames: list, max_px: int | None, cell: int, nudge: bool = True):
+    dest_ay = float(cell - 1)
+    by_face: list[list] = [[] for _ in range(BLOCK_ROWS)]
+    for face, col, raw, bbox, anchor in frames:
+        by_face[face].append((col, raw, bbox, anchor))
+    fitted = []
+    for face in range(BLOCK_ROWS):
+        face_frames = by_face[face]
+        rest_bb = None
+        for item in face_frames:
+            if item[0] == 0 and item[2]:
+                rest_bb = item[2]
+                break
+        if rest_bb is None:
+            for item in face_frames:
+                if item[2]:
+                    rest_bb = item[2]
+                    break
+        face_scale = pose_scale([rest_bb], max_px, cell)
+        ref = facing_origin(
+            [item[3] for item in face_frames],
+            [item[2] for item in face_frames], cell)
+        origins = [plant_origin(item[3], item[2], cell) for item in face_frames]
+        dests = []
+        for item, origin in zip(face_frames, origins):
+            dest_ax = lunge_ax(item[3], ref, face_scale, cell)
+            if nudge:
+                dest_ax = nudge_ax_into_cell(
+                    item[2], origin, face_scale, dest_ax, dest_ay, cell)
+            dests.append((dest_ax, dest_ay))
+        fitted.append((origins, dests, face_scale))
+    return fitted
+
+
+def measure_needed_cell(frames: list, max_px: int | None, probe: int) -> int:
+    """Grow the probe cell so rest-scaled hops and bigger frames stay inside.
+
+    Side lunges still get pulled back by nudge_ax_into_cell; do not inflate
+    the sheet to keep the full MOTION_AMP travel.
+    """
+    fitted = _fit_faces(frames, max_px, probe, nudge=False)
+    extra_top = 0
+    max_nw = max_nh = 0
+    for face, col, _raw, bbox, anchor in frames:
+        if not bbox:
+            continue
+        origins, dests, face_scale = fitted[face]
+        origin = origins[col] if col < len(origins) else plant_origin(anchor, bbox, probe)
+        dest_ax, dest_ay = dests[col] if col < len(dests) else (probe / 2.0, float(probe - 1))
+        # Size vs a centered plant; hops use the real dest so they keep headroom.
+        _px, py, nw, nh = paste_rect(bbox, origin, face_scale, dest_ax, dest_ay)
+        max_nw = max(max_nw, nw)
+        max_nh = max(max_nh, nh)
+        if py < 0:
+            extra_top = max(extra_top, int(math.ceil(-py)))
+    needed = max(probe, max_nw, max_nh, probe + extra_top)
+    return min(CELL_MAX, needed)
+
+
+def pack_needed_cell(pack_dir: Path, by_name: dict, max_px: int | None) -> int:
+    probe = kit_cell(max_px)
+    needed = probe
+    checks = [names for _pose, names in POSES]
+    checks.extend(names for _pose, names, _prefer, _fb in EXTRA_POSES)
+    seen: set[str] = set()
+    for names in checks:
+        anim, _dirs = pose_anim(pack_dir, by_name, names, prefer_named=True)
+        if not anim:
+            continue
+        key = anim.get("source") or anim.get("name")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        data = _read_block_frames(pack_dir, anim)
+        if not data:
+            continue
+        needed = max(needed, measure_needed_cell(data["frames"], max_px, probe))
+    return needed
+
+
+def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None,
+               cell: int = CELL):
+    data = _read_block_frames(pack_dir, anim)
+    if not data:
+        return None
+    frames = data["frames"]
+    cols, dirs = data["cols"], data["dirs"]
+    ticks, fw, fh = data["ticks"], data["fw"], data["fh"]
+    fitted = _fit_faces(frames, max_px, cell, nudge=True)
+    dest_ay = float(cell - 1)
+    block = Image.new("RGBA", (cell * cols, cell * BLOCK_ROWS), (0, 0, 0, 0))
+    for face, col, raw, bbox, anchor in frames:
+        origins, dests, face_scale = fitted[face]
+        origin = origins[col] if col < len(origins) else plant_origin(anchor, bbox, cell)
+        dest_ax, face_ay = dests[col] if col < len(dests) else (cell / 2.0, dest_ay)
+        tile = place_anchored(
+            raw, bbox, origin, face_scale, dest_ax, face_ay, cell=cell)
+        block.paste(tile, (col * cell, face * cell), tile)
+    return block, dirs, cols, ticks, fw, fh
+
+
+def write_kit_meta(path: Path, max_cols: int, pose_ticks: list[tuple[str, list[int]]],
+                   cell: int = CELL) -> None:
     lines = [
         "# follower kit timing; 60 ticks/sec. Pad plays every column.",
-        f"kit {CELL} {max_cols}",
+        f"kit {cell} {max_cols}",
     ]
     for pose, ticks in pose_ticks:
         lines.append(pose + " " + " ".join(str(t) for t in ticks))
@@ -482,6 +576,9 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
     ticks_by_pose: dict[str, list[int]] = {}
     used = 0
     max_px = fit_cap(dex)
+    cell = pack_needed_cell(pack_dir, by_name, max_px)
+    if cell > kit_cell(max_px):
+        print(f"  cell {cell} (occupancy {max_px}; room for hops)")
     for pose, names in POSES:
         anim, dirs = pose_anim(
             pack_dir, by_name, names,
@@ -493,7 +590,7 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
             if pose == "idle" or pose == "faint":
                 continue
             break
-        baked = bake_block(pack_dir, anim, dirs, max_px)
+        baked = bake_block(pack_dir, anim, dirs, max_px, cell)
         if not baked:
             if pose == "idle" or pose == "faint":
                 continue
@@ -511,7 +608,7 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
     if used >= 8:
         for pose, names, prefer, fallback in EXTRA_POSES:
             anim, dirs = pose_anim(pack_dir, by_name, names, prefer_named=prefer)
-            baked = bake_block(pack_dir, anim, dirs, max_px) if anim else None
+            baked = bake_block(pack_dir, anim, dirs, max_px, cell) if anim else None
             if baked:
                 block, dirs, cols, ticks, fw, fh = baked
                 print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={cols}")
@@ -530,13 +627,13 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
             ticks_by_pose[pose] = ticks
             pose_ticks.append((pose, ticks))
             used += 1
-    max_cols = max((max(1, b.width // CELL) for b in blocks), default=COLS)
-    kit = Image.new("RGBA", (CELL * max_cols, CELL * BLOCK_ROWS * used), (0, 0, 0, 0))
+    max_cols = max((max(1, b.width // cell) for b in blocks), default=COLS)
+    kit = Image.new("RGBA", (cell * max_cols, cell * BLOCK_ROWS * used), (0, 0, 0, 0))
     for i, block in enumerate(blocks):
-        kit.paste(block, (0, i * CELL * BLOCK_ROWS), block)
+        kit.paste(block, (0, i * cell * BLOCK_ROWS), block)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     kit.save(out_path)
-    write_kit_meta(out_path.with_suffix(".kit"), max_cols, pose_ticks)
+    write_kit_meta(out_path.with_suffix(".kit"), max_cols, pose_ticks, cell)
     print(f"wrote {out_path} ({kit.width}x{kit.height}) + {out_path.with_suffix('.kit').name}")
     return True
 
