@@ -1342,7 +1342,7 @@ function tests.fire_now_hit_stops_the_charge()
   }), "FIRE hit cue")
   truthy(not enemy._pendingCloseStrike, "connecting FIRE cancels the charge")
   truthy(enemy._heavyHit, "charger is knocked back")
-  eq(enemy.lastAnim, "hit", "charger takes the bolt")
+  eq(enemy.lastAnim, "tumble", "charger takes the bolt")
   truthy(enemy.padU ~= startU or enemy.padV ~= startV,
     "charger leaves the charge cell")
 end
@@ -1377,7 +1377,7 @@ function tests.check_now_hit_stops_the_charge_one_tile()
     category = "physical", moveId = "TACKLE",
   }), "CHECK hit cue")
   truthy(not enemy._pendingCloseStrike, "connecting CHECK cancels the charge")
-  eq(enemy.lastAnim, "hit", "charger takes the tackle")
+  eq(enemy.lastAnim, "tumble", "charger takes the tackle")
   local moved = math.max(math.abs((enemy.padU or 0) - startU),
     math.abs((enemy.padV or 0) - eHome.v))
   eq(moved, 1, "CHECK knocks the charger one tile, not two")
@@ -1630,7 +1630,7 @@ function tests.foe_fire_hit_stops_your_charge()
   }), "foe FIRE hit cue")
   truthy(not player._pendingCloseStrike, "connecting foe FIRE cancels your charge")
   truthy(player._heavyHit, "you are knocked back")
-  eq(player.lastAnim, "hit", "you take the bolt")
+  eq(player.lastAnim, "tumble", "you take the bolt")
   truthy(player.padU ~= startU or player.padV ~= startV,
     "you leave the charge cell")
 end
@@ -2612,7 +2612,7 @@ function tests.powerful_moves_push_and_impact()
     moveType = "FIRE",
     category = "special",
   }), "powerful hit cue")
-  eq(enemy.lastAnim, "hit", "heavy hit animation")
+  eq(enemy.lastAnim, "tumble", "heavy hit animation")
   truthy(enemy._heavyHit, "heavy hit flag set for sprite knockback")
   eq(enemy.padU, startU + 1, "powerful hit pushes one tile before rock")
   eq(#(session.projectiles or {}), 3, "power hit + wall impact + ground kick")
@@ -2660,7 +2660,7 @@ function tests.powerful_moves_push_and_impact()
     category = "physical",
     crit = true,
   }), "critical hit cue")
-  eq(enemy.lastAnim, "hit", "crit still flinches")
+  eq(enemy.lastAnim, "tumble", "crit still flinches")
   truthy(enemy._heavyHit, "crit knocks like a heavy hit")
   local critStyles = {}
   for i = 1, #(session.projectiles or {}) do
@@ -2715,7 +2715,7 @@ function tests.counter_clash_punches_in()
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
     category = "physical", clash = true, push = true,
   }), "clash hit cue")
-  eq(enemy.lastAnim, "hit", "foe takes the clash")
+  eq(enemy.lastAnim, "tumble", "foe takes the clash")
   truthy(enemy._heavyHit, "clash knock is heavy")
 end
 
@@ -2760,7 +2760,7 @@ function tests.finishing_blow_plays_the_clash()
     category = "physical", moveId = "TACKLE", finishing = true,
   }), "finishing hit cue")
   eq(player.lastAnim, "counter", "attacker plays the counter pose")
-  eq(enemy.lastAnim, "hit", "foe takes the KO")
+  eq(enemy.lastAnim, "tumble", "foe takes the KO")
   truthy(session._clashPunch, "camera punch-in is armed")
   truthy((session._clashSlowT or 0) >= 0.7, "slow-mo holds the beat")
   truthy(enemy._heavyHit, "KO knock is heavy")
@@ -3125,7 +3125,7 @@ function tests.close_gap_powerful_hit_pushes_two()
   eq(player.lastAnim, "attack", "punch lands in melee")
   eq(enemy.padU, 8, "powerful close-in hit pushes two tiles")
   truthy(enemy._heavyHit, "heavy hit flag set")
-  eq(enemy.lastAnim, "hit", "foe plays the hit")
+  eq(enemy.lastAnim, "tumble", "foe plays the hit")
 end
 
 function tests.bite_closes_gap_when_typed_special()
@@ -7112,8 +7112,11 @@ function tests.kit_block_uses_combat_rows()
   eq(Sprites.kitBlockForAnim("freeze", 16), 13, "freeze is its own row")
   eq(Sprites.kitBlockForAnim("confuse", 16), 14, "confuse is its own row")
   eq(Sprites.kitBlockForAnim("float", 16), 15, "float is its own row")
+  eq(Sprites.kitBlockForAnim("tumble", 16), 5, "tumble uses hit until the extra row")
+  eq(Sprites.kitBlockForAnim("tumble", 17), 16, "tumble is the 17th block")
   eq(Sprites.kitBlockForAnim("flap", 16), 0, "flap is walk without the extra row")
-  eq(Sprites.kitBlockForAnim("flap", 17), 16, "flap is the 17th block")
+  eq(Sprites.kitBlockForAnim("flap", 17), 0, "flap is walk when only tumble is present")
+  eq(Sprites.kitBlockForAnim("flap", 18), 17, "flap is the 18th block")
   eq(Sprites.kitBlockForAnim("dodge", 16, { _dodgeStyle = "lift" }), 15,
     "flying dodge uses float")
   eq(Sprites.kitBlockForAnim("dodge", 8, { _dodgeStyle = "lift" }), 1,
@@ -7143,7 +7146,7 @@ end
 function tests.kit_move_override_flaps_when_flying()
   local pidgeot = {
     _kitSheet = true,
-    _kitBlocks = 17,
+    _kitBlocks = 18,
     _flapWalk = true,
     _battleBattler = { curTypes = { "NORMAL", "FLYING" } },
   }
@@ -7154,7 +7157,7 @@ function tests.kit_move_override_flaps_when_flying()
     "same burst can stay on Walk")
   eq(Sprites.kitMoveOverride({
     _kitSheet = true,
-    _kitBlocks = 17,
+    _kitBlocks = 18,
     _flapWalk = true,
     _battleBattler = { curTypes = { "FIRE" } },
   }, true), nil, "ground types do not flap")
@@ -7181,6 +7184,8 @@ function tests.kit_pose_requires_combat_block()
     "short kit jump still uses physical")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "charge"),
     "tall kit plays charge")
+  truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 17 }, "tumble"),
+    "tumble row plays when present")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 16 }, "sleep"),
     "tall kit plays sleep")
   truthy(Sprites.usesKitPose({ _kitSheet = true, _kitBlocks = 8 }, "faint"),
@@ -7227,11 +7232,12 @@ end
 
 function tests.kit_col_walk_and_combat()
   eq(Sprites.kitColForAnim({ _walkT = 0 }, "idle", false), 0, "idle column")
-  eq(Sprites.kitColForAnim({ _idleT = 0.6 }, "idle", false), 2, "idle other stand")
+  eq(Sprites.kitColForAnim({ _idleT = 0.48 }, "idle", false), 3,
+    "standing walk plays the whole row, not rest 0/2")
   eq(Sprites.kitColForAnim({ _walkT = 0.2, _kitBlocks = 7 }, "idle", true), 1,
     "moving uses walk columns")
-  eq(Sprites.kitColForAnim({ _idleT = 0.3, _kitBlocks = 7 }, "idle", false), 1,
-    "dedicated idle loops all four frames")
+  eq(Sprites.kitColForAnim({ _idleT = 0.36, _kitBlocks = 7 }, "idle", false), 2,
+    "dedicated idle loops all frames")
   eq(Sprites.kitColForAnim({ _walkT = 0.2 }, "idle", true), 1, "walk step column")
   eq(Sprites.kitColForAnim({ animT = 0 }, "attack", false), 0, "physical start")
   eq(Sprites.kitColForAnim({ animT = 0.18 }, "attack", false), 2, "physical recover")
@@ -7244,8 +7250,55 @@ function tests.kit_col_walk_and_combat()
     "charge loops while held")
   eq(Sprites.kitColForAnim({ _idleT = 0 }, "freeze", false), 0,
     "freeze holds the first frame")
-  eq(Sprites.kitColForAnim({ _idleT = 0.9 }, "sleep", false), 2,
-    "sleep loops slower than idle")
+  eq(Sprites.kitColForAnim({ _idleT = 0.56 }, "sleep", false), 2,
+    "sleep loops the whole row")
+end
+
+function tests.kit_meta_plays_full_pmd_row()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "# baked from 0005",
+    "kit 32 14",
+    "walk 8 10 8 10",
+    "physical 2 2 2 2 4 1 1 2 2 2 2 2 2 2",
+    "idle 40 2 3 3 3 2",
+    "faint 2 2 2 8",
+  }, "\n"))
+  truthy(meta, "sidecar parses")
+  eq(meta.cols, 14, "sheet width in cells")
+  eq(meta.poses.physical.frames, 14, "attack keeps every PMD column")
+  eq(meta.poses.idle.frames, 6, "idle is the breathe loop, not 4")
+  local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(meta)
+  eq(colsByBlock[3], 14, "physical block is 14 wide")
+  eq(colsByBlock[6], 6, "idle block is 6 wide")
+  local ent = {
+    _kitSheet = true,
+    _kitBlocks = 8,
+    _kitCols = 14,
+    _kitColsByBlock = colsByBlock,
+    _kitTicksByBlock = ticksByBlock,
+  }
+  eq(Sprites.kitFrameCount(ent, "attack"), 14, "physical uses the full row")
+  eq(Sprites.kitFrameCount(ent, "idle"), 6, "idle uses its own length")
+  eq(Sprites.kitColForAnim(ent, "attack", false), 0, "attack starts on col 0")
+  local clip = Sprites.kitClipDuration(ent, "attack", 0.34)
+  truthy(clip > 0.34, "full strip holds the clip open")
+  ent.animT = clip * 0.55
+  local mid = Sprites.kitColForAnim(ent, "attack", false)
+  truthy(mid >= 6 and mid <= 13, "attack mid-clip is past the old 4-frame pick")
+  ent.animT = clip
+  eq(Sprites.kitColForAnim(ent, "attack", false), 13, "attack settles on last col")
+  ent._idleT = 0
+  eq(Sprites.kitColForAnim(ent, "idle", false), 0, "idle starts on col 0")
+  local looped = Sprites.kitLoopTicks(meta.poses.idle.ticks, "idle")
+  eq(looped[1], 16, "40-tick PMD rest is clamped, then idle is slowed")
+  ent._idleT = looped[1] / 60 + 0.001
+  eq(Sprites.kitColForAnim(ent, "idle", false), 1, "idle advances through the row")
+  ent.animT = 1
+  eq(Sprites.kitColForAnim(ent, "faint", false), 3, "faint still holds last crumple")
+  eq(Sprites.kitColFromUnit(0.5, 14, meta.poses.physical.ticks) >= 4, true,
+    "unit map reaches past four sampled frames")
+  eq(Sprites.kitFrameCount({ _kitCols = 14 }, "idle"), 4,
+    "sheet width is not a pose length")
 end
 
 function tests.kit_charge_hold_until_shoot()
@@ -7330,6 +7383,25 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(v, 64, "walk right is its own row, not a flipped left")
 end
 
+function tests.dig_borrows_diglett_walk()
+  local spec = Sprites.kitBorrowSpec("vanish_dig")
+  eq(spec.species, "DIGLETT", "DIG vanish uses Diglett")
+  eq(spec.anim, "walk", "Diglett Walk is the ground-pop")
+  eq(Sprites.kitBorrowSpec("buried").anim, "idle", "buried holds Diglett idle")
+  eq(Sprites.kitBorrowSpec("emerge_dig").species, "DIGLETT",
+    "emerge uses Diglett too")
+  eq(Sprites.kitBorrowSpec("attack"), nil, "normal attacks keep the user")
+  eq(Sprites.SPECIES_DEX.DIGLETT, 50, "DIGLETT maps to follower_050")
+end
+
+function tests.kit_shadow_origin_stays_on_planted_column()
+  local u, v = Sprites.kitShadowOrigin({
+    _kitBlock = 1, _kitCol = 5, facing = "down",
+  }, "down")
+  eq(u, 0, "shadow uses column 0, not the hopped cell")
+  eq(v, 128, "shadow stays on the dodge front row")
+end
+
 function tests.kit_billboard_does_not_mirror_right()
   eq(Sprites.billboardFacing("right", true), "left",
     "kit right is drawn, not GSC-flipped")
@@ -7404,6 +7476,21 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
   local u0 = lastVerts[1][4]
   local expect = (32 + 0.02) / 128
   assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
+  local shadowMesh = SB.shadowQuad({
+    kit = true,
+    image = "kit.png",
+    kitImage = fakeImg,
+    kitU = 32,
+    kitV = 64,
+    kitShadowU = 0,
+    kitShadowV = 64,
+    frameWidth = 32,
+    frameHeight = 32,
+  }, 2)
+  eq(shadowMesh.via, "kit", "kit shadow stays on the kit sheet")
+  local shadowU = lastVerts[1][4]
+  local planted = (0 + 0.02) / 128
+  assert(math.abs(shadowU - planted) < 1e-6, "ground blob samples planted column 0")
   local vanilla = SB.mesh({ image = "npc.png", frames = 6 }, 3)
   eq(vanilla.via, "orig", "vanilla GSC strip still uses original mesh")
 end

@@ -249,7 +249,7 @@ replacement mon.
 | attack (multi-hit follow-up) | stay in melee; no second close-the-gap | replay contact/cast + `attack` / `hit` per extra engine anim row |
 | attack (special) | stay | `cast` (in-place) |
 | status | stay | `cast` + world-space orbit |
-| hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst; **weak** hits still play a `light_hit` spark on the target | `hit` (heavy knock when powerful) |
+| hit | knockback chance (phys > special); **powerful** moves always shove up to 2 cells + typed burst; **weak** hits still play a `light_hit` spark on the target | `tumble` on heavy/crit/clash, else `hit` |
 | selfhit | stay | `selfhit` + bonk burst (confusion / recoil / crash) |
 | faint | stay | dust puff; trainer-owned → red recall laser + shrink; wild → sink |
 | recall | stay | red thunder-laser from trainer + shrink |

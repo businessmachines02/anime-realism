@@ -7,7 +7,7 @@ Unpack a [PMD Sprite Repository](https://sprites.pmdcollab.org/) zip, then **bak
 ./assets/followers/run_bake.sh
 ```
 
-That writes `follower_005.png`. The script creates `assets/followers/.venv` (Pillow) on first run if needed. Drop-in `follower_XXX.png` still wins if you draw one by hand.
+That writes `follower_005.png` (every PMD frame in each pose row) and `follower_005.kit` (per-pose ticks at 60/sec). The script creates `assets/followers/.venv` (Pillow) on first run if needed. Drop-in `follower_XXX.png` still wins if you draw one by hand (4 columns, no `.kit`).
 
 ## Folder
 
@@ -36,7 +36,7 @@ Bake after unpacking:
 
 1. Open the species on [sprites.pmdcollab.org](https://sprites.pmdcollab.org/#/0005?form=0).
 2. Download the sprite zip (or copy `sprite/0005/` from [SpriteCollab](https://github.com/PMDCollab/SpriteCollab)).
-3. Unpack so `AnimData.xml` and the `*-Anim.png` files sit in `assets/followers/0005/` (this is what the Charmeleon zip already looks like). Offsets and shadow PNGs are optional for the pad. Nested `0000/` / `0001/` form folders can stay; the pad uses the files in the dex root.
+3. Unpack so `AnimData.xml` and the `*-Anim.png` files sit in `assets/followers/0005/` (this is what the Charmeleon zip already looks like). Offsets and shadow PNGs are bake-time only. The baker plants each frame's white shadow pixel so hops rise, and it keeps sideways shadow drift so Attack still lunges. Nested `0000/` / `0001/` form folders can stay; the pad uses the files in the dex root. The fight still never opens those source strips.
 
 Example from GitHub (Charmeleon):
 
@@ -66,9 +66,10 @@ Then copy the `*-Anim.png` files from that same `sprite/0005/` folder.
 | Freeze | Sit, Idle |
 | Confuse | Rotate, Tumble, LostBalance |
 | Float | Float, Hop, Idle |
+| TumbleBack | TumbleBack, Tumble, Pain |
 | Flap (Flying move) | FlapAround, Hover |
 
-Eight-direction sheets use south / east / north / west (skip diagonals). Frame timing comes from `AnimData.xml` (60 ticks per second).
+Eight-direction sheets use south / east / north / west (skip diagonals). The baker copies every column of the chosen strip — it does not pick four keyframes. Frame timing is written into `follower_XXX.kit` from `AnimData.xml` (60 ticks per second). The pad loads that sidecar next to the PNG; it still never opens the XML or `*-Anim.png` in a fight.
 
 ## Credit
 

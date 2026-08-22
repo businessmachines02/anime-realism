@@ -203,7 +203,7 @@ return function(Cues)
             Grid.knockbackTiles(session.grid, ent, foe, tiles)
         end
         ent._heavyHit = true
-        H.playAnim(ent, "hit")
+        H.playHitAnim(ent)
         return true
     end
 

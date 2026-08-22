@@ -1,10 +1,12 @@
 -- Field battle — OW follower sprites as battlers + motion.
 --
--- Pad battlers prefer this mod's 4-column combat kits
+-- Pad battlers prefer this mod's combat kits
 -- (`assets/followers/follower_XXX.png`, 32px cells, no right-flip). Extra
 -- rows play dodge / brace / physical / special / hit, then idle, then faint,
 -- then charge / jump / counter / miss / sleep / freeze / confuse / float,
--- then optional flap. FIELD
+-- then tumble, then optional flap. Hand-drawn kits stay 4 columns (128px).
+-- Baked PMD kits keep every frame in the row; width is longest-pose × 32.
+-- A sidecar `follower_XXX.kit` stores per-pose ticks (60/sec). FIELD
 -- SPRITES (AUTO / GSC / HGSS / POKEDEX) only picks the Wilds / PokePC
 -- fallback. Overworld followers behind the player stay on those packs.
 -- Never load PMD `AnimData.xml` or `*-Anim.png` here — those strips wedge
@@ -113,7 +115,7 @@ local function speciesDex(game, species)
   if dex and dex > 0 then
     return dex
   end
-  return nil
+  return Sprites.SPECIES_DEX[key]
 end
 
 local function isShinyBattler(battler)
@@ -180,11 +182,30 @@ local function sheetFromPath(path, frames, walker)
   return { image = path, frames = frames or 6, walker = walker ~= false, trueColor = true }
 end
 
--- Combat kit: 4 columns × N 4-row blocks, 32px cells, 128px wide.
+-- Combat kit: N columns × M 4-row blocks, 32px cells.
+-- Hand-drawn kits are 4 columns (128px). Baked PMD kits are wider.
 -- Blocks 0–7 stay put so an older 8-block sheet still maps. 8+ append.
 Sprites.KIT_CELL = 32
 Sprites.KIT_COLS = 4
+Sprites.KIT_TICK_HZ = 60
+-- PMD Idle often holds frame 0 for 40 ticks (~0.67s) then twitches.
+-- Clamp loop frames so the whole row is visible, then idle/sleep run slower.
+Sprites.KIT_LOOP_TICK_MIN = 6
+Sprites.KIT_LOOP_TICK_MAX = 10
+Sprites.KIT_IDLE_TICK_MIN = 10
+Sprites.KIT_IDLE_TICK_MAX = 16
+Sprites.KIT_SLEEP_TICK_MIN = 14
+Sprites.KIT_SLEEP_TICK_MAX = 20
 Sprites.KIT_FACE = { down = 0, left = 1, right = 2, up = 3 }
+-- National Dex when game.data is missing (borrowed move tells).
+Sprites.SPECIES_DEX = { DIGLETT = 50, DUGTRIO = 51 }
+-- Shared move tells: play another species' baked kit, never raw PMD.
+-- Diglett has no PMD "Move" strip; Walk is the ground-pop.
+Sprites.KIT_BORROW = {
+  vanish_dig = { species = "DIGLETT", anim = "walk" },
+  buried = { species = "DIGLETT", anim = "idle" },
+  emerge_dig = { species = "DIGLETT", anim = "walk" },
+}
 Sprites.KIT_IDLE_BLOCK = 6
 Sprites.KIT_FAINT_BLOCK = 7
 Sprites.KIT_BLOCK = {
@@ -199,7 +220,8 @@ Sprites.KIT_BLOCK = {
   faint = 7,
   sleep = 12, freeze = 13, confuse = 14,
   float = 15,
-  flap = 16,
+  tumble = 16, tumbleback = 16,
+  flap = 17,
 }
 
 -- Missing extra rows reuse an earlier combat strip instead of walk.
@@ -208,6 +230,7 @@ Sprites.KIT_FALLBACK = {
   charge = 4,
   sleep = 6, freeze = 6, confuse = 6,
   float = 1,
+  tumble = 5, tumbleback = 5,
 }
 
 -- Kit faint: four collapse frames, then hold the crumpled pose.
@@ -216,9 +239,310 @@ Sprites.KIT_FAINT_HOLD = 0.28
 
 local KIT_ANIM_DUR = {
   attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
-  cast = 0.42, brace = 0.40, selfhit = 0.46,
+  cast = 0.48, brace = 0.40, selfhit = 0.46, tumble = 0.58,
   faint = Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD,
 }
+
+function Sprites.parseKitMeta(text)
+  if type(text) ~= "string" or text == "" then
+    return nil
+  end
+  local poses = {}
+  local cell, cols = Sprites.KIT_CELL, Sprites.KIT_COLS
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if line ~= "" and not line:match("^#") then
+      local words = {}
+      for w in line:gmatch("%S+") do
+        words[#words + 1] = w
+      end
+      local kind = words[1]
+      if kind == "kit" then
+        cell = tonumber(words[2]) or cell
+        cols = tonumber(words[3]) or cols
+      elseif kind then
+        local ticks = {}
+        for i = 2, #words do
+          ticks[#ticks + 1] = math.max(1, math.floor(tonumber(words[i]) or 2))
+        end
+        if #ticks > 0 then
+          poses[kind] = { frames = #ticks, ticks = ticks }
+        end
+      end
+    end
+  end
+  return { cell = cell, cols = cols, poses = poses }
+end
+
+local function readTextFile(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  local f = io.open(path, "rb")
+  if f then
+    local text = f:read("*a")
+    f:close()
+    if type(text) == "string" and text ~= "" then
+      return text
+    end
+  end
+  if love and love.filesystem and type(love.filesystem.read) == "function" then
+    local ok, text = pcall(love.filesystem.read, path)
+    if ok and type(text) == "string" and text ~= "" then
+      return text
+    end
+  end
+  return nil
+end
+
+function Sprites.kitMetaFromPath(pngPath)
+  if type(pngPath) ~= "string" or pngPath == "" then
+    return nil
+  end
+  local metaPath = pngPath:gsub("%.[Pp][Nn][Gg]$", ".kit")
+  return Sprites.parseKitMeta(readTextFile(metaPath))
+end
+
+function Sprites.kitMetaBlockTables(meta)
+  local colsByBlock = {}
+  local ticksByBlock = {}
+  local poses = meta and meta.poses
+  if type(poses) ~= "table" then
+    return colsByBlock, ticksByBlock
+  end
+  for pose, data in pairs(poses) do
+    local block = Sprites.KIT_BLOCK[pose]
+    if block ~= nil and type(data) == "table" then
+      local ticks = data.ticks
+      local frames = tonumber(data.frames)
+      if not frames and type(ticks) == "table" then
+        frames = #ticks
+      end
+      if frames then
+        colsByBlock[block] = math.max(1, math.floor(frames))
+      end
+      if type(ticks) == "table" and #ticks > 0 then
+        ticksByBlock[block] = ticks
+      end
+    end
+  end
+  return colsByBlock, ticksByBlock
+end
+
+local function pixelAlpha(data, x, y)
+  local ok, r, g, b, a = pcall(data.getPixel, data, x, y)
+  if not ok then
+    return 0
+  end
+  a = a or 0
+  if a > 1 then
+    a = a / 255
+  end
+  return a
+end
+
+function Sprites.kitColsFromImage(path, img, blocks, cols, cell)
+  cell = cell or Sprites.KIT_CELL
+  blocks = math.max(1, math.floor(tonumber(blocks) or 1))
+  cols = math.max(1, math.floor(tonumber(cols) or 1))
+  local data
+  if love and love.image and type(love.image.newImageData) == "function" and path then
+    local ok, got = pcall(love.image.newImageData, path)
+    if ok then
+      data = got
+    end
+  end
+  if not data and img and type(img.getData) == "function" then
+    local ok, got = pcall(img.getData, img)
+    if ok then
+      data = got
+    end
+  end
+  if not (data and data.getPixel and data.getWidth and data.getHeight) then
+    return nil
+  end
+  local iw, ih = data:getWidth(), data:getHeight()
+  local byBlock = {}
+  for b = 0, blocks - 1 do
+    local last = 0
+    for col = 0, cols - 1 do
+      local found = false
+      local x0 = col * cell
+      local y0 = b * 4 * cell
+      if x0 < iw and y0 < ih then
+        local x1 = math.min(x0 + cell - 1, iw - 1)
+        local y1 = math.min(y0 + 4 * cell - 1, ih - 1)
+        for y = y0, y1, 2 do
+          for x = x0, x1, 2 do
+            if pixelAlpha(data, x, y) > 0.04 then
+              found = true
+              break
+            end
+          end
+          if found then
+            break
+          end
+        end
+      end
+      if found then
+        last = col
+      end
+    end
+    byBlock[b] = last + 1
+  end
+  return byBlock
+end
+
+function Sprites.kitFrameCount(ent, anim)
+  -- Per-block length only. Never use the sheet's max width — that plays
+  -- empty padded cells on short poses (Idle 6 on a 14-wide Attack sheet).
+  local n = Sprites.KIT_COLS
+  if type(ent) == "table" then
+    local by = ent._kitColsByBlock
+    if type(by) == "table" then
+      local block = Sprites.kitBlockForAnim(anim, ent._kitBlocks or 1, ent)
+      local got = tonumber(by[block])
+      if got then
+        n = got
+      end
+    end
+  end
+  return math.max(1, math.floor(n))
+end
+
+function Sprites.kitClipDuration(ent, anim, fallback)
+  fallback = tonumber(fallback) or 0.40
+  local n = Sprites.kitFrameCount(ent, anim)
+  local ticks = Sprites.kitTicksForAnim(ent, anim)
+  if type(ticks) == "table" then
+    local total = 0
+    for i = 1, math.min(n, #ticks) do
+      total = total + (tonumber(ticks[i]) or 0)
+    end
+    if total > 0 then
+      local native = total / (Sprites.KIT_TICK_HZ or 60)
+      return math.max(fallback, math.min(fallback * 2.4, native))
+    end
+  end
+  if n > 4 then
+    return fallback + 0.028 * (n - 4)
+  end
+  return fallback
+end
+
+function Sprites.kitTicksForAnim(ent, anim)
+  if type(ent) ~= "table" then
+    return nil
+  end
+  local by = ent._kitTicksByBlock
+  if type(by) ~= "table" then
+    return nil
+  end
+  local block = Sprites.kitBlockForAnim(anim, ent._kitBlocks or 1, ent)
+  local ticks = by[block]
+  if type(ticks) ~= "table" or #ticks < 1 then
+    return nil
+  end
+  return ticks
+end
+
+--- Keep PMD rhythm, but never hide a looping strip behind a long rest tick.
+--- Idle / sleep use a slower band so the breathe reads on the pad.
+function Sprites.kitLoopTicks(ticks, anim)
+  if type(ticks) ~= "table" or #ticks < 1 then
+    return nil
+  end
+  local lo = Sprites.KIT_LOOP_TICK_MIN or 6
+  local hi = Sprites.KIT_LOOP_TICK_MAX or 10
+  if anim == "sleep" then
+    lo = Sprites.KIT_SLEEP_TICK_MIN or 14
+    hi = Sprites.KIT_SLEEP_TICK_MAX or 20
+  elseif anim == "idle" then
+    lo = Sprites.KIT_IDLE_TICK_MIN or 10
+    hi = Sprites.KIT_IDLE_TICK_MAX or 16
+  end
+  local out = {}
+  for i = 1, #ticks do
+    local t = tonumber(ticks[i]) or 2
+    if t < lo then
+      t = lo
+    elseif t > hi then
+      t = hi
+    end
+    out[i] = t
+  end
+  return out
+end
+
+function Sprites.kitColFromClock(t, n, ticks, loop)
+  n = math.max(1, math.floor(tonumber(n) or 1))
+  t = tonumber(t) or 0
+  if t < 0 then
+    t = 0
+  end
+  if type(ticks) == "table" and #ticks >= 1 then
+    local count = math.min(n, #ticks)
+    local total = 0
+    for i = 1, count do
+      total = total + (tonumber(ticks[i]) or 0)
+    end
+    if total <= 0 then
+      return 0
+    end
+    local accT = t * (Sprites.KIT_TICK_HZ or 60)
+    if loop then
+      accT = accT % total
+    elseif accT >= total then
+      return count - 1
+    end
+    local acc = 0
+    for i = 1, count do
+      acc = acc + (tonumber(ticks[i]) or 0)
+      if accT < acc then
+        return i - 1
+      end
+    end
+    return count - 1
+  end
+  if loop then
+    return math.floor(t) % n
+  end
+  if t >= 0.999 then
+    return n - 1
+  end
+  return math.min(n - 1, math.floor(t * n))
+end
+
+--- Map 0..1 through the strip, keeping PMD tick weights.
+function Sprites.kitColFromUnit(u, n, ticks)
+  n = math.max(1, math.floor(tonumber(n) or 1))
+  u = tonumber(u) or 0
+  if u < 0 then
+    u = 0
+  elseif u > 0.999 then
+    u = 0.999
+  end
+  if type(ticks) ~= "table" or #ticks < 1 then
+    return math.min(n - 1, math.floor(u * n))
+  end
+  local count = math.min(n, #ticks)
+  local total = 0
+  for i = 1, count do
+    total = total + (tonumber(ticks[i]) or 0)
+  end
+  if total <= 0 then
+    return 0
+  end
+  local accT = u * total
+  local acc = 0
+  for i = 1, count do
+    acc = acc + (tonumber(ticks[i]) or 0)
+    if accT < acc then
+      return i - 1
+    end
+  end
+  return count - 1
+end
 
 function Sprites.kitCandidatePaths(mod, game, species)
   local root = thisModRoot(mod)
@@ -247,14 +571,16 @@ function Sprites.kitSheetFromPath(path)
   if type(path) ~= "string" or path == "" then
     return nil
   end
+  local meta = Sprites.kitMetaFromPath(path)
   return {
     image = path,
-    frames = Sprites.KIT_COLS,
+    frames = (meta and meta.cols) or Sprites.KIT_COLS,
     walker = true,
     trueColor = true,
     frameWidth = Sprites.KIT_CELL,
     frameHeight = Sprites.KIT_CELL,
     kit = true,
+    kitMeta = meta,
   }
 end
 
@@ -330,6 +656,10 @@ end
 -- instead of Walk. Rolled once per movement burst.
 Sprites.FLAP_CHANCE = 0.45
 
+function Sprites.kitBorrowSpec(anim)
+  return Sprites.KIT_BORROW[anim or ""]
+end
+
 function Sprites.kitMoveOverride(ent, moving)
   if not (ent and moving) then
     if ent then
@@ -363,37 +693,73 @@ function Sprites.kitColForAnim(ent, anim, moving)
   if anim == "idle" and moving then
     anim = Sprites.kitMoveOverride(ent, true) or "walk"
   end
+  local n = Sprites.kitFrameCount(ent, anim)
+  local ticks = Sprites.kitTicksForAnim(ent, anim)
+  local last = n - 1
   local blocks = (ent and (ent._kitBlocks or 1)) or 1
   local block = Sprites.kitBlockForAnim(anim, blocks, ent)
   if anim == "walk" or anim == "flap" or (anim == "idle" and block == 0) then
     if moving then
+      if ticks then
+        return Sprites.kitColFromClock(
+          ent and ent._walkT or 0, n, Sprites.kitLoopTicks(ticks, anim), true)
+      end
       local rate = (anim == "flap") and 10 or 8
-      return math.floor((ent and ent._walkT or 0) * rate) % 4
+      return math.floor((ent and ent._walkT or 0) * rate) % n
     end
-    -- Walk cols 0 and 2 are idle; cycle them so standing is not frozen.
-    return (math.floor((ent and ent._idleT or 0) / 0.5) % 2) * 2
+    -- Whole Walk row, not just rest columns 0/2 (that reads as two frames).
+    if ticks then
+      return Sprites.kitColFromClock(
+        ent and ent._idleT or 0, n, Sprites.kitLoopTicks(ticks, anim), true)
+    end
+    return math.floor((ent and ent._idleT or 0) / 0.16) % n
   end
   if anim == "idle" or anim == "sleep" then
-    -- PMD Idle / Sleep are breathing loops, not one-shots.
-    local step = (anim == "sleep") and 0.42 or 0.28
-    return math.floor((ent and ent._idleT or 0) / step) % 4
+    -- SpriteCollab Idle is a long rest tick plus a short breathe
+    -- (Charmeleon 40+2+3+3+3+2). Clamp so every column plays, then slow it.
+    if ticks then
+      return Sprites.kitColFromClock(
+        ent and ent._idleT or 0, n, Sprites.kitLoopTicks(ticks, anim), true)
+    end
+    local step = (anim == "sleep") and 0.28 or 0.18
+    return math.floor((ent and ent._idleT or 0) / step) % n
   end
   if anim == "freeze" then
     return 0
   end
   if anim == "confuse" then
-    return math.floor((ent and ent._idleT or 0) / 0.18) % 4
+    if ticks then
+      return Sprites.kitColFromClock(
+        ent and ent._idleT or 0, n, Sprites.kitLoopTicks(ticks, anim), true)
+    end
+    return math.floor((ent and ent._idleT or 0) / 0.16) % n
   end
   if anim == "charge" then
-    return math.floor((ent and ent.animT or 0) / 0.12) % 4
+    if ticks then
+      return Sprites.kitColFromClock(
+        ent and ent.animT or 0, n, Sprites.kitLoopTicks(ticks, anim), true)
+    end
+    return math.floor((ent and ent.animT or 0) / 0.10) % n
   end
   if anim == "faint" then
     local play = Sprites.KIT_FAINT_PLAY
     local t = (ent and ent.animT) or 0
-    if t >= play then
-      return 3
+    if ticks then
+      local total = 0
+      for i = 1, math.min(n, #ticks) do
+        total = total + (tonumber(ticks[i]) or 0)
+      end
+      if total > 0 then
+        play = math.max(play, total / (Sprites.KIT_TICK_HZ or 60))
+      end
     end
-    return math.min(3, math.floor((t / play) * 4))
+    if t >= play then
+      return last
+    end
+    if ticks then
+      return Sprites.kitColFromClock(t, n, ticks, false)
+    end
+    return math.min(last, math.floor((t / play) * n))
   end
   local dur = KIT_ANIM_DUR[anim]
   if anim == "dodge" then
@@ -414,6 +780,9 @@ function Sprites.kitColForAnim(ent, anim, moving)
     dur = (ent and ent._heavyHit) and 0.52 or 0.42
   end
   dur = dur or 0.40
+  if (ent and ent._kitSheet) or ticks or n > 4 then
+    dur = Sprites.kitClipDuration(ent, anim, dur)
+  end
   local t = (ent and ent.animT) or 0
   if dur <= 0 then
     return 0
@@ -424,7 +793,8 @@ function Sprites.kitColForAnim(ent, anim, moving)
   elseif u > 0.999 then
     u = 0.999
   end
-  return math.min(3, math.floor(u * 4))
+  -- One-shots: play the whole row inside the combat clip (PMD rhythm, scaled).
+  return Sprites.kitColFromUnit(u, n, ticks)
 end
 
 function Sprites.kitCellOrigin(ent, facing)
@@ -433,6 +803,26 @@ function Sprites.kitCellOrigin(ent, facing)
   local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
   local col = tonumber(ent and ent._kitCol) or 0
   return col * cell, row * cell
+end
+
+-- Ground blob stays on column 0 of the live pose (planted / rest frame)
+-- so hops and lunges don't lift the voxel shadow with the body.
+function Sprites.kitShadowOrigin(ent, facing)
+  local cell = Sprites.KIT_CELL
+  local face = Sprites.KIT_FACE[facing or (ent and ent.facing) or "down"] or 0
+  local row = (tonumber(ent and ent._kitBlock) or 0) * 4 + face
+  return 0, row * cell
+end
+
+local function stampKitUVs(def, ent, facing)
+  if type(def) ~= "table" then
+    return
+  end
+  local u, v = Sprites.kitCellOrigin(ent, facing)
+  def.kitU, def.kitV = u, v
+  local su, sv = Sprites.kitShadowOrigin(ent, facing)
+  def.kitShadowU, def.kitShadowV = su, sv
+  def.kit = true
 end
 
 --- Facing handed to Dramatic Shape. GSC sheets draw right as a flip of
@@ -446,6 +836,19 @@ function Sprites.billboardFacing(facing, kit)
     return "left"
   end
   return facing
+end
+
+local function stampOwnKit(ent, sprite)
+  if not (sprite and sprite.kit) then
+    return
+  end
+  sprite.kitBlock = ent._kitBlock
+  sprite.kitCol = ent._kitCol
+  local def = sprite.def
+  if type(def) == "table" then
+    stampKitUVs(def, ent, ent.facing)
+    def.kitImage = sprite.image or def.kitImage
+  end
 end
 
 local function syncKitPose(ent, moving)
@@ -464,38 +867,52 @@ local function syncKitPose(ent, moving)
   if anim == "idle" then
     anim = Sprites.kitIdleOverride(ent, moving) or anim
   end
+  local spec, borrow = Sprites.ensureKitBorrow(ent)
+  if spec and borrow then
+    local actor = {
+      anim = spec.anim,
+      animT = ent.animT,
+      _idleT = ent._idleT,
+      _walkT = ent._walkT,
+      facing = ent.facing,
+      _kitSheet = true,
+      _kitBlocks = borrow.kitBlocks,
+      _kitCols = borrow.kitCols,
+      _kitColsByBlock = borrow.kitColsByBlock,
+      _kitTicksByBlock = borrow.kitTicksByBlock,
+      sprite = borrow.sprite,
+    }
+    ent._kitBlock = Sprites.kitBlockForAnim(spec.anim, borrow.kitBlocks or 1, actor)
+    ent._kitCol = Sprites.kitColForAnim(actor, spec.anim, moving)
+    local sprite = ent.sprite
+    if sprite then
+      sprite.kit = true
+      sprite.kitBlock = ent._kitBlock
+      sprite.kitCol = ent._kitCol
+      local def = sprite.def
+      if type(def) == "table" then
+        stampKitUVs(def, ent, ent.facing)
+        local borrowed = borrow.sprite
+        def.kitImage = (borrowed and (borrowed.image or (borrowed.def and borrowed.def.kitImage)))
+            or def.kitImage
+        def.frameWidth = Sprites.KIT_CELL
+        def.frameHeight = Sprites.KIT_CELL
+      end
+    end
+    return
+  end
   local blocks = ent._kitBlocks or (ent.sprite and ent.sprite.kitBlocks) or 1
   -- Recall after a kit faint: keep the crumpled cell while they shrink into
   -- the laser. Do not replay Walk under the bolt.
   if anim == "recall" and ent._fainting and Sprites.usesKitPose(ent, "faint") then
     ent._kitBlock = Sprites.kitBlockForAnim("faint", blocks, ent)
-    ent._kitCol = 3
-    local sprite = ent.sprite
-    if sprite and sprite.kit then
-      sprite.kitBlock = ent._kitBlock
-      sprite.kitCol = ent._kitCol
-      local def = sprite.def
-      if type(def) == "table" then
-        local u, v = Sprites.kitCellOrigin(ent, ent.facing)
-        def.kitU, def.kitV = u, v
-        def.kit = true
-      end
-    end
+    ent._kitCol = math.max(0, Sprites.kitFrameCount(ent, "faint") - 1)
+    stampOwnKit(ent, ent.sprite)
     return
   end
   ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks, ent)
   ent._kitCol = Sprites.kitColForAnim(ent, anim, moving)
-  local sprite = ent.sprite
-  if sprite and sprite.kit then
-    sprite.kitBlock = ent._kitBlock
-    sprite.kitCol = ent._kitCol
-    local def = sprite.def
-    if type(def) == "table" then
-      local u, v = Sprites.kitCellOrigin(ent, ent.facing)
-      def.kitU, def.kitV = u, v
-      def.kit = true
-    end
-  end
+  stampOwnKit(ent, ent.sprite)
 end
 
 local function pokePcPath(mod, game, species)
@@ -887,6 +1304,9 @@ local function tickDodge(self, dt, towardX, towardY)
   self.animT = (self.animT or 0) + dt
   local style = self._dodgeStyle or "sidehop"
   local dur = DODGE_DUR[style] or 0.38
+  if self._kitSheet then
+    dur = Sprites.kitClipDuration(self, "dodge", dur)
+  end
   local t = math.min(1, self.animT / dur)
   local pulse = math.sin(t * math.pi)
   local tx = self.basePx - (towardX or self.basePx)
@@ -1297,9 +1717,14 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       sprite.kitCol = self._kitCol or 0
       local def = sprite.def
       if type(def) == "table" then
-        local u, v = Sprites.kitCellOrigin(self, self.facing)
-        def.kitU, def.kitV = u, v
-        def.kit = true
+        stampKitUVs(def, self, self.facing)
+        local borrow = self._borrowVisual and self._borrowVisual.sprite
+        if borrow then
+          def.kitImage = borrow.image or (borrow.def and borrow.def.kitImage)
+              or def.kitImage
+        else
+          def.kitImage = sprite.image or def.kitImage
+        end
         def.frameWidth = Sprites.KIT_CELL
         def.frameHeight = Sprites.KIT_CELL
       end
@@ -1540,12 +1965,25 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._arFieldDetached = nil
       self.drawScale = 1
       self._vanishKind = (kind == "vanish_fly") and "fly" or "dig"
+      if kind == "vanish_dig" then
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "emerge_dig" or kind == "emerge_fly" then
       self.hidden = false
       self._emerging = true
       self._arFieldDetached = nil
       self.drawScale = (kind == "emerge_fly") and 0.22 or 0.18
       self._vanishKind = (kind == "emerge_fly") and "fly" or "dig"
+      if kind == "emerge_dig" then
+        self.drawScale = 1
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "toss" or kind == "tossed" then
       self.hidden = false
       self._tossAir = true
@@ -1557,6 +1995,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._emerging = nil
       self.drawScale = (kind == "aloft") and 0.26 or 0.2
       self._vanishKind = (kind == "aloft") and "fly" or "dig"
+      if kind == "buried" then
+        self.drawScale = 1
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "dodge" then
       self.drawScale = 1
       self._dodgeStyle = Sprites.pickDodgeStyle(self)
@@ -1580,6 +2025,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self.drawAlpha = 1
       self._dodgeTrail = nil
       self._dodgeBits = nil
+      self._borrowVisual = nil
+      self._borrowSpecies = nil
     end
   end
 
@@ -1779,7 +2226,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       end
     elseif anim == "attack" then
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.34)
+      local kit = Sprites.usesKitPose(self, "attack")
+      local dur = kit and Sprites.kitClipDuration(self, "attack", 0.34) or 0.34
+      local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
       local tx = (towardX or self.basePx) - self.basePx
       local ty = (towardY or self.basePy) - self.basePy
@@ -1792,7 +2241,6 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       end
       -- A physical cue already advances one pad cell. Keep the pose punchy
       -- without adding a second full-cell lunge on top of that movement.
-      local kit = Sprites.usesKitPose(self, "attack")
       local lunge = self._attackStepped and (kit and 3 or 5) or (kit and 8 or 14)
       ox = ox + tx * pulse * lunge
       oy = oy + ty * pulse * lunge
@@ -1801,7 +2249,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.drawScale = 1 + pulse * 0.08
         self._walkFrame = (t < 0.9) and 1 or 0
       end
-      if self.animT >= 0.34 then
+      if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
         self.drawScale = 1
@@ -1811,7 +2259,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     elseif anim == "jump" then
       -- Leap the fight axis when cover / a blocker sits between mons.
       self.animT = (self.animT or 0) + dt
-      local dur = 0.46
+      local kit = Sprites.usesKitPose(self, "jump")
+      local dur = kit and Sprites.kitClipDuration(self, "jump", 0.46) or 0.46
       local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
       local tx = (towardX or self.basePx) - self.basePx
@@ -1823,7 +2272,6 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       else
         tx, ty = 0, -1
       end
-      local kit = Sprites.usesKitPose(self, "jump")
       local reach = self._attackStepped and (kit and 8 or 10) or (kit and 16 or 20)
       local hop = kit and 12 or 22
       ox = ox + tx * pulse * reach
@@ -1844,10 +2292,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       ox = ox + dx
       oy = oy + dy
     elseif anim == "cast" then
-      -- Special: stay on cell, still read as an action (rise + glow pulse).
+      -- Special: stay on cell, but kick into the shot (recoil + swell).
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.42)
+      local kit = Sprites.usesKitPose(self, "cast")
+      local dur = kit and Sprites.kitClipDuration(self, "cast", 0.48) or 0.48
+      local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
+      local kick = math.sin(t * math.pi * 2)
       local tx = (towardX or self.basePx) - self.basePx
       local ty = (towardY or self.basePy) - self.basePy
       local len = math.sqrt(tx * tx + ty * ty)
@@ -1857,17 +2308,20 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       else
         tx, ty = 0, -1
       end
-      local kit = Sprites.usesKitPose(self, "cast")
       if kit then
-        ox = ox + tx * pulse * 2
+        ox = ox + tx * (pulse * 4 + kick * 2.4)
+        oy = oy + ty * pulse * 2 - pulse * 3
+        self.drawScale = 1 + pulse * 0.12
       else
-        ox = ox + tx * pulse * 5 + math.sin(t * math.pi * 3) * 1.5
-        oy = oy - pulse * 10
+        ox = ox + tx * pulse * 7 + math.sin(t * math.pi * 3) * 1.8
+        oy = oy - pulse * 12
+        self.drawScale = 1 + pulse * 0.14
         self._walkFrame = (math.floor(self.animT * 10) % 2)
       end
-      if self.animT >= 0.42 then
+      if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
+        self.drawScale = 1
       end
     elseif anim == "charge" then
       -- Wind-up hold: FIRE NOW overlapping pose, or the gather before Shoot.
@@ -1883,17 +2337,20 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       local pulse = 0.5 + 0.5 * math.sin((self.animT or 0) * 6)
       if kit then
         if len > 0.1 then
-          ox = ox + (tx / len) * pulse * 1.5
-          oy = oy + (ty / len) * pulse * 1.5
+          ox = ox + (tx / len) * pulse * 2.4
+          oy = oy + (ty / len) * pulse * 2.4
         end
+        self.drawScale = 1 + pulse * 0.07
       else
-        oy = oy - pulse * 5
+        oy = oy - pulse * 6
+        self.drawScale = 1 + pulse * 0.08
         self._walkFrame = (math.floor(self.animT * 8) % 2)
       end
     elseif anim == "counter" then
       -- Rebound into the foe: overlap, hang in the clash, then ease off.
       self.animT = (self.animT or 0) + dt
-      local dur = 0.52
+      local kit = Sprites.usesKitPose(self, "counter")
+      local dur = kit and Sprites.kitClipDuration(self, "counter", 0.52) or 0.52
       local t = math.min(1, self.animT / dur)
       local tx = (towardX or self.basePx) - self.basePx
       local ty = (towardY or self.basePy) - self.basePy
@@ -1912,7 +2369,6 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       else
         lunge = 1 - (t - 0.58) / 0.42 * 0.38
       end
-      local kit = Sprites.usesKitPose(self, "counter")
       local reach = kit and 14 or 22
       ox = ox + tx * lunge * reach
       oy = oy + ty * lunge * reach
@@ -1943,14 +2399,15 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     elseif anim == "brace" then
       -- Brief crouch / settle into a guard.
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.40)
-      local pulse = math.sin(t * math.pi)
       local kit = Sprites.usesKitPose(self, "brace")
+      local dur = kit and Sprites.kitClipDuration(self, "brace", 0.40) or 0.40
+      local t = math.min(1, self.animT / dur)
+      local pulse = math.sin(t * math.pi)
       oy = oy + pulse * (kit and 2 or 5)
       if not kit then
         ox = ox + math.sin(t * math.pi * 2) * 1.2
       end
-      if self.animT >= 0.40 then
+      if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
       end
@@ -1976,27 +2433,63 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         ox = ox + flash * (heavy and 6 or 4)
         oy = oy + 2
       end
-      if self.animT >= (heavy and 0.52 or 0.42) then
+      local hitDur = heavy and 0.52 or 0.42
+      if kit then
+        hitDur = Sprites.kitClipDuration(self, "hit", hitDur)
+      end
+      if self.animT >= hitDur then
         self.anim = "idle"
         self.animT = 0
+        self._heavyHit = nil
+      end
+    elseif anim == "tumble" then
+      -- Heavy knock: farther slip and a longer recover than a flinch.
+      self.animT = (self.animT or 0) + dt
+      local kit = Sprites.usesKitPose(self, "tumble")
+      local dur = kit and Sprites.kitClipDuration(self, "tumble", 0.58) or 0.58
+      local t = math.min(1, self.animT / dur)
+      local knock = math.min(1, self.animT / 0.28)
+      local tx = self.basePx - (towardX or self.basePx)
+      local ty = self.basePy - (towardY or self.basePy)
+      local len = math.sqrt(tx * tx + ty * ty)
+      if len > 0.1 then
+        tx, ty = tx / len, ty / len
+      else
+        tx, ty = 0, 1
+      end
+      local reach = kit and 16 or 20
+      local lift = kit and 7 or 11
+      ox = ox + tx * knock * reach
+      oy = oy + ty * knock * lift - math.sin(t * math.pi) * (kit and 5 or 8)
+      if not kit then
+        local flash = (math.floor(self.animT * 18) % 2 == 0) and 1 or -1
+        ox = ox + flash * 5
+        self.drawAngle = math.sin(t * math.pi) * 0.18
+      end
+      if self.animT >= dur then
+        self.anim = "idle"
+        self.animT = 0
+        self.drawAngle = 0
         self._heavyHit = nil
       end
     elseif anim == "selfhit" then
       -- Stumble / bonk: dip and wobble in place (not knockback from the foe).
       self.animT = (self.animT or 0) + dt
-      local t = math.min(1, self.animT / 0.46)
       local kit = Sprites.usesKitPose(self, "selfhit")
+      local dur = kit and Sprites.kitClipDuration(self, "selfhit", 0.46) or 0.46
+      local t = math.min(1, self.animT / dur)
       local dip = math.sin(math.min(1, t / 0.55) * math.pi) * (kit and 2 or 5)
       ox = ox + math.sin(t * math.pi * 6) * (kit and 1.4 or 3.4)
       oy = oy + dip + (kit and 0 or 1)
-      if self.animT >= 0.46 then
+      if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
       end
     elseif anim == "miss" then
       -- Lunge at the foe, slip past, recover — the attack never lands.
       self.animT = (self.animT or 0) + dt
-      local dur = 0.42
+      local kit = Sprites.usesKitPose(self, "miss")
+      local dur = kit and Sprites.kitClipDuration(self, "miss", 0.42) or 0.42
       local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
       local tx = (towardX or self.basePx) - self.basePx
@@ -2009,7 +2502,6 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         tx, ty = 0, -1
       end
       local nx, ny = -ty, tx
-      local kit = Sprites.usesKitPose(self, "miss")
       local reach = kit and 6 or 9
       ox = ox + tx * pulse * reach + nx * math.sin(t * math.pi) * (kit and 4 or 7)
       oy = oy + ty * pulse * reach
@@ -2030,18 +2522,26 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "vanish_dig" then
-      -- Dig down with a shake, then hold as a dirt-hole tell (still posed).
+      -- Diglett Walk is the generic hole-pop; otherwise squash the user in.
+      Sprites.ensureKitBorrow(self)
       self.animT = (self.animT or 0) + dt
       local dur = 0.55
       local t = math.min(1, self.animT / dur)
-      oy = oy + t * t * 20
-      self.drawScale = math.max(0.16, 1 - t * 0.84)
-      ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
+      local borrowed = self._borrowVisual
+      if borrowed then
+        oy = oy + t * t * 8
+        ox = ox + math.sin(t * math.pi * 5) * (1 - t) * 1.6
+        self.drawScale = 1
+      else
+        oy = oy + t * t * 20
+        self.drawScale = math.max(0.16, 1 - t * 0.84)
+        ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
+      end
       self._walkFrame = (math.floor(t * 10) % 2)
       if self.animT >= dur then
         self._fieldVanished = true
         self.hidden = false
-        self.drawScale = 0.2
+        self.drawScale = borrowed and 1 or 0.2
         self.anim = "buried"
         self.animT = 0
       end
@@ -2062,12 +2562,19 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "buried" then
-      -- Semi-invulnerable Dig hold: rumble in the hole.
+      -- Semi-invulnerable Dig hold: Diglett peeks, or rumble in the hole.
+      Sprites.ensureKitBorrow(self)
       self._fieldVanished = true
       self.hidden = false
-      self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
-      oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
-      ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
+      if self._borrowVisual then
+        self.drawScale = 1
+        oy = oy + 2 + math.sin((self.bobT or 0) * 3.4) * 1.2
+        ox = ox + math.sin((self.bobT or 0) * 5.1) * 0.8
+      else
+        self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
+        oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
+        ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
+      end
       self._walkFrame = 0
     elseif anim == "aloft" then
       -- Semi-invulnerable Fly hold: circle high above the pad.
@@ -2078,13 +2585,18 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       ox = ox + math.sin((self.bobT or 0) * 1.25) * 5
       self._walkFrame = (math.floor((self.bobT or 0) * 4) % 2)
     elseif anim == "emerge_dig" then
-      -- Burst up from the hole.
+      -- Burst up from the hole (Diglett Walk, then the real mon).
+      Sprites.ensureKitBorrow(self)
       self.hidden = false
       self._emerging = true
       self.animT = (self.animT or 0) + dt
       local dur = 0.38
       local t = math.min(1, self.animT / dur)
-      if t < 0.12 then
+      if self._borrowVisual then
+        self.drawScale = 1
+        oy = oy + (1 - t) * (1 - t) * 8 - math.sin(t * math.pi) * 3
+        ox = ox + math.sin(t * math.pi * 3) * (1 - t) * 1.4
+      elseif t < 0.12 then
         self.drawScale = 0.16 + t * 2
         oy = oy + 12 - t * 40
         ox = ox + math.sin(t * 40) * 2
@@ -2099,6 +2611,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._fieldVanished = nil
         self._emerging = nil
         self._vanishKind = nil
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
         self.anim = "idle"
         self.animT = 0
       end
@@ -2210,6 +2724,7 @@ local function finalizeEntity(ent, battler, barLift, mod, game, species)
     ent._kitBlocks = ent._kitBlocks or 1
     ent._kitBlock = ent._kitBlock or 0
     ent._kitCol = ent._kitCol or 0
+    ent._kitCols = ent._kitCols or Sprites.KIT_COLS
   end
   return ent
 end
@@ -2225,6 +2740,9 @@ local function applyVisual(ent, visual)
   end
   ent._kitBlocks = visual.kitBlocks or 1
   ent._kitSheet = visual.kit == true
+  ent._kitCols = visual.kitCols or Sprites.KIT_COLS
+  ent._kitColsByBlock = visual.kitColsByBlock
+  ent._kitTicksByBlock = visual.kitTicksByBlock
   if visual.sprite and visual.sprite.kit then
     visual.sprite.kitBlock = ent._kitBlock or 0
     visual.sprite.kitCol = ent._kitCol or 0
@@ -2243,10 +2761,22 @@ local function kitToVisual(sheet, img, side)
   local rows = math.max(1, math.floor(ih / cell))
   local cols = math.max(1, math.floor(iw / cell))
   local blocks = math.max(1, math.floor(rows / 4))
+  if not sheet.kitMeta and sheet.image then
+    sheet.kitMeta = Sprites.kitMetaFromPath(sheet.image)
+  end
+  local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(sheet.kitMeta)
+  local kitCols = (sheet.kitMeta and tonumber(sheet.kitMeta.cols)) or cols
+  if next(colsByBlock) == nil and cols > Sprites.KIT_COLS then
+    -- Sidecar missing: count opaque cells so short poses do not play pad.
+    local scanned = Sprites.kitColsFromImage(sheet.image, img, blocks, cols, cell)
+    if scanned then
+      colsByBlock = scanned
+    end
+  end
   local quads = {}
   for row = 0, blocks * 4 - 1 do
     quads[row] = {}
-    for col = 0, math.min(3, cols - 1) do
+    for col = 0, cols - 1 do
       quads[row][col] = love.graphics.newQuad(
         col * cell, row * cell, cell, cell, iw, ih)
     end
@@ -2264,6 +2794,9 @@ local function kitToVisual(sheet, img, side)
     kit = true,
     kitU = 0,
     kitV = 0,
+    kitShadowU = 0,
+    kitShadowV = 0,
+    kitImage = img,
   }
   local sprite = {
     def = def,
@@ -2271,6 +2804,9 @@ local function kitToVisual(sheet, img, side)
     kitBlock = 0,
     kitCol = 0,
     kitBlocks = blocks,
+    kitCols = kitCols,
+    kitColsByBlock = colsByBlock,
+    kitTicksByBlock = ticksByBlock,
     image = img,
     resolveImage = function()
       return img
@@ -2279,7 +2815,7 @@ local function kitToVisual(sheet, img, side)
 
   local function cellAt(facing, block, col)
     block = math.max(0, math.min(blocks - 1, tonumber(block) or 0))
-    col = math.max(0, math.min(3, tonumber(col) or 0))
+    col = math.max(0, math.min(cols - 1, tonumber(col) or 0))
     local face = Sprites.KIT_FACE[facing or "down"] or 0
     local row = block * 4 + face
     return row, col, quads[row] and quads[row][col]
@@ -2292,7 +2828,7 @@ local function kitToVisual(sheet, img, side)
     end
     local row, c, quad = cellAt(facing, self.kitBlock or 0, col)
     return {
-      frame = row * 4 + c,
+      frame = row * cols + c,
       x = c * cell,
       y = row * cell,
       width = cell,
@@ -2308,8 +2844,8 @@ local function kitToVisual(sheet, img, side)
 
   function sprite:getFrameGeometry(frame)
     frame = math.floor(tonumber(frame) or 0)
-    local row = math.floor(frame / 4)
-    local col = frame % 4
+    local row = math.floor(frame / cols)
+    local col = frame % cols
     local quad = quads[row] and quads[row][col]
     return {
       frame = frame,
@@ -2349,6 +2885,9 @@ local function kitToVisual(sheet, img, side)
     lift = 24,
     kit = true,
     kitBlocks = blocks,
+    kitCols = kitCols,
+    kitColsByBlock = colsByBlock,
+    kitTicksByBlock = ticksByBlock,
   }
 end
 
@@ -2360,7 +2899,8 @@ local function isKitSheet(sheet, img)
     return false
   end
   local iw, ih = img:getDimensions()
-  return iw == 128 and ih >= 128 and (ih % 128) == 0
+  local cell = Sprites.KIT_CELL
+  return iw >= 128 and ih >= 128 and (iw % cell) == 0 and (ih % 128) == 0
 end
 
 local function sheetToVisual(sheet, side)
@@ -2453,6 +2993,67 @@ local function sheetToVisual(sheet, side)
   return { sprite = sprite, drawer = drawer, lift = (fh >= 32) and 24 or 8 }
 end
 
+local borrowCache = {}
+
+function Sprites.borrowKitVisual(mod, game, species)
+  local key = tostring(species or ""):upper()
+  if key == "" then
+    return nil
+  end
+  if borrowCache[key] ~= nil then
+    return borrowCache[key] or nil
+  end
+  local sheet = Sprites.resolveSheet(mod, game, species)
+  local visual = sheet and sheetToVisual(sheet, "borrow")
+  if not visual and sheet then
+    local meta = sheet.kitMeta or Sprites.kitMetaFromPath(sheet.image)
+    local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(meta)
+    local blocks = 8
+    if type(meta) == "table" and type(meta.poses) == "table" then
+      local n = 0
+      for _ in pairs(meta.poses) do
+        n = n + 1
+      end
+      if n > 0 then
+        blocks = n
+      end
+    end
+    visual = {
+      kit = true,
+      kitBlocks = blocks,
+      kitCols = (meta and tonumber(meta.cols)) or Sprites.KIT_COLS,
+      kitColsByBlock = colsByBlock,
+      kitTicksByBlock = ticksByBlock,
+      sprite = {
+        kit = true,
+        image = nil,
+        def = { kit = true, image = sheet.image },
+        kitBlocks = blocks,
+      },
+    }
+  end
+  borrowCache[key] = visual or false
+  return visual
+end
+
+function Sprites.ensureKitBorrow(ent)
+  local spec = Sprites.kitBorrowSpec(ent and ent.anim)
+  if not (ent and spec) then
+    if ent then
+      ent._borrowVisual = nil
+      ent._borrowSpecies = nil
+    end
+    return nil
+  end
+  if ent._borrowVisual and ent._borrowSpecies == spec.species then
+    return spec, ent._borrowVisual
+  end
+  local visual = Sprites.borrowKitVisual(ent._spriteMod, ent._spriteGame, spec.species)
+  ent._borrowVisual = visual
+  ent._borrowSpecies = spec.species
+  return spec, visual
+end
+
 function Sprites.applySurface(ent, surface)
   if not ent then
     return false
@@ -2529,7 +3130,7 @@ end
 
 local KIT_VOXEL_IDS = { "DRAMATIC_SHAPE", "DRAMALESS_SHAPE", "potato_voxel" }
 
-local function kitBillboardMesh(def, Voxel3D, cache)
+local function kitBillboardMesh(def, Voxel3D, cache, shadow)
   local img = def.kitImage
   if not (img and img.getDimensions) then
     img = loadImage(def.image)
@@ -2539,10 +3140,28 @@ local function kitBillboardMesh(def, Voxel3D, cache)
   end
   local iw, ih = img:getDimensions()
   local cell = Sprites.KIT_CELL
-  local x = tonumber(def.kitU) or 0
-  local y = tonumber(def.kitV) or 0
-  if x + cell > iw or y + cell > ih then
+  if iw < cell or ih < cell then
     return nil
+  end
+  local x, y
+  if shadow then
+    x = tonumber(def.kitShadowU) or 0
+    y = tonumber(def.kitShadowV) or 0
+  else
+    x = tonumber(def.kitU) or 0
+    y = tonumber(def.kitV) or 0
+  end
+  -- Stay on the kit sheet. Falling through to Wilds' 1-column walker
+  -- only has stand/step — that is the "two frames" look.
+  if x < 0 then
+    x = 0
+  elseif x + cell > iw then
+    x = iw - cell
+  end
+  if y < 0 then
+    y = 0
+  elseif y + cell > ih then
+    y = ih - cell
   end
   local key = table.concat({ tostring(def.image), x, y }, "#")
   if cache[key] then
@@ -2591,30 +3210,29 @@ local function wrapKitBillboards(SB, Voxel3D)
       if mesh then
         return mesh
       end
+      -- Missing image: still do not use the GSC 2-frame strip.
+      return nil
     end
     return orig(def, frame)
   end
   SB.mesh = wrapper
   SB._arKitWrapper = wrapper
   SB._arKitMesh = true
-  if origShadow == orig or origShadow == nil then
-    SB.shadowQuad = wrapper
-  elseif type(origShadow) == "function" then
-    SB.shadowQuad = function(def, frame)
-      if type(def) == "table" and def.kit then
-        local mesh = kitBillboardMesh(def, Voxel3D, cache)
-        if mesh then
-          return mesh
-        end
-      end
+  local function shadowWrapper(def, frame)
+    if type(def) == "table" and def.kit then
+      return kitBillboardMesh(def, Voxel3D, cache, true)
+    end
+    if type(origShadow) == "function" then
       return origShadow(def, frame)
     end
+    return orig(def, frame)
   end
+  SB.shadowQuad = shadowWrapper
   return true
 end
 
 --- Voxel billboards slice a 1-column GSC strip. Wrap mesh() so kit defs
---- sample the live 32px cell (kitU/kitV) on the 4×24 sheet.
+--- sample the live 32px cell (kitU/kitV) on the N×M kit sheet.
 function Sprites.installKitBillboards(mod)
   local wrapped = false
   for i = 1, #KIT_VOXEL_IDS do
