@@ -115,7 +115,7 @@ local function speciesDex(game, species)
   if dex and dex > 0 then
     return dex
   end
-  return nil
+  return Sprites.SPECIES_DEX[key]
 end
 
 local function isShinyBattler(battler)
@@ -197,6 +197,15 @@ Sprites.KIT_IDLE_TICK_MAX = 16
 Sprites.KIT_SLEEP_TICK_MIN = 14
 Sprites.KIT_SLEEP_TICK_MAX = 20
 Sprites.KIT_FACE = { down = 0, left = 1, right = 2, up = 3 }
+-- National Dex when game.data is missing (borrowed move tells).
+Sprites.SPECIES_DEX = { DIGLETT = 50, DUGTRIO = 51 }
+-- Shared move tells: play another species' baked kit, never raw PMD.
+-- Diglett has no PMD "Move" strip; Walk is the ground-pop.
+Sprites.KIT_BORROW = {
+  vanish_dig = { species = "DIGLETT", anim = "walk" },
+  buried = { species = "DIGLETT", anim = "idle" },
+  emerge_dig = { species = "DIGLETT", anim = "walk" },
+}
 Sprites.KIT_IDLE_BLOCK = 6
 Sprites.KIT_FAINT_BLOCK = 7
 Sprites.KIT_BLOCK = {
@@ -647,6 +656,10 @@ end
 -- instead of Walk. Rolled once per movement burst.
 Sprites.FLAP_CHANCE = 0.45
 
+function Sprites.kitBorrowSpec(anim)
+  return Sprites.KIT_BORROW[anim or ""]
+end
+
 function Sprites.kitMoveOverride(ent, moving)
   if not (ent and moving) then
     if ent then
@@ -825,6 +838,19 @@ function Sprites.billboardFacing(facing, kit)
   return facing
 end
 
+local function stampOwnKit(ent, sprite)
+  if not (sprite and sprite.kit) then
+    return
+  end
+  sprite.kitBlock = ent._kitBlock
+  sprite.kitCol = ent._kitCol
+  local def = sprite.def
+  if type(def) == "table" then
+    stampKitUVs(def, ent, ent.facing)
+    def.kitImage = sprite.image or def.kitImage
+  end
+end
+
 local function syncKitPose(ent, moving)
   if not ent then
     return
@@ -841,36 +867,52 @@ local function syncKitPose(ent, moving)
   if anim == "idle" then
     anim = Sprites.kitIdleOverride(ent, moving) or anim
   end
+  local spec, borrow = Sprites.ensureKitBorrow(ent)
+  if spec and borrow then
+    local actor = {
+      anim = spec.anim,
+      animT = ent.animT,
+      _idleT = ent._idleT,
+      _walkT = ent._walkT,
+      facing = ent.facing,
+      _kitSheet = true,
+      _kitBlocks = borrow.kitBlocks,
+      _kitCols = borrow.kitCols,
+      _kitColsByBlock = borrow.kitColsByBlock,
+      _kitTicksByBlock = borrow.kitTicksByBlock,
+      sprite = borrow.sprite,
+    }
+    ent._kitBlock = Sprites.kitBlockForAnim(spec.anim, borrow.kitBlocks or 1, actor)
+    ent._kitCol = Sprites.kitColForAnim(actor, spec.anim, moving)
+    local sprite = ent.sprite
+    if sprite then
+      sprite.kit = true
+      sprite.kitBlock = ent._kitBlock
+      sprite.kitCol = ent._kitCol
+      local def = sprite.def
+      if type(def) == "table" then
+        stampKitUVs(def, ent, ent.facing)
+        local borrowed = borrow.sprite
+        def.kitImage = (borrowed and (borrowed.image or (borrowed.def and borrowed.def.kitImage)))
+            or def.kitImage
+        def.frameWidth = Sprites.KIT_CELL
+        def.frameHeight = Sprites.KIT_CELL
+      end
+    end
+    return
+  end
   local blocks = ent._kitBlocks or (ent.sprite and ent.sprite.kitBlocks) or 1
   -- Recall after a kit faint: keep the crumpled cell while they shrink into
   -- the laser. Do not replay Walk under the bolt.
   if anim == "recall" and ent._fainting and Sprites.usesKitPose(ent, "faint") then
     ent._kitBlock = Sprites.kitBlockForAnim("faint", blocks, ent)
     ent._kitCol = math.max(0, Sprites.kitFrameCount(ent, "faint") - 1)
-    local sprite = ent.sprite
-    if sprite and sprite.kit then
-      sprite.kitBlock = ent._kitBlock
-      sprite.kitCol = ent._kitCol
-      local def = sprite.def
-      if type(def) == "table" then
-        stampKitUVs(def, ent, ent.facing)
-        def.kitImage = sprite.image or def.kitImage
-      end
-    end
+    stampOwnKit(ent, ent.sprite)
     return
   end
   ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks, ent)
   ent._kitCol = Sprites.kitColForAnim(ent, anim, moving)
-  local sprite = ent.sprite
-  if sprite and sprite.kit then
-    sprite.kitBlock = ent._kitBlock
-    sprite.kitCol = ent._kitCol
-    local def = sprite.def
-    if type(def) == "table" then
-      stampKitUVs(def, ent, ent.facing)
-      def.kitImage = sprite.image or def.kitImage
-    end
-  end
+  stampOwnKit(ent, ent.sprite)
 end
 
 local function pokePcPath(mod, game, species)
@@ -1676,7 +1718,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       local def = sprite.def
       if type(def) == "table" then
         stampKitUVs(def, self, self.facing)
-        def.kitImage = sprite.image or def.kitImage
+        local borrow = self._borrowVisual and self._borrowVisual.sprite
+        if borrow then
+          def.kitImage = borrow.image or (borrow.def and borrow.def.kitImage)
+              or def.kitImage
+        else
+          def.kitImage = sprite.image or def.kitImage
+        end
         def.frameWidth = Sprites.KIT_CELL
         def.frameHeight = Sprites.KIT_CELL
       end
@@ -1917,12 +1965,25 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._arFieldDetached = nil
       self.drawScale = 1
       self._vanishKind = (kind == "vanish_fly") and "fly" or "dig"
+      if kind == "vanish_dig" then
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "emerge_dig" or kind == "emerge_fly" then
       self.hidden = false
       self._emerging = true
       self._arFieldDetached = nil
       self.drawScale = (kind == "emerge_fly") and 0.22 or 0.18
       self._vanishKind = (kind == "emerge_fly") and "fly" or "dig"
+      if kind == "emerge_dig" then
+        self.drawScale = 1
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "toss" or kind == "tossed" then
       self.hidden = false
       self._tossAir = true
@@ -1934,6 +1995,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._emerging = nil
       self.drawScale = (kind == "aloft") and 0.26 or 0.2
       self._vanishKind = (kind == "aloft") and "fly" or "dig"
+      if kind == "buried" then
+        self.drawScale = 1
+        Sprites.ensureKitBorrow(self)
+      else
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
+      end
     elseif kind == "dodge" then
       self.drawScale = 1
       self._dodgeStyle = Sprites.pickDodgeStyle(self)
@@ -1957,6 +2025,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self.drawAlpha = 1
       self._dodgeTrail = nil
       self._dodgeBits = nil
+      self._borrowVisual = nil
+      self._borrowSpecies = nil
     end
   end
 
@@ -2445,18 +2515,26 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "vanish_dig" then
-      -- Dig down with a shake, then hold as a dirt-hole tell (still posed).
+      -- Diglett Walk is the generic hole-pop; otherwise squash the user in.
+      Sprites.ensureKitBorrow(self)
       self.animT = (self.animT or 0) + dt
       local dur = 0.55
       local t = math.min(1, self.animT / dur)
-      oy = oy + t * t * 20
-      self.drawScale = math.max(0.16, 1 - t * 0.84)
-      ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
+      local borrowed = self._borrowVisual
+      if borrowed then
+        oy = oy + t * t * 8
+        ox = ox + math.sin(t * math.pi * 5) * (1 - t) * 1.6
+        self.drawScale = 1
+      else
+        oy = oy + t * t * 20
+        self.drawScale = math.max(0.16, 1 - t * 0.84)
+        ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
+      end
       self._walkFrame = (math.floor(t * 10) % 2)
       if self.animT >= dur then
         self._fieldVanished = true
         self.hidden = false
-        self.drawScale = 0.2
+        self.drawScale = borrowed and 1 or 0.2
         self.anim = "buried"
         self.animT = 0
       end
@@ -2477,12 +2555,19 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "buried" then
-      -- Semi-invulnerable Dig hold: rumble in the hole.
+      -- Semi-invulnerable Dig hold: Diglett peeks, or rumble in the hole.
+      Sprites.ensureKitBorrow(self)
       self._fieldVanished = true
       self.hidden = false
-      self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
-      oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
-      ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
+      if self._borrowVisual then
+        self.drawScale = 1
+        oy = oy + 2 + math.sin((self.bobT or 0) * 3.4) * 1.2
+        ox = ox + math.sin((self.bobT or 0) * 5.1) * 0.8
+      else
+        self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
+        oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
+        ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
+      end
       self._walkFrame = 0
     elseif anim == "aloft" then
       -- Semi-invulnerable Fly hold: circle high above the pad.
@@ -2493,13 +2578,18 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       ox = ox + math.sin((self.bobT or 0) * 1.25) * 5
       self._walkFrame = (math.floor((self.bobT or 0) * 4) % 2)
     elseif anim == "emerge_dig" then
-      -- Burst up from the hole.
+      -- Burst up from the hole (Diglett Walk, then the real mon).
+      Sprites.ensureKitBorrow(self)
       self.hidden = false
       self._emerging = true
       self.animT = (self.animT or 0) + dt
       local dur = 0.38
       local t = math.min(1, self.animT / dur)
-      if t < 0.12 then
+      if self._borrowVisual then
+        self.drawScale = 1
+        oy = oy + (1 - t) * (1 - t) * 8 - math.sin(t * math.pi) * 3
+        ox = ox + math.sin(t * math.pi * 3) * (1 - t) * 1.4
+      elseif t < 0.12 then
         self.drawScale = 0.16 + t * 2
         oy = oy + 12 - t * 40
         ox = ox + math.sin(t * 40) * 2
@@ -2514,6 +2604,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self._fieldVanished = nil
         self._emerging = nil
         self._vanishKind = nil
+        self._borrowVisual = nil
+        self._borrowSpecies = nil
         self.anim = "idle"
         self.animT = 0
       end
@@ -2892,6 +2984,67 @@ local function sheetToVisual(sheet, side)
     end,
   }
   return { sprite = sprite, drawer = drawer, lift = (fh >= 32) and 24 or 8 }
+end
+
+local borrowCache = {}
+
+function Sprites.borrowKitVisual(mod, game, species)
+  local key = tostring(species or ""):upper()
+  if key == "" then
+    return nil
+  end
+  if borrowCache[key] ~= nil then
+    return borrowCache[key] or nil
+  end
+  local sheet = Sprites.resolveSheet(mod, game, species)
+  local visual = sheet and sheetToVisual(sheet, "borrow")
+  if not visual and sheet then
+    local meta = sheet.kitMeta or Sprites.kitMetaFromPath(sheet.image)
+    local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(meta)
+    local blocks = 8
+    if type(meta) == "table" and type(meta.poses) == "table" then
+      local n = 0
+      for _ in pairs(meta.poses) do
+        n = n + 1
+      end
+      if n > 0 then
+        blocks = n
+      end
+    end
+    visual = {
+      kit = true,
+      kitBlocks = blocks,
+      kitCols = (meta and tonumber(meta.cols)) or Sprites.KIT_COLS,
+      kitColsByBlock = colsByBlock,
+      kitTicksByBlock = ticksByBlock,
+      sprite = {
+        kit = true,
+        image = nil,
+        def = { kit = true, image = sheet.image },
+        kitBlocks = blocks,
+      },
+    }
+  end
+  borrowCache[key] = visual or false
+  return visual
+end
+
+function Sprites.ensureKitBorrow(ent)
+  local spec = Sprites.kitBorrowSpec(ent and ent.anim)
+  if not (ent and spec) then
+    if ent then
+      ent._borrowVisual = nil
+      ent._borrowSpecies = nil
+    end
+    return nil
+  end
+  if ent._borrowVisual and ent._borrowSpecies == spec.species then
+    return spec, ent._borrowVisual
+  end
+  local visual = Sprites.borrowKitVisual(ent._spriteMod, ent._spriteGame, spec.species)
+  ent._borrowVisual = visual
+  ent._borrowSpecies = spec.species
+  return spec, visual
 end
 
 function Sprites.applySurface(ent, surface)

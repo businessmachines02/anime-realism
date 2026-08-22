@@ -7383,6 +7383,17 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(v, 64, "walk right is its own row, not a flipped left")
 end
 
+function tests.dig_borrows_diglett_walk()
+  local spec = Sprites.kitBorrowSpec("vanish_dig")
+  eq(spec.species, "DIGLETT", "DIG vanish uses Diglett")
+  eq(spec.anim, "walk", "Diglett Walk is the ground-pop")
+  eq(Sprites.kitBorrowSpec("buried").anim, "idle", "buried holds Diglett idle")
+  eq(Sprites.kitBorrowSpec("emerge_dig").species, "DIGLETT",
+    "emerge uses Diglett too")
+  eq(Sprites.kitBorrowSpec("attack"), nil, "normal attacks keep the user")
+  eq(Sprites.SPECIES_DEX.DIGLETT, 50, "DIGLETT maps to follower_050")
+end
+
 function tests.kit_shadow_origin_stays_on_planted_column()
   local u, v = Sprites.kitShadowOrigin({
     _kitBlock = 1, _kitCol = 5, facing = "down",

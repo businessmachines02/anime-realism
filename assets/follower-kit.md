@@ -205,4 +205,4 @@ PMD Collab zips are **source**, not runtime. Unpack into `assets/followers/0005/
 ./assets/followers/run_bake.sh 0005
 ```
 
-That writes `follower_005.png` (every PMD frame × combat rows, extras after Idle/Faint) and `follower_005.kit` (per-pose ticks). Each frame's feet stay planted so hops rise; sideways shadow drift is kept so Attack still lunges. Field battle loads those — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).
+That writes `follower_005.png` (every PMD frame × combat rows, extras after Idle/Faint) and `follower_005.kit` (per-pose ticks). Each frame's feet stay planted so hops rise; sideways shadow drift is kept so Attack still lunges. Long side views (Onix, Gyarados) scale per facing so the front is not crushed. DIG plays Diglett's Walk (the ground-pop) for every user. Field battle loads those — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).

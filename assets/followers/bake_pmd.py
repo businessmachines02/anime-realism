@@ -30,12 +30,12 @@ COLS = 4
 BLOCK_ROWS = 4
 DEX_DIR = re.compile(r"^\d{3,4}$")
 
-# Occupancy: one scale per pose, from FIT_MAX_BY_DEX / FIT_BY_HEIGHT.
-# Those values are used as written (clamped only to the 32px cell).
-# Each frame's own shadow Y is planted so hops rise. Horizontal shadow
-# drift (side Attacks) is kept. Overflow clips the cell; we do not shrink
-# the whole pose to fit a 2px foot. Art smaller than its cap stays that
-# size unless FIT_UPSCALE is True.
+# Occupancy: one scale per facing, from FIT_MAX_BY_DEX / FIT_BY_HEIGHT.
+# A long side view (Onix, Gyarados) must not shrink the front. Those
+# values are used as written (clamped only to the 32px cell). Each
+# frame's own shadow Y is planted so hops rise. Horizontal shadow drift
+# (side Attacks) is kept. Overflow clips the cell. Art smaller than its
+# cap stays that size unless FIT_UPSCALE is True.
 FIT_MIN = 23
 FIT_MAX = 32
 FIT_UPSCALE = False
@@ -73,7 +73,8 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     136: 20,  # Flareon
     196: 20,  # Espeon
     197: 20,  # Umbreon
-    95: 32,    # Onix - make Onix as large as possible
+    95: 32,    # Onix
+    130: 32,   # Gyarados
 }
 
 # Gen 1 Pokédex height in meters. Index 0 unused.
@@ -424,7 +425,6 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None)
                     bboxes.append(bbox)
                     anchor = cell_anchor(shadow, offsets, col, row, fw, fh, bbox)
                     frames.append((face, col, raw, bbox, anchor))
-            scale = pose_scale(bboxes, max_px)
             dest_ay = float(CELL - 1)
             by_face: list[list] = [[] for _ in range(BLOCK_ROWS)]
             for face, col, raw, bbox, anchor in frames:
@@ -432,6 +432,8 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None)
             fitted = []
             for face in range(BLOCK_ROWS):
                 face_frames = by_face[face]
+                face_scale = pose_scale(
+                    [item[2] for item in face_frames], max_px)
                 ref = facing_origin(
                     [item[3] for item in face_frames],
                     [item[2] for item in face_frames])
@@ -439,17 +441,17 @@ def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None)
                 dests = []
                 for item, origin in zip(face_frames, origins):
                     dest_ax = nudge_ax_into_cell(
-                        item[2], origin, scale,
-                        lunge_ax(item[3], ref, scale), dest_ay)
+                        item[2], origin, face_scale,
+                        lunge_ax(item[3], ref, face_scale), dest_ay)
                     dests.append((dest_ax, dest_ay))
-                fitted.append((origins, dests))
+                fitted.append((origins, dests, face_scale))
             block = Image.new("RGBA", (CELL * cols, CELL * BLOCK_ROWS), (0, 0, 0, 0))
             for face, col, raw, bbox, anchor in frames:
-                origins, dests = fitted[face]
+                origins, dests, face_scale = fitted[face]
                 origin = origins[col] if col < len(origins) else plant_origin(anchor, bbox)
                 dest_ax, face_ay = dests[col] if col < len(dests) else (CELL / 2.0, dest_ay)
                 cell = place_anchored(
-                    raw, bbox, origin, scale, dest_ax, face_ay)
+                    raw, bbox, origin, face_scale, dest_ax, face_ay)
                 block.paste(cell, (col * CELL, face * CELL), cell)
             return block, dirs, cols, ticks, fw, fh
     finally:
