@@ -7232,11 +7232,12 @@ end
 
 function tests.kit_col_walk_and_combat()
   eq(Sprites.kitColForAnim({ _walkT = 0 }, "idle", false), 0, "idle column")
-  eq(Sprites.kitColForAnim({ _idleT = 0.6 }, "idle", false), 2, "idle other stand")
+  eq(Sprites.kitColForAnim({ _idleT = 0.48 }, "idle", false), 3,
+    "standing walk plays the whole row, not rest 0/2")
   eq(Sprites.kitColForAnim({ _walkT = 0.2, _kitBlocks = 7 }, "idle", true), 1,
     "moving uses walk columns")
-  eq(Sprites.kitColForAnim({ _idleT = 0.3, _kitBlocks = 7 }, "idle", false), 1,
-    "dedicated idle loops all four frames")
+  eq(Sprites.kitColForAnim({ _idleT = 0.36, _kitBlocks = 7 }, "idle", false), 2,
+    "dedicated idle loops all frames")
   eq(Sprites.kitColForAnim({ _walkT = 0.2 }, "idle", true), 1, "walk step column")
   eq(Sprites.kitColForAnim({ animT = 0 }, "attack", false), 0, "physical start")
   eq(Sprites.kitColForAnim({ animT = 0.18 }, "attack", false), 2, "physical recover")
@@ -7249,8 +7250,55 @@ function tests.kit_col_walk_and_combat()
     "charge loops while held")
   eq(Sprites.kitColForAnim({ _idleT = 0 }, "freeze", false), 0,
     "freeze holds the first frame")
-  eq(Sprites.kitColForAnim({ _idleT = 0.9 }, "sleep", false), 2,
-    "sleep loops slower than idle")
+  eq(Sprites.kitColForAnim({ _idleT = 0.56 }, "sleep", false), 2,
+    "sleep loops the whole row")
+end
+
+function tests.kit_meta_plays_full_pmd_row()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "# baked from 0005",
+    "kit 32 14",
+    "walk 8 10 8 10",
+    "physical 2 2 2 2 4 1 1 2 2 2 2 2 2 2",
+    "idle 40 2 3 3 3 2",
+    "faint 2 2 2 8",
+  }, "\n"))
+  truthy(meta, "sidecar parses")
+  eq(meta.cols, 14, "sheet width in cells")
+  eq(meta.poses.physical.frames, 14, "attack keeps every PMD column")
+  eq(meta.poses.idle.frames, 6, "idle is the breathe loop, not 4")
+  local colsByBlock, ticksByBlock = Sprites.kitMetaBlockTables(meta)
+  eq(colsByBlock[3], 14, "physical block is 14 wide")
+  eq(colsByBlock[6], 6, "idle block is 6 wide")
+  local ent = {
+    _kitSheet = true,
+    _kitBlocks = 8,
+    _kitCols = 14,
+    _kitColsByBlock = colsByBlock,
+    _kitTicksByBlock = ticksByBlock,
+  }
+  eq(Sprites.kitFrameCount(ent, "attack"), 14, "physical uses the full row")
+  eq(Sprites.kitFrameCount(ent, "idle"), 6, "idle uses its own length")
+  eq(Sprites.kitColForAnim(ent, "attack", false), 0, "attack starts on col 0")
+  local clip = Sprites.kitClipDuration(ent, "attack", 0.34)
+  truthy(clip > 0.34, "full strip holds the clip open")
+  ent.animT = clip * 0.55
+  local mid = Sprites.kitColForAnim(ent, "attack", false)
+  truthy(mid >= 6 and mid <= 13, "attack mid-clip is past the old 4-frame pick")
+  ent.animT = clip
+  eq(Sprites.kitColForAnim(ent, "attack", false), 13, "attack settles on last col")
+  ent._idleT = 0
+  eq(Sprites.kitColForAnim(ent, "idle", false), 0, "idle starts on col 0")
+  local looped = Sprites.kitLoopTicks(meta.poses.idle.ticks, "idle")
+  eq(looped[1], 16, "40-tick PMD rest is clamped, then idle is slowed")
+  ent._idleT = looped[1] / 60 + 0.001
+  eq(Sprites.kitColForAnim(ent, "idle", false), 1, "idle advances through the row")
+  ent.animT = 1
+  eq(Sprites.kitColForAnim(ent, "faint", false), 3, "faint still holds last crumple")
+  eq(Sprites.kitColFromUnit(0.5, 14, meta.poses.physical.ticks) >= 4, true,
+    "unit map reaches past four sampled frames")
+  eq(Sprites.kitFrameCount({ _kitCols = 14 }, "idle"), 4,
+    "sheet width is not a pose length")
 end
 
 function tests.kit_charge_hold_until_shoot()

@@ -25,17 +25,19 @@ Lookup order (first hit wins):
 
 Walk is a four-frame cycle (standing still, one foot, standing still, the other foot), the same idea as a normal follower page.
 
-**Idle** is a separate PMD breathing loop (block 7). Standing still plays that strip. Walking still uses the top block. If Idle is missing, standing falls back to Walk columns 1 and 3.
+**Idle** is a separate PMD breathing loop (block 7). Standing still plays that strip — every frame, using the baked ticks. Walking still uses the top block. If Idle is missing, standing falls back to Walk rest frames (columns 1 and 3 on a 4-frame walk).
 
 In a fight the game already hops and squashes that walk drawing. That is not enough. We need separate drawings for getting out of the way, covering up, throwing a punch, throwing a beam, and getting hurt.
 
 When an attack is about to land, time slows and the trainer picks **dodge** or **brace**. Those two are the only poses the player chooses. **Physical** and **special** play because a move was used. **Hit** plays on whoever actually took the damage; nobody presses a button for it.
 
-Every pose uses the same **four columns**. Stack more four-row blocks under walking. The sheet stays 128 pixels wide.
+Hand-drawn kits use the same **four columns**. Stack more four-row blocks under walking. Width stays 128 pixels.
+
+Baked PMD kits keep **every frame** in the source row. Width is `longest pose × 32`. Shorter poses sit on the left; unused cells stay empty. A `follower_XXX.kit` sidecar lists per-pose ticks (60/sec) so the pad plays the whole strip instead of four sampled cells.
 
 ## What each animation is
 
-Draw every pose in all four facings (front, left, right, back). Each pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MIN` / `FIT_BY_HEIGHT` in `bake_pmd.py`, never below 20px). The game still slides them on the pad.
+Draw every pose in all four facings (front, left, right, back). A hand-drawn pose is four frames, left to right: start, peak, recover, settle (walk uses idle / step / idle / other step). A baked PMD pose is the entire source row in that order. Keep the Pokémon inside the 32-pixel cell; the baker caps occupancy by Pokédex height (`FIT_MIN` / `FIT_BY_HEIGHT` in `bake_pmd.py`, never below 20px). The game still slides them on the pad.
 
 ### Walk
 
@@ -47,7 +49,7 @@ If a later block is missing, the game keeps using these frames — including for
 
 This is standing still on the pad. PMD Collab `Idle` (a slow breathe / shift), not a walk rest frame. Face the foe. Loop all four columns. Do not step, punch, or flinch.
 
-If this block is missing, standing uses Walk columns 1 and 3.
+If this block is missing, standing uses Walk rest frames (columns 1 and 3 when Walk is four frames).
 
 ### Dodge
 
@@ -110,10 +112,11 @@ The Pokémon **goes flying**. Powerful hits, crits, clashes, and FIRE NOW knocks
 | | |
 |---|---|
 | Cell | 32×32 |
-| Full kit | **4 columns × 68 rows = 128×2176** (plus optional flap → 128×2304) |
+| Full kit (hand-drawn) | **4 columns × 68 rows = 128×2176** (plus optional flap → 128×2304) |
+| Full kit (baked PMD) | **N columns × 68 rows = (N×32)×2176**, N = longest pose |
 | Origin | top-left; row 1 is the top |
 
-Walk-only is **128×128**. Add more height in chunks of 128 pixels (four rows) for each extra pose. Width never changes.
+Walk-only hand-drawn is **128×128**. Add more height in chunks of 128 pixels (four rows) for each extra pose. Hand-drawn width stays 128. Baked width grows with the longest PMD row.
 
 ## Facing (every 4-row block)
 
@@ -130,15 +133,17 @@ Same order as the current Charmeleon four-by-four. Older follower packs store on
 
 ## Columns
 
-Every block uses four frames, left to right.
+Hand-drawn blocks use four frames, left to right.
 
 - **Walk:** standing still, one foot, standing still, the other foot.
 - **Idle:** breathe / shift, four frames, looping.
 - **Dodge, brace, physical, special, hit, faint, charge, jump, counter, miss:** start, peak, recover, settle.
 
+Baked PMD blocks use the entire source row. Combat one-shots still finish in the same clip length; the extra frames play inside it, weighted by the `.kit` ticks. Idle / walk / sleep / charge / confuse loop the full row at those ticks.
+
 ## Blocks (top → bottom)
 
-| Pixel Y | Grid rows | Pose | Frames | Role |
+| Pixel Y | Grid rows | Pose | Frames (hand / baked) | Role |
 |---|---|---|---|---|
 | 0–127 | 1–4 | Walk | 4 | Walking. Used if a later pose is missing. |
 | 128–255 | 5–8 | Dodge | 4 | Getting out of the way. |
@@ -186,7 +191,7 @@ Ship a short sheet; extra blocks are optional. Preview greys out poses that are 
 
 ## In-game
 
-`field/fx/sprites.lua` loads a four-column grid from this mod’s follower PNG. Walking uses the top block. Standing uses the Idle block when that block exists; otherwise it uses Walk rest frames. Faint uses the last core block when present, instead of shrinking the walk sprite. Trainer faint plays that crumple, then the recall laser; wild faint holds the last frame and hides. Charge holds while a FIRE NOW shot is on the pad; Shoot plays when it leaves. Jump, counter, and miss use their own rows when present, else Physical. Powerful hits, crits, and clashes play TumbleBack; a flinch stays on Hit. Sleep / freeze / confuse replace standing Idle while afflicted. Flying dodges use Float; Ghost dodges use Dodge paler. Round bodies and the hop cycle bounce the PMD Hop strip instead of sliding it. Flying types with a FlapAround (or Hover) row sometimes travel on that strip instead of Walk. If the sheet is taller than walk, dodge, brace, physical, special, and hit play from later blocks when those rows exist. A missing block keeps using the walk frames (with the usual hop and squash), or an earlier combat strip for the extra poses.
+`field/fx/sprites.lua` loads the grid from this mod’s follower PNG. Columns come from the image width (and `follower_XXX.kit` when present). Walking uses the top block. Standing uses the Idle block when that block exists; otherwise it uses Walk rest frames. Faint uses the last core block when present, instead of shrinking the walk sprite. Trainer faint plays that crumple, then the recall laser; wild faint holds the last frame and hides. Charge holds while a FIRE NOW shot is on the pad; Shoot plays when it leaves. Jump, counter, and miss use their own rows when present, else Physical. Powerful hits, crits, and clashes play TumbleBack; a flinch stays on Hit. Sleep / freeze / confuse replace standing Idle while afflicted. Flying dodges use Float; Ghost dodges use Dodge paler. Round bodies and the hop cycle bounce the PMD Hop strip instead of sliding it. Flying types with a FlapAround (or Hover) row sometimes travel on that strip instead of Walk. If the sheet is taller than walk, dodge, brace, physical, special, and hit play from later blocks when those rows exist. A missing block keeps using the walk frames (with the usual hop and squash), or an earlier combat strip for the extra poses.
 
 The game does not flip the right-facing row. It does not load `followers/005/dodge.png` when this grid is in use.
 
@@ -200,4 +205,4 @@ PMD Collab zips are **source**, not runtime. Unpack into `assets/followers/0005/
 ./assets/followers/run_bake.sh 0005
 ```
 
-That writes `follower_005.png` (4 columns × combat rows, extras after Idle/Faint). Field battle loads that PNG only — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).
+That writes `follower_005.png` (every PMD frame × combat rows, extras after Idle/Faint) and `follower_005.kit` (per-pose ticks). Field battle loads those — never `AnimData.xml` or the `*-Anim.png` strips, which wedge the 3D map if they go through the follower slicer. Credit the PMD Collab artists (CC BY-NC).

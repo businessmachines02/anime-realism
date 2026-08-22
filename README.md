@@ -175,8 +175,10 @@ remain on their normal presentation path.
   (Charge hold, then Shoot when the bolt leaves), and hits recoil or faint
   without changing battle calculations.
 - Pad battlers (player lead and foe) prefer this mod’s 4-facing combat kits
-  in `assets/followers/follower_XXX.png`. Overworld followers behind the
-  player still come from Wilds / PokéPC. Layout: [`assets/follower-kit.md`](assets/follower-kit.md).
+  in `assets/followers/follower_XXX.png`. Baked PMD kits play every frame in
+  the pose row (a `.kit` sidecar holds per-pose ticks). Overworld followers
+  behind the player still come from Wilds / PokéPC. Layout:
+  [`assets/follower-kit.md`](assets/follower-kit.md).
   Bake PMD Collab packs with `./assets/followers/run_bake.sh` — never load
   `AnimData.xml` or `*-Anim.png` in a fight (those strips wedge the 3D map).
   See [`assets/followers/pmd/README.md`](assets/followers/pmd/README.md).
@@ -253,9 +255,9 @@ You guys are legendary ❤️
 - `hud/` — hide numbers + EXP/effort rewards
 - `battle/` — battle systems (`rules/` math + pipeline, `chrome/` HUD paint)
 - `field/` — overworld FIELD combat (tile-grid movement tracker)
-- `assets/followers/` — baked pad kits (`follower_XXX.png`) plus PMD unpacks
+- `assets/followers/` — baked pad kits (`follower_XXX.png` + `.kit`) plus PMD unpacks
 - `assets/followers/run_bake.sh` — local venv + `bake_pmd.py` (all packs, or `0005`)
-- `assets/follower-kit.md` — 32px 4-facing sheet layout
+- `assets/follower-kit.md` — 32px 4-facing sheet layout (hand-drawn 4-col or baked N-col)
 - `LICENSE` — CC BY 4.0 (attribution required; does not cover PMD Collab art)
 - `DIFFERENCES.md` — what this mod changes from vanilla
 - `build.sh` — local zip for testing

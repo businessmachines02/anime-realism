@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Flatten unpacked PMD Collab packs into follower_XXX.png kits.
+# Flatten unpacked PMD Collab packs into follower_XXX.png + .kit (full rows).
 #
 #   ./assets/followers/run_bake.sh          # every pack under this folder
 #   ./assets/followers/run_bake.sh 0005     # Charmeleon only

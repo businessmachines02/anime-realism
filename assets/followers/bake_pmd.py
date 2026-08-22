@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Flatten a PMD Collab pack into the 4×N field kit (follower_XXX.png).
+"""Flatten a PMD Collab pack into the field kit (follower_XXX.png + .kit).
 
-Battle never loads AnimData.xml or *-Anim.png. Unpack a SpriteBot zip, then:
+Battle never loads AnimData.xml or *-Anim.png. Each pose keeps every frame
+in its PMD row (sheet width = longest pose × 32). Shadow.png / Offsets.png
+pin hops and lunges to the ground-contact point. A sidecar `.kit` file
+stores per-pose tick counts (60/sec) so the pad can play the whole strip.
 
     python3 assets/followers/bake_pmd.py 0005
     python3 assets/followers/bake_pmd.py        # every pack under this folder
@@ -26,7 +29,9 @@ COLS = 4
 BLOCK_ROWS = 4
 DEX_DIR = re.compile(r"^\d{3,4}$")
 
-# Occupancy: after trim, scale into the 32px cell (feet on the bottom).
+# Occupancy: one scale per pose (largest trimmed frame), then place each
+# frame so the PMD shadow/body point maps to the 32px feet. That keeps
+# hops and lunges instead of re-planting every crop on the cell floor.
 # Caps are never below FIT_MIN. Art smaller than its cap stays that size
 # unless FIT_UPSCALE is True (nearest-neighbor, can look chunky).
 FIT_MIN = 23
@@ -49,6 +54,7 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
 # Dex → max px. Still clamped to [FIT_MIN, CELL].
 FIT_MAX_BY_DEX: dict[int, int] = {
     3: 32,    # Venusaur - make a bit bigger
+    5: 23,    # charmeleon - make a bit smaller
     6: 29,    # Charizard - make a bit bigger
     9: 29,    # Blastoise - make a bit bigger
     19: 20,   # Rattata
@@ -174,38 +180,19 @@ def _int(text: str | None) -> int | None:
         return None
 
 
-def pick_frames(count: int) -> tuple[int, int, int, int]:
-    if count <= 1:
-        return (0, 0, 0, 0)
-    if count == 2:
-        return (0, 1, 0, 1)
-    if count == 3:
-        return (0, 1, 2, 1)
-    last = count - 1
-    return (0, max(1, count // 3), max(2, (2 * count) // 3), last)
-
-
-def pick_anim_frames(anim: dict, count: int) -> tuple[int, int, int, int]:
-    """Use PMD hit / return when both exist and actually spread the strip."""
-    even = pick_frames(count)
-    if count <= 4:
-        return even
-    hit = anim.get("hit")
-    ret = anim.get("return_frame")
-    if hit is None or ret is None:
-        return even
-
-    def clamp(n: int) -> int:
-        if n < 0:
-            return 0
-        if n >= count:
-            return count - 1
-        return n
-
-    start, peak, recover, settle = 0, clamp(hit), clamp(ret), count - 1
-    if peak <= start or recover <= peak or settle <= recover:
-        return even
-    return (start, peak, recover, settle)
+def frame_ticks(anim: dict, cols: int) -> list[int]:
+    """One duration per column. PMD ticks are 60/sec; pad missing entries."""
+    raw: list[int] = []
+    for d in anim.get("durations") or []:
+        try:
+            raw.append(max(1, int(d)))
+        except (TypeError, ValueError):
+            raw.append(2)
+    if not raw:
+        raw = [2]
+    if len(raw) < cols:
+        raw = raw + [raw[-1]] * (cols - len(raw))
+    return raw[: max(1, cols)]
 
 
 def pose_anim(pack_dir: Path, by_name: dict, names: tuple[str, ...],
@@ -257,6 +244,32 @@ def trim_sprite(frame: Image.Image) -> Image.Image:
     return frame.crop(bbox)
 
 
+def find_white_pixel(im: Image.Image) -> tuple[int, int] | None:
+    """PMD Shadow.png: one white pixel is the ground-contact / shadow center."""
+    im = im.convert("RGBA")
+    px = im.load()
+    w, h = im.size
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 200 and r > 200 and g > 200 and b > 200:
+                return x, y
+    return None
+
+
+def find_green_pixel(im: Image.Image) -> tuple[int, int] | None:
+    """PMD Offsets.png: green is the body center."""
+    im = im.convert("RGBA")
+    px = im.load()
+    w, h = im.size
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = px[x, y]
+            if a > 200 and g > 180 and g >= r + 30 and g >= b + 30:
+                return x, y
+    return None
+
+
 def fit_cap(dex: int | None) -> int:
     if dex is not None and dex in FIT_MAX_BY_DEX:
         cap = FIT_MAX_BY_DEX[dex]
@@ -272,25 +285,40 @@ def fit_cap(dex: int | None) -> int:
     return max(FIT_MIN, min(CELL, int(cap)))
 
 
-def fit_cell(frame: Image.Image, max_px: int | None = None) -> Image.Image:
-    frame = trim_sprite(key_magenta(frame))
+def pose_scale(bboxes: list[tuple[int, int, int, int] | None], max_px: int | None) -> float:
+    max_d = 1
+    for bb in bboxes:
+        if not bb:
+            continue
+        max_d = max(max_d, bb[2] - bb[0], bb[3] - bb[1])
+    cap = CELL if max_px is None else max(1, min(CELL, int(max_px)))
+    limit = cap / max_d
+    return limit if FIT_UPSCALE else min(limit, 1.0)
+
+
+def place_anchored(frame: Image.Image, bbox: tuple[int, int, int, int] | None,
+                   anchor: tuple[int, int] | None, scale: float) -> Image.Image:
+    """Scale one pose-wide amount; pin the shadow/body point to the cell feet."""
     cell = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
-    fw, fh = frame.size
+    if not bbox:
+        return cell
+    trimmed = frame.crop(bbox)
+    fw, fh = trimmed.size
     if fw < 1 or fh < 1:
         return cell
-    cap = CELL if max_px is None else max(1, min(CELL, int(max_px)))
-    limit = min(cap / fw, cap / fh)
-    scale = limit if FIT_UPSCALE else min(limit, 1.0)
-    nw = max(1, int(round(fw * scale)))
-    nh = max(1, int(round(fh * scale)))
-    nw = min(nw, CELL)
-    nh = min(nh, CELL)
-    resized = frame if (nw == fw and nh == fh) else frame.resize(
+    nw = max(1, min(CELL, int(round(fw * scale))))
+    nh = max(1, min(CELL, int(round(fh * scale))))
+    resized = trimmed if (nw == fw and nh == fh) else trimmed.resize(
         (nw, nh), Image.Resampling.NEAREST)
-    # Feet on the bottom of the 32px cell, centered.
-    x = (CELL - nw) // 2
-    y = CELL - nh
-    cell.paste(resized, (x, y), resized)
+    if anchor is None:
+        ax, ay = (bbox[0] + bbox[2]) / 2, bbox[3] - 1
+    else:
+        ax, ay = float(anchor[0]), float(anchor[1])
+    dest_ax = CELL / 2
+    dest_ay = CELL - 1
+    paste_x = int(round(dest_ax - (ax - bbox[0]) * scale))
+    paste_y = int(round(dest_ay - (ay - bbox[1]) * scale))
+    cell.paste(resized, (paste_x, paste_y), resized)
     return cell
 
 
@@ -300,24 +328,69 @@ def slice_frame(sheet: Image.Image, col: int, row: int, fw: int, fh: int) -> Ima
     return sheet.crop((x, y, x + fw, y + fh))
 
 
+def cell_anchor(shadow: Image.Image | None, offsets: Image.Image | None,
+                col: int, row: int, fw: int, fh: int,
+                bbox: tuple[int, int, int, int] | None):
+    """Prefer Shadow.png white (ground), then Offsets.png green (body)."""
+    if shadow is not None:
+        mark = find_white_pixel(slice_frame(shadow, col, row, fw, fh))
+        if mark:
+            return mark
+    if offsets is not None:
+        mark = find_green_pixel(slice_frame(offsets, col, row, fw, fh))
+        if mark:
+            return mark
+    if bbox:
+        return ((bbox[0] + bbox[2]) // 2, bbox[3] - 1)
+    return None
+
+
 def bake_block(pack_dir: Path, anim: dict, dirs: int, max_px: int | None = None):
     png = pack_dir / f"{anim['source']}-Anim.png"
     if not png.is_file():
         return None
-    with Image.open(png) as sheet:
-        fw, fh = anim["width"], anim["height"]
-        cols = max(1, sheet.width // fw)
-        dirs = max(1, sheet.height // fh)
-        face_rows = FACE_ROWS_8 if dirs >= 8 else FACE_ROWS_4
-        idxs = pick_anim_frames(anim, cols)
-        block = Image.new("RGBA", (CELL * COLS, CELL * BLOCK_ROWS), (0, 0, 0, 0))
-        for face, pmd_row in enumerate(face_rows):
-            row = min(pmd_row, dirs - 1)
-            for col, fi in enumerate(idxs):
-                fi = min(fi, cols - 1)
-                cell = fit_cell(slice_frame(sheet, fi, row, fw, fh), max_px)
+    shadow_path = pack_dir / f"{anim['source']}-Shadow.png"
+    offset_path = pack_dir / f"{anim['source']}-Offsets.png"
+    shadow = Image.open(shadow_path).convert("RGBA") if shadow_path.is_file() else None
+    offsets = Image.open(offset_path).convert("RGBA") if offset_path.is_file() else None
+    try:
+        with Image.open(png) as sheet:
+            fw, fh = anim["width"], anim["height"]
+            cols = max(1, sheet.width // fw)
+            dirs = max(1, sheet.height // fh)
+            face_rows = FACE_ROWS_8 if dirs >= 8 else FACE_ROWS_4
+            ticks = frame_ticks(anim, cols)
+            frames: list[tuple[int, int, Image.Image, tuple | None, tuple | None]] = []
+            bboxes: list[tuple[int, int, int, int] | None] = []
+            for face, pmd_row in enumerate(face_rows):
+                row = min(pmd_row, dirs - 1)
+                for col in range(cols):
+                    raw = key_magenta(slice_frame(sheet, col, row, fw, fh))
+                    bbox = raw.getbbox()
+                    bboxes.append(bbox)
+                    anchor = cell_anchor(shadow, offsets, col, row, fw, fh, bbox)
+                    frames.append((face, col, raw, bbox, anchor))
+            scale = pose_scale(bboxes, max_px)
+            block = Image.new("RGBA", (CELL * cols, CELL * BLOCK_ROWS), (0, 0, 0, 0))
+            for face, col, raw, bbox, anchor in frames:
+                cell = place_anchored(raw, bbox, anchor, scale)
                 block.paste(cell, (col * CELL, face * CELL), cell)
-        return block, dirs, cols, idxs, fw, fh
+            return block, dirs, cols, ticks, fw, fh
+    finally:
+        if shadow is not None:
+            shadow.close()
+        if offsets is not None:
+            offsets.close()
+
+
+def write_kit_meta(path: Path, max_cols: int, pose_ticks: list[tuple[str, list[int]]]) -> None:
+    lines = [
+        "# follower kit timing; 60 ticks/sec. Pad plays every column.",
+        f"kit {CELL} {max_cols}",
+    ]
+    for pose, ticks in pose_ticks:
+        lines.append(pose + " " + " ".join(str(t) for t in ticks))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
@@ -327,6 +400,8 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
     by_name = parse_pack(xml_path)
     blocks: list[Image.Image] = []
     by_pose: dict[str, Image.Image] = {}
+    pose_ticks: list[tuple[str, list[int]]] = []
+    ticks_by_pose: dict[str, list[int]] = {}
     used = 0
     max_px = fit_cap(dex)
     for pose, names in POSES:
@@ -345,11 +420,13 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
             if pose == "idle" or pose == "faint":
                 continue
             break
-        block, dirs, cols, idxs, fw, fh = baked
+        block, dirs, cols, ticks, fw, fh = baked
         blocks.append(block)
         by_pose[pose] = block
+        ticks_by_pose[pose] = ticks
+        pose_ticks.append((pose, ticks))
         used += 1
-        print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
+        print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={cols}")
     if used < 1:
         return False
     # Only append extras when Idle+Faint already occupy blocks 6–7.
@@ -358,8 +435,8 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
             anim, dirs = pose_anim(pack_dir, by_name, names, prefer_named=prefer)
             baked = bake_block(pack_dir, anim, dirs, max_px) if anim else None
             if baked:
-                block, dirs, cols, idxs, fw, fh = baked
-                print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={idxs}")
+                block, dirs, cols, ticks, fw, fh = baked
+                print(f"  {pose}: {anim['source']} {fw}x{fh} x{cols}/{dirs} frames={cols}")
             else:
                 if fallback is None:
                     print(f"  {pose}: skip")
@@ -368,16 +445,21 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
                 if not src:
                     break
                 block = src.copy()
+                ticks = list(ticks_by_pose.get(fallback) or ticks_by_pose.get("walk") or [2] * COLS)
                 print(f"  {pose}: copy {fallback}")
             blocks.append(block)
             by_pose[pose] = block
+            ticks_by_pose[pose] = ticks
+            pose_ticks.append((pose, ticks))
             used += 1
-    kit = Image.new("RGBA", (CELL * COLS, CELL * BLOCK_ROWS * used), (0, 0, 0, 0))
+    max_cols = max((max(1, b.width // CELL) for b in blocks), default=COLS)
+    kit = Image.new("RGBA", (CELL * max_cols, CELL * BLOCK_ROWS * used), (0, 0, 0, 0))
     for i, block in enumerate(blocks):
         kit.paste(block, (0, i * CELL * BLOCK_ROWS), block)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     kit.save(out_path)
-    print(f"wrote {out_path} ({kit.width}x{kit.height})")
+    write_kit_meta(out_path.with_suffix(".kit"), max_cols, pose_ticks)
+    print(f"wrote {out_path} ({kit.width}x{kit.height}) + {out_path.with_suffix('.kit').name}")
     return True
 
 

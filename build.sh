@@ -74,10 +74,10 @@ if [[ -d "$ROOT/assets/followers/pmd" ]]; then
   zip -q -r "$OUT" assets/followers/pmd \
     -x "**/.DS_Store"
 fi
-# Baked 4×24 kits only — never pack PMD source folders (0001/…).
+# Baked kits only — never pack PMD source folders (0001/…).
 while IFS= read -r kit; do
   zip -q "$OUT" "$kit"
-done < <(find assets/followers -maxdepth 1 -name 'follower_*.png' | sort)
+done < <(find assets/followers -maxdepth 1 \( -name 'follower_*.png' -o -name 'follower_*.kit' \) | sort)
 
 echo "Built $ROOT/$OUT"
 unzip -l "$OUT"
