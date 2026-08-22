@@ -57,13 +57,13 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
 ]
 # Dex → max px. Clamped only to the 32px cell, not FIT_MIN.
 FIT_MAX_BY_DEX: dict[int, int] = {
-    3: 32,    # Venusaur - make a bit bigger
+    3: 32,    #  Venusaur - make a bit bigger
     5: 23,    # charmeleon - make a bit smaller
     6: 29,    # Charizard - make a bit bigger
     9: 29,    # Blastoise - make a bit bigger
-    19: 20,   # Rattata
-    25: 20,   # Pikachu - make smaller, like Growlithe
-    26: 25,   # Raichu - make the size of Ninetales
+    19: 20,   # ratata 
+    25: 20,   # pikachu - make smaller, like Growlite
+    26: 25,   # raichu - make the size of Ninetales
     37: 20,   # Vulpix
     38: 27,   # Ninetales
     58: 20,   # Growlithe
