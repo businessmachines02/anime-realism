@@ -1,3 +1,2 @@
-2020-10-07 17:58:43.507947	CHUNSOFT	CUR	Unspecified	Walk,Attack,Strike,Shoot,SpAttack,Rumble,Sleep,Hurt,Idle,Swing,Double,Hop,Charge,Rotate
-2024-04-24 10:39:15.896788	<@!356635814668664832>	CUR	CC_BY-NC_4	Eat,Cringe
-2026-07-28 00:43:16.483827	<@!1377429093997477928>	CUR	CC_BY-NC_4	EventSleep
+2023-03-08 22:28:19.881557	<@!544245909639397378>	CUR	PMDCollab_1	Idle,Walk,Sleep,Hurt,Attack,Charge,Shoot,Strike,Rumble,SpAttack,Swing,Double,Rotate,Hop
+2024-06-30 23:10:59.558996	<@!356635814668664832>	CUR	CC_BY-NC_4	Idle,Walk,Sleep,Hurt,Attack,Charge,Shoot,Rumble,Swing,Double,Rotate,Hop,Eat,Cringe

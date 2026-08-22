@@ -65,13 +65,13 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     26: 25,   # raichu - make the size of Ninetales
     37: 20,   # Vulpix
     38: 27,   # Ninetales
-    58: 20,   # Growlithe
+    58: 21,   # Growlithe
     133: 20,  # Eevee
-    134: 20,  # Vaporeon (1.0m would otherwise sit in the 24px band)
-    135: 20,  # Jolteon
-    136: 20,  # Flareon
-    196: 20,  # Espeon
-    197: 20,  # Umbreon
+    134: 21,  # Vaporeon (1.0m would otherwise sit in the 24px band)
+    135: 21,  # Jolteon
+    136: 21,  # Flareon
+    196: 21,  # Espeon
+    197: 21,  # Umbreon
     95: 38,    # Onix
     130: 38,   # Gyarados
 }
