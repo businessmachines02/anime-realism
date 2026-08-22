@@ -9,7 +9,7 @@
 -- sprites each frame. Cover plants the mon behind a real pad prop (or a
 -- crouch shade if none is nearby) — never a looping crate glued to the sprite.
 -- Fire specials paint teardrop flame tongues (not red blobs). Ember is a
--- short lob of two or three fireballs. Rock Throw lobs tumbling shards. Gust is a
+-- lobbed volley of fireballs. Rock Throw lobs tumbling shards. Gust is a
 -- traveling wind projectile even though Gen1 Flying is physical.
 
 local Coords = require("coords")
@@ -1851,6 +1851,22 @@ local function emberFade(t)
   return 1
 end
 
+--- Muzzle flash at the caster when a special leaves.
+local function drawCasterBloom(g, ox, oy, t, c)
+  if t > 0.34 or type(ox) ~= "number" then
+    return
+  end
+  local u = 1 - t / 0.34
+  local cr, cg, cb = 1, 0.85, 0.45
+  if type(c) == "table" then
+    cr, cg, cb = c[1] or cr, c[2] or cg, c[3] or cb
+  end
+  g.setColor(cr, cg, cb, 0.40 * u)
+  g.circle("fill", ox, oy - 2, 5 + (1 - u) * 10)
+  g.setColor(1, 1, 1, 0.55 * u)
+  g.circle("fill", ox, oy - 3, 2.2 + (1 - u) * 3.4)
+end
+
 local function emberAxes(x, y, ox, oy)
   local dx, dy = x - ox, y - oy
   local len = math.sqrt(dx * dx + dy * dy)
@@ -1868,67 +1884,79 @@ local function drawEmberBall(g, px, py, heading, scale, alpha, flick)
   if alpha <= 0.02 then
     return
   end
-  g.setColor(1.00, 0.28, 0.04, 0.28 * alpha)
-  g.circle("fill", px, py + 0.6, 4.4 * scale)
-  g.setColor(1.00, 0.46, 0.08, 0.72 * alpha)
-  g.circle("fill", px, py, 2.7 * scale)
-  g.setColor(1.00, 0.78, 0.18, 0.95 * alpha)
-  g.circle("fill", px - 0.25 * scale, py - 0.35 * scale, 1.55 * scale)
-  g.setColor(1.00, 0.96, 0.72, 0.92 * alpha)
-  g.circle("fill", px - 0.45 * scale, py - 0.55 * scale, 0.72 * scale)
-  drawFlameTongue(g, px, py, heading, 0.72 * scale, 0.88 * alpha)
+  g.setColor(1.00, 0.22, 0.02, 0.22 * alpha)
+  g.circle("fill", px, py + 0.8, 6.8 * scale)
+  g.setColor(1.00, 0.28, 0.04, 0.38 * alpha)
+  g.circle("fill", px, py + 0.5, 5.2 * scale)
+  g.setColor(1.00, 0.46, 0.08, 0.82 * alpha)
+  g.circle("fill", px, py, 3.4 * scale)
+  g.setColor(1.00, 0.78, 0.18, 0.96 * alpha)
+  g.circle("fill", px - 0.3 * scale, py - 0.4 * scale, 1.95 * scale)
+  g.setColor(1.00, 0.96, 0.72, 0.94 * alpha)
+  g.circle("fill", px - 0.55 * scale, py - 0.7 * scale, 0.95 * scale)
+  drawFlameTongue(g, px, py, heading, 0.98 * scale, 0.94 * alpha)
+  drawFlameTongue(g, px + 0.4, py - 0.6, heading + 0.38, 0.52 * scale, 0.62 * alpha)
 end
 
---- Ember: two or three small fireballs lobbed caster → foe, then a pop.
+--- Ember: a volley of fireballs lobbed caster → foe, then a pop.
 local function drawEmberCast(g, x, y, ox, oy, t, age, c, seed)
   if type(x) ~= "number" or type(y) ~= "number"
       or type(ox) ~= "number" or type(oy) ~= "number" then
     return
   end
+  drawCasterBloom(g, ox, oy, t, c)
   local dx, dy, nx, ny, heading = emberAxes(x, y, ox, oy)
   local fade = emberFade(t)
   seed = tonumber(seed) or 0.37
-  local n = 3
+  local n = 4
   for i = 1, n do
-    local delay = (i - 1) * 0.10
-    local u = (t - delay) / math.max(0.42, 0.88 - delay)
-    if u > 0 and u < 1.08 then
+    local delay = (i - 1) * 0.085
+    local u = (t - delay) / math.max(0.40, 0.90 - delay)
+    if u > 0 and u < 1.10 then
       local along = math.min(1, u)
-      local side = ((i % 2) * 2 - 1) * (0.55 + (i - 1) * 0.35)
-      local bounce = math.sin(along * math.pi) * (3.2 + (i % 3) * 0.9)
-      local px = ox + dx * along + nx * side * (0.35 + along * 0.4)
+      local side = ((i % 2) * 2 - 1) * (0.85 + (i - 1) * 0.42)
+      local bounce = math.sin(along * math.pi) * (5.6 + (i % 3) * 1.4)
+      local px = ox + dx * along + nx * side * (0.45 + along * 0.55)
       local py = oy + dy * along - bounce
-      local flick = 0.88 + 0.12 * math.abs(math.sin((age or 0) * 14 + i * 2.1 + seed * 8))
-      local a = fade * (u < 1 and 1 or (1.08 - u) / 0.08)
-      local scale = (i == 1 and 1.05 or (0.72 + i * 0.06)) * flick
-      drawEmberBall(g, px, py, heading + side * 0.12, scale, a, flick)
-      if along > 0.12 and along < 0.88 then
-        g.setColor(1.00, 0.62, 0.12, 0.42 * a)
-        g.circle("fill",
-          ox + dx * math.max(0, along - 0.07) + nx * side * 0.2,
-          oy + dy * math.max(0, along - 0.07) - bounce * 0.65,
-          1.05)
+      local flick = 0.86 + 0.14 * math.abs(math.sin((age or 0) * 16 + i * 2.1 + seed * 8))
+      local a = fade * (u < 1 and 1 or (1.10 - u) / 0.10)
+      local scale = (i == 1 and 1.42 or (0.92 + i * 0.08)) * flick
+      drawEmberBall(g, px, py, heading + side * 0.14, scale, a, flick)
+      if along > 0.10 and along < 0.90 then
+        for trail = 1, 2 do
+          local back = along - trail * 0.055
+          if back > 0 then
+            g.setColor(1.00, 0.55, 0.08, (0.38 - trail * 0.12) * a)
+            g.circle("fill",
+              ox + dx * back + nx * side * 0.28,
+              oy + dy * back - bounce * (1 - trail * 0.22),
+              1.55 - trail * 0.35)
+          end
+        end
       end
     end
   end
-  if t > 0.70 then
-    local burst = (t - 0.70) / 0.30
-    local pop = 1 - burst * 0.55
-    for i = 1, 5 do
-      local a = i * 1.256 + seed * 4
-      local dist = burst * (5.5 + (i % 3))
+  if t > 0.62 then
+    local burst = (t - 0.62) / 0.38
+    local pop = 1 - burst * 0.45
+    for i = 1, 8 do
+      local a = i * 0.785 + seed * 4
+      local dist = burst * (8.5 + (i % 4) * 1.4)
       drawFlameTongue(g,
-        x + math.cos(a) * dist * 0.85,
-        y + math.sin(a) * dist * 0.42 - burst * 1.6,
-        a + math.pi * 0.5, 0.38 * pop, fade * (0.75 - burst * 0.5))
+        x + math.cos(a) * dist * 0.95,
+        y + math.sin(a) * dist * 0.48 - burst * 2.4,
+        a + math.pi * 0.5, 0.55 * pop, fade * (0.88 - burst * 0.5))
     end
-    g.setColor(1.00, 0.82, 0.28, 0.35 * fade * (1 - burst))
-    g.circle("fill", x, y - 1, 3.2 + burst * 4)
+    g.setColor(1.00, 0.42, 0.06, 0.32 * fade * (1 - burst))
+    g.circle("fill", x, y - 1, 6.5 + burst * 9)
+    g.setColor(1.00, 0.88, 0.32, 0.48 * fade * (1 - burst))
+    g.circle("fill", x, y - 2, 3.8 + burst * 5)
   end
 end
 
 --- Flamethrower: dense jet of flame tongues along the stream.
 local function drawFlameJet(g, x, y, ox, oy, t, age, c)
+  drawCasterBloom(g, ox, oy, t, c)
   local dx, dy = x - ox, y - oy
   local len = math.sqrt(dx * dx + dy * dy)
   local nx, ny = 0, 1
@@ -1937,18 +1965,18 @@ local function drawFlameJet(g, x, y, ox, oy, t, age, c)
   end
   local heading = math.atan2(dy, dx) + math.pi * 0.5
   local fade = 1 - t * 0.18
-  local n = 16
+  local n = 20
   for i = 0, n do
     local u = i / n
     local along = u * math.min(1, t * 1.18 + 0.06)
-    local wobble = math.sin((age or 0) * 17 + i * 1.5) * (1.6 + u * 2.4)
-        + math.cos((age or 0) * 11 + i * 2.1) * 1.1
+    local wobble = math.sin((age or 0) * 17 + i * 1.5) * (2.0 + u * 2.8)
+        + math.cos((age or 0) * 11 + i * 2.1) * 1.35
     local px = ox + dx * along + nx * wobble
-    local py = oy + dy * along + ny * wobble * 0.45 - u * 1.4
-        - math.abs(math.sin((age or 0) * 14 + i)) * 0.6
+    local py = oy + dy * along + ny * wobble * 0.45 - u * 1.8
+        - math.abs(math.sin((age or 0) * 14 + i)) * 0.7
     local flick = 0.78 + 0.22 * math.abs(math.sin((age or 0) * 22 + i * 1.7))
-    local scale = (0.55 + (1 - u) * 0.85) * flick
-    local a = (0.35 + 0.6 * (1 - u * 0.45)) * fade * flick
+    local scale = (0.68 + (1 - u) * 1.05) * flick
+    local a = (0.40 + 0.62 * (1 - u * 0.45)) * fade * flick
     local rot = heading + math.sin((age or 0) * 13 + i) * 0.28
     drawFlameTongue(g, px, py, rot, scale, a)
   end
@@ -1962,15 +1990,15 @@ local function drawFlameJet(g, x, y, ox, oy, t, age, c)
     g.line(ox, oy, x, y)
   end
   -- Leading bloom.
-  g.setColor(1.00, 0.45, 0.08, 0.28 * fade)
-  g.circle("fill", x, y, 6.5)
-  drawFlameTongue(g, x, y, heading, 1.15, 0.95 * fade)
-  for i = 1, 5 do
+  g.setColor(1.00, 0.45, 0.08, 0.36 * fade)
+  g.circle("fill", x, y, 8.4)
+  drawFlameTongue(g, x, y, heading, 1.42, 0.98 * fade)
+  for i = 1, 6 do
     local a = (age or 0) * 15 + i * 1.8
     drawFlameTongue(g,
-      x + math.cos(a) * (2.5 + i % 3),
-      y + math.sin(a) * 1.8 - 1.5,
-      heading + math.sin(a) * 0.5, 0.42, 0.7 * fade)
+      x + math.cos(a) * (3.2 + i % 3),
+      y + math.sin(a) * 2.2 - 1.8,
+      heading + math.sin(a) * 0.5, 0.52, 0.78 * fade)
   end
 end
 
@@ -3502,6 +3530,7 @@ function Projectiles.registerStyle(name, fn)
 end
 
 Projectiles.registerStyle("beam", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawCasterBloom(g, ox, oy, t, c)
     if glitz == "hyper" then
       drawHyperBeam(g, x, y, ox, oy, t, p.age, c)
       return
@@ -3758,6 +3787,9 @@ Projectiles.registerStyle("ray", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
     -- Dense particle stream from caster origin → traveling tip.
+    if glitz ~= "flame" then
+      drawCasterBloom(g, ox, oy, t, c)
+    end
     local age = p.age or 0
     local dx, dy = x - ox, y - oy
     local len = math.sqrt(dx * dx + dy * dy)
@@ -3803,12 +3835,12 @@ Projectiles.registerStyle("stream", function(g, p, x, y, ox, oy, t, c, glitz)
         local wobble = math.sin(age * 16 + i * 1.8) * 2.2
         local px = ox + dx * along + nx * wobble
         local py = oy + dy * along + ny * wobble
-        local r = 2 + (1 - u) * 2.5
-        g.setColor(c[1], c[2], c[3], (0.35 + 0.45 * (1 - u)) * (1 - t * 0.2))
+        local r = 2.6 + (1 - u) * 3.2
+        g.setColor(c[1], c[2], c[3], (0.40 + 0.50 * (1 - u)) * (1 - t * 0.2))
         g.circle("fill", px, py, r)
       end
-      g.setColor(1, 1, 1, 0.55)
-      g.circle("fill", x, y, 2.2)
+      g.setColor(1, 1, 1, 0.62)
+      g.circle("fill", x, y, 3.0)
     end
     if glitz ~= "flame" and glitz ~= "jet" then
       drawMove(g, p, x, y)
@@ -4867,8 +4899,8 @@ function Projectiles.move(session, side, opts)
       style = "ember",
       glitz = fx.glitz or "flame",
       sx = sx, sy = sy, ex = ex, ey = ey,
-      duration = fx.duration or 0.58,
-      arc = fx.arc or 11,
+      duration = fx.duration or 0.70,
+      arc = fx.arc or 16,
       color = fx.color,
       seed = roll(),
       onDone = opts.onDone,

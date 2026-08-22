@@ -239,7 +239,7 @@ Sprites.KIT_FAINT_HOLD = 0.28
 
 local KIT_ANIM_DUR = {
   attack = 0.34, jump = 0.46, counter = 0.52, miss = 0.42,
-  cast = 0.42, brace = 0.40, selfhit = 0.46, tumble = 0.58,
+  cast = 0.48, brace = 0.40, selfhit = 0.46, tumble = 0.58,
   faint = Sprites.KIT_FAINT_PLAY + Sprites.KIT_FAINT_HOLD,
 }
 
@@ -2292,12 +2292,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       ox = ox + dx
       oy = oy + dy
     elseif anim == "cast" then
-      -- Special: stay on cell, still read as an action (rise + glow pulse).
+      -- Special: stay on cell, but kick into the shot (recoil + swell).
       self.animT = (self.animT or 0) + dt
       local kit = Sprites.usesKitPose(self, "cast")
-      local dur = kit and Sprites.kitClipDuration(self, "cast", 0.42) or 0.42
+      local dur = kit and Sprites.kitClipDuration(self, "cast", 0.48) or 0.48
       local t = math.min(1, self.animT / dur)
       local pulse = math.sin(t * math.pi)
+      local kick = math.sin(t * math.pi * 2)
       local tx = (towardX or self.basePx) - self.basePx
       local ty = (towardY or self.basePy) - self.basePy
       local len = math.sqrt(tx * tx + ty * ty)
@@ -2308,15 +2309,19 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         tx, ty = 0, -1
       end
       if kit then
-        ox = ox + tx * pulse * 2
+        ox = ox + tx * (pulse * 4 + kick * 2.4)
+        oy = oy + ty * pulse * 2 - pulse * 3
+        self.drawScale = 1 + pulse * 0.12
       else
-        ox = ox + tx * pulse * 5 + math.sin(t * math.pi * 3) * 1.5
-        oy = oy - pulse * 10
+        ox = ox + tx * pulse * 7 + math.sin(t * math.pi * 3) * 1.8
+        oy = oy - pulse * 12
+        self.drawScale = 1 + pulse * 0.14
         self._walkFrame = (math.floor(self.animT * 10) % 2)
       end
       if self.animT >= dur then
         self.anim = "idle"
         self.animT = 0
+        self.drawScale = 1
       end
     elseif anim == "charge" then
       -- Wind-up hold: FIRE NOW overlapping pose, or the gather before Shoot.
@@ -2332,11 +2337,13 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       local pulse = 0.5 + 0.5 * math.sin((self.animT or 0) * 6)
       if kit then
         if len > 0.1 then
-          ox = ox + (tx / len) * pulse * 1.5
-          oy = oy + (ty / len) * pulse * 1.5
+          ox = ox + (tx / len) * pulse * 2.4
+          oy = oy + (ty / len) * pulse * 2.4
         end
+        self.drawScale = 1 + pulse * 0.07
       else
-        oy = oy - pulse * 5
+        oy = oy - pulse * 6
+        self.drawScale = 1 + pulse * 0.08
         self._walkFrame = (math.floor(self.animT * 8) % 2)
       end
     elseif anim == "counter" then
