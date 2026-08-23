@@ -14,42 +14,6 @@
 
 local Sprites = {}
 
-local function loadImage(path)
-  if type(path) ~= "string" or path == "" then
-    return nil
-  end
-  -- Same loader the follower pack uses successfully with absolute paths.
-  local okA, Assets = pcall(require, "src.render.Assets")
-  if okA and Assets and type(Assets.image) == "function" then
-    local ok, img = pcall(Assets.image, path)
-    if ok and img then
-      return img
-    end
-  end
-  if love and love.graphics and love.graphics.newImage then
-    local ok, img = pcall(love.graphics.newImage, path)
-    if ok and img then
-      return img
-    end
-  end
-  return nil
-end
-
-local function findHandle(mod, id)
-  if not (mod and type(mod.find) == "function") then
-    return nil
-  end
-  local ok, handle = pcall(mod.find, mod, id)
-  if ok and handle then
-    return handle
-  end
-  ok, handle = pcall(mod.find, id)
-  if ok and handle then
-    return handle
-  end
-  return nil
-end
-
 function Sprites.bindReader(read)
   Sprites.read = type(read) == "function" and read or nil
 end
@@ -75,6 +39,75 @@ local function sandboxBody(path)
     if ok and type(body) == "string" and body ~= "" then
       return body
     end
+  end
+  return nil
+end
+
+local function imageDataFromBytes(body, name)
+  if type(body) ~= "string" or body == "" then
+    return nil
+  end
+  if not (love and love.image and type(love.image.newImageData) == "function") then
+    return nil
+  end
+  local src = body
+  if love.filesystem and type(love.filesystem.newFileData) == "function" then
+    local ok, fd = pcall(love.filesystem.newFileData, body, name or "sheet.png")
+    if ok and fd then
+      src = fd
+    end
+  end
+  local ok, data = pcall(love.image.newImageData, src)
+  if ok then
+    return data
+  end
+  return nil
+end
+
+local function loadImage(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  -- Same loader the follower pack uses successfully with absolute paths.
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if okA and Assets and type(Assets.image) == "function" then
+    local ok, img = pcall(Assets.image, path)
+    if ok and img then
+      return img
+    end
+  end
+  if love and love.graphics and love.graphics.newImage then
+    local ok, img = pcall(love.graphics.newImage, path)
+    if ok and img then
+      return img
+    end
+  end
+  -- Lab / loose install: bindReader bytes, because Love cannot newImage()
+  -- an absolute disk path outside its source tree.
+  local body = sandboxBody(path)
+  if body and love and love.graphics and love.graphics.newImage then
+    local data = imageDataFromBytes(body, path:match("[^/\\]+$"))
+    if data then
+      local ok, img = pcall(love.graphics.newImage, data)
+      if ok and img then
+        return img
+      end
+    end
+  end
+  return nil
+end
+
+local function findHandle(mod, id)
+  if not (mod and type(mod.find) == "function") then
+    return nil
+  end
+  local ok, handle = pcall(mod.find, mod, id)
+  if ok and handle then
+    return handle
+  end
+  ok, handle = pcall(mod.find, id)
+  if ok and handle then
+    return handle
   end
   return nil
 end
@@ -553,6 +586,9 @@ function Sprites.kitColsFromImage(path, img, blocks, cols, cell, faces)
     local ok, got = pcall(love.image.newImageData, path)
     if ok then
       data = got
+    end
+    if not data then
+      data = imageDataFromBytes(sandboxBody(path), path:match("[^/\\]+$"))
     end
   end
   if not data and img and type(img.getData) == "function" then
