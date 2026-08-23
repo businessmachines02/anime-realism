@@ -102,15 +102,32 @@ function Hooks.installDraw(FBV, mod, ctx)
             BattleState._arFbvAnim = true
         end
 
-        if type(BattleState.drawTextArea) == "function" and not BattleState._arFbvText then
+        if type(BattleState.drawTextArea) == "function" and not BattleState._arFbvTextSkip then
             local origText = BattleState.drawTextArea
             function BattleState:drawTextArea(...)
                 if isFieldBattle(self) then
+                    -- Do not run the classic slab at all. A zero scissor still
+                    -- lets canvas-targeted text (move list + continue caret)
+                    -- blit under the compact HUD.
                     return
                 end
                 return origText(self, ...)
             end
+            BattleState._arFbvTextSkip = true
             BattleState._arFbvText = true
+        end
+        for _, name in ipairs({ "drawMoveSelect", "drawCommandMenu", "drawTextBox" }) do
+            local flag = "_arFbvSkip_" .. name
+            if type(BattleState[name]) == "function" and not BattleState[flag] then
+                local orig = BattleState[name]
+                BattleState[name] = function(self, ...)
+                    if isFieldBattle(self) then
+                        return
+                    end
+                    return orig(self, ...)
+                end
+                BattleState[flag] = true
+            end
         end
 
         -- Do not run the classic SGB pipeline (bgCanvas, applyWavy, zone

@@ -260,6 +260,7 @@ return function(Hooks)
                     isCalled = ev.isCalled == true,
                     presentationOnly = ev.presentationOnly == true,
                     via = ev.presentationOnly and "cam" or "move_used",
+                    fireNow = battle._arFireNow == true,
                 }
                 local skip = opts.presentationOnly
                 local hit

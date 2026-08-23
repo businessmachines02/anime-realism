@@ -591,16 +591,19 @@ function tests.status_chip_abbreviations()
 end
 
 function tests.mood_portrait_sits_beside_the_sprite()
-  local lift = UI.FACE_LIFT
-  local px, py = UI.faceAnchor("player", 40, 80, 28, nil, 160)
-  eq(px, UI.FACE_MARGIN, "player face hugs the left edge")
-  eq(py, 80 - 14 - lift, "face tracks the body Y")
-  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, nil, 160)
-  eq(ex, 160 - UI.FACE_MARGIN - 28, "foe face hugs the right edge")
-  eq(ey, 80 - 14 - lift, "foe face shares the body Y")
+  local pad = UI.HUD_PAD
+  local px, py = UI.faceAnchor("player", 40, 80, 28, 0, 160)
+  eq(px, pad, "player face hugs the left edge")
+  eq(py, pad, "player face sits at the top")
+  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, 0, 160)
+  eq(ex, 160 - pad - 28, "foe face hugs the right edge")
+  eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
   eq(hx, px + 14, "HP sits on the face midline")
   eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  local stack = 12
+  local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
+  eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 53 }), 14,
     "tall hop-padded kits still plant HP on the ~24px body")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
@@ -757,15 +760,12 @@ function tests.move_hud_pp_label()
   eq(UI.movePPLabel({}, { struggle = true, pp = 1 }), nil, "struggle has no PP")
 end
 
-function tests.hud_plate_thickens_in_caves()
-  local cave = { _arFieldSession = { coverScene = "cave" } }
-  truthy(UI.hudDark(cave), "caves use the dark HUD")
-  truthy(UI.hudPanelAlpha(cave) > UI.HUD_PANEL_A, "cave plate is thicker")
-  local grave = { _arFieldSession = { coverScene = "grave" } }
-  truthy(UI.hudDark(grave), "graves use the dark HUD")
-  local route = { _arFieldSession = { coverScene = "route" } }
-  truthy(not UI.hudDark(route), "route keeps the glass plate")
-  eq(UI.hudPanelAlpha(route), UI.HUD_PANEL_A, "route uses the glass alpha")
+function tests.hud_plate_is_one_glass_alpha()
+  eq(UI.hudPanelAlpha(), UI.HUD_PANEL_A, "HUD plate alpha is constant")
+  eq(UI.hudPanelAlpha({ _arFieldSession = { coverScene = "cave" } }),
+    UI.HUD_PANEL_A, "caves use the same plate")
+  eq(UI.hudPanelAlpha({ _arFieldSession = { coverScene = "route" } }),
+    UI.HUD_PANEL_A, "routes use the same plate")
 end
 
 function tests.move_hud_style_defaults_to_classic()
@@ -994,12 +994,13 @@ function tests.focus_bar_gap_flush_vs_one_pixel()
     UI.drawWorldHP(battle, 0, 0, "ui")
     love = prevLove
     table.sort(ys)
-    return ys[1]
+    return ys[1], ys[#ys]
   end
-  local flushY = paintY(0)
-  local gappedY = paintY(1)
+  local flushTop, flushBot = paintY(0)
+  local gappedTop, gappedBot = paintY(1)
   UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
-  truthy(gappedY < flushY, "1PX gap lifts the focus bar one pixel above flush")
+  eq(flushTop, gappedTop, "focus bar stays pinned to the top pad")
+  truthy(gappedBot > flushBot, "1PX gap drops the HP bar one pixel")
 end
 
 function tests.compact_arena_keeps_cast_lanes_clear()
@@ -2647,6 +2648,13 @@ function tests.occupancy_and_movement()
   truthy(Grid.setPad(grid, p, eHome.u - 1, eHome.v), "stand next to the foe")
   truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "foe on home")
   truthy(not Grid.closeGap(grid, p, e), "already-adjacent close-gap is a no-op")
+  local closeU, closeV = p.padU, p.padV
+  local hopped = Grid.openGap(grid, p, e)
+  truthy(hopped and hopped >= 1, "adjacent caster hops away")
+  truthy(Grid.padDistance(grid, p, e) > 1, "open-gap leaves melee")
+  truthy(Grid.padDistance(grid, p, e) <= 3, "open-gap stays on the pad")
+  truthy(p.padU ~= closeU or p.padV ~= closeV, "occupancy actually moved")
+  eq(Grid.openGap(grid, p, e), false, "already spaced: open-gap is a no-op")
 
   Grid.clear(grid)
   eq(next(grid.occ), nil, "clear occupancy")
@@ -3255,6 +3263,155 @@ function tests.bite_closes_gap_when_typed_special()
   eq(player.lastAnim, nil, "cast anim does not play on a contact bite")
 end
 
+function tests.adjacent_special_backsteps_then_fires()
+  local grid = sampleGrid()
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = eHome.u - 1, padV = eHome.v,
+    facing = "right",
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startDist = Grid.padDistance(grid, player, enemy)
+  eq(startDist, 1, "setup: caster is in the foe's face")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 20,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "WATER_GUN", moveType = "WATER",
+  }), "adjacent special cue")
+  truthy(player._pendingRangedCast, "backstep is armed")
+  truthy(Grid.padDistance(grid, player, enemy) > 1, "caster stepped away")
+  eq(#(session.projectiles or {}), 0, "shot waits for the charge")
+  truthy(Cues.shouldParkEngineQueue(session), "engine waits for the backstep")
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "caster turns and charges")
+  eq(#(session.projectiles or {}), 0, "charge hold is not the shot")
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "in-place charge leaves the queue free for REACT")
+  session._now = 20 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "cast", "then the shot pose plays")
+  truthy(#(session.projectiles or {}) >= 1, "water gun leaves after the charge")
+  truthy(not player._pendingRangedCast, "pending backstep is cleared")
+  truthy(not Cues.shouldParkEngineQueue(session), "engine resumes after the shot")
+end
+
+function tests.spaced_special_charges_before_the_shot()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startDist = Grid.padDistance(grid, player, enemy)
+  truthy(startDist > 1, "setup: caster already has room")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 40,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  local stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+  }), "spaced special cue")
+  eq(player.padU, stayU, "already-spaced caster does not hop")
+  eq(player.padV, stayV, "already-spaced caster keeps V")
+  truthy(player._pendingRangedCast, "in-place wind-up is armed")
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "charge pose starts immediately")
+  eq(#(session.projectiles or {}), 0, "shot waits out the wind-up")
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "REACT can open during the 1.5s charge")
+  truthy(Cues.shouldHoldEngineHit(session, { user = { isPlayer = true } }),
+    "the player's own HP tick still waits for the beam")
+  truthy(not Cues.shouldHoldEngineHit(session, { user = { isPlayer = false } }),
+    "an incoming special reaches runDamaging so REACT can open")
+  session._now = 40.75
+  Cues.tickReturns(session, Grid)
+  eq(#(session.projectiles or {}), 0, "half a second is still charging")
+  session._now = 40 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
+  truthy(#(session.projectiles or {}) >= 1, "thunderbolt leaves after 1.5s")
+  truthy(not player._pendingRangedCast, "wind-up clears after the shot")
+end
+
+function tests.fire_now_does_not_backstep()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  eq(Grid.padDistance(grid, player, enemy), 2, "FIRE window is two tiles")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 30,
+    _battle = { kind = "wild", _arFireNow = true },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  local stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+    fireNow = true,
+  }), "FIRE NOW cue")
+  eq(player.padU, stayU, "FIRE NOW does not hop off the ring")
+  eq(player.padV, stayV, "FIRE NOW keeps the same pad V")
+  truthy(not player._pendingRangedCast, "FIRE NOW does not arm a backstep")
+  truthy(#(session.projectiles or {}) >= 1, "the shot leaves immediately")
+
+  -- Occupancy already adjacent because the charger jumped the close-gap cell.
+  Grid.setPad(grid, enemy, pHome.u + 1, pHome.v)
+  eq(Grid.padDistance(grid, player, enemy), 1, "charger occupancy is in the face")
+  Projectiles.clear(session)
+  stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+    fireNow = true,
+  }), "FIRE NOW while occupancy is melee")
+  eq(player.padU, stayU, "still no hop when the charger is on the next cell")
+  eq(player.padV, stayV, "still no hop V")
+  truthy(not player._pendingRangedCast, "charge occupancy does not force a backstep")
+end
+
 function tests.special_trajectories_track_mons()
   local grid = sampleGrid()
   local player = {
@@ -3351,29 +3508,42 @@ function tests.cues_and_dedupe()
   player.lastAnim = nil
   Projectiles.clear(session)
   Grid.setPad(grid, player, pHome.u, pHome.v)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  player._pendingRangedCast = nil
+  player._rangedChargeAt = nil
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "physical",
     moveType = "GHOST",
     moveId = "NIGHT_SHADE",
   }), "night shade attack cue")
-  eq(player.lastAnim, "cast", "night shade casts in place")
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "night shade charges in place")
   truthy(not player._attackStepped, "night shade does not lunge")
+  eq(#(session.projectiles or {}), 0, "night shade waits out the wind-up")
+  session._now = 12.5 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
   eq(#(session.projectiles or {}), 1, "night shade spawns shadow projectile")
   eq(session.projectiles[1].style, "shadow", "night shade shadow style from cue")
 
-  session._now = 14
+  session._now = (session._lastCueAt or session._now) + 1.26
   truthy(not Cues.shouldSkipEvent(session, "player", "attack"), "dedupe expires")
   -- Same named special stays locked past the toast window (issue #3).
   session._now = 16
   session._lastCueAt = nil
   player.lastAnim = nil
+  player._pendingRangedCast = nil
+  player._rangedChargeAt = nil
   Projectiles.clear(session)
   Grid.setPad(grid, player, pHome.u, pHome.v)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "special",
     moveType = "PSYCHIC",
     moveId = "PSYCHIC",
   }), "psychic attack cue")
+  eq(#(session.projectiles or {}), 0, "psychic waits out the wind-up")
+  session._now = 16 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
   eq(#(session.projectiles or {}), 1, "psychic spawns once")
   session._now = 20
   truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "PSYCHIC" }),
@@ -8068,6 +8238,11 @@ function tests.emotions_player_ko_flashes_happy()
   eq(E.portraitMood(battle, true), "happy", "KO face is happy")
   E.note(battle, { kind = "turn" })
   eq(E.mood(battle, true), "happy", "happy holds after the flash turn")
+  E.note(battle, { kind = "turn" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "happy", "happy is not a timed burst")
+  E.note(battle, { kind = "miss", side = "player" })
+  eq(E.mood(battle, true), "sigh", "the next mood event replaces happy")
   E.clear(battle)
 end
 

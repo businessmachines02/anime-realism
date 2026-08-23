@@ -150,6 +150,31 @@ return function(Cues)
                     H.restoreStepSpeed(ent)
                 end
             end
+            if ent and ent._pendingRangedCast then
+                if Cues.stillWalkingToPad(ent) then
+                    -- Backing up; charge starts once the feet land.
+                elseif not ent._rangedChargeAt then
+                    ent._rangedChargeAt = t + (Cues.RANGED_CHARGE or 1.5)
+                    local foe = H.foeOf(session, side)
+                    H.faceToward(ent, foe)
+                    H.playChargeHold(session, ent)
+                elseif t >= ent._rangedChargeAt then
+                    local shot = ent._pendingRangedCast
+                    H.clearRangedCast(ent)
+                    Cues.apply(session, side, "attack", Grid, nil, battle or session._battle, {
+                        category = shot.category,
+                        moveType = shot.moveType,
+                        moveId = shot.moveId,
+                        slowShot = shot.slowShot,
+                        fireCarry = shot.fireCarry,
+                        rangedReady = true,
+                        via = "rangedBackstep",
+                    })
+                    if type(Cues.flushHeldHit) == "function" then
+                        Cues.flushHeldHit(session, battle or session._battle)
+                    end
+                end
+            end
             if ent and ent._releaseAt and t >= ent._releaseAt then
                 ent._releaseAt = nil
                 local pending = ent._pendingReleaseAttack

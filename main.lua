@@ -1296,6 +1296,9 @@ return function(mod)
             end
             local kind = hit and pending.kind or "miss"
             local opts = pending.opts or {}
+            if battle._arFireNow then
+                opts.fireNow = true
+            end
             if battle._arFireNow and not hit then
                 kind = pending.kind or "attack"
                 if battle._arCheckNow then
@@ -5010,11 +5013,16 @@ return function(mod)
             local origTextArea = BattleState.drawTextArea
             if type(origTextArea) == "function" and not hud.patched[origTextArea] then
                 local function wrappedTextArea(self, ...)
+                    -- FIELD owns the bottom chrome. Calling the classic slab
+                    -- even with a zero scissor still paints the white move box
+                    -- + continue caret onto the UI canvas under our HUD.
+                    if hud.fieldCompactActive(self) then
+                        return
+                    end
                     -- Stacked learn-move / YES-NO states draw themselves.
                     -- Keep BattleState's slab invisible so leftover bubbles
                     -- do not paint under the prompt.
-                    if hud.fieldCompactActive(self) or hud.bubblesOwnDialogue(self)
-                        or hud.stackedPromptActive(self) then
+                    if hud.bubblesOwnDialogue(self) or hud.stackedPromptActive(self) then
                         return hud.runDrawInvisible(origTextArea, self, ...)
                     end
                     return origTextArea(self, ...)

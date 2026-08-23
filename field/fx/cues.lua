@@ -111,6 +111,59 @@ end
 
 --- FIRE NOW overlapping pose: hold Charge while the shot is on the pad.
 --- Non-kit battlers keep the old short `cast` pulse.
+--- Face the foe so a backstep caster turns before the shot.
+function H.faceToward(ent, foe)
+    if not (ent and foe) then
+        return
+    end
+    local dx = (foe.targetPx or foe.px or 0) - (ent.targetPx or ent.px or 0)
+    local dy = (foe.targetPy or foe.py or 0) - (ent.targetPy or ent.py or 0)
+    if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then
+        dx = (foe.padU or 0) - (ent.padU or 0)
+        dy = (foe.padV or 0) - (ent.padV or 0)
+    end
+    if math.abs(dx) < 0.01 and math.abs(dy) < 0.01 then
+        return
+    end
+    if math.abs(dx) >= math.abs(dy) then
+        ent.facing = dx >= 0 and "right" or "left"
+    else
+        ent.facing = dy >= 0 and "down" or "up"
+    end
+end
+
+function H.clearRangedCast(ent)
+    if not ent then
+        return
+    end
+    ent._pendingRangedCast = nil
+    ent._rangedChargeAt = nil
+end
+
+Cues.RANGED_CLOSE = 1
+-- Wind-up before a special / travel shot. Long enough to pick REACT.
+Cues.RANGED_CHARGE = 1.5
+
+function Cues.rangedCastHoldActive(session)
+    if not (session and session.live) then
+        return false
+    end
+    local p, e = session.playerMon, session.enemyMon
+    return (p and p._pendingRangedCast) or (e and e._pendingRangedCast) or false
+end
+
+--- True only while a special caster is still hopping back. In-place charge
+--- must not park the engine: runDamaging has to reach REACT during the wind-up.
+function Cues.rangedCastWalking(session)
+    if not (session and session.live) then
+        return false
+    end
+    local function walking(ent)
+        return ent and ent._pendingRangedCast and Cues.stillWalkingToPad(ent)
+    end
+    return walking(session.playerMon) or walking(session.enemyMon) or false
+end
+
 function H.playChargeHold(session, ent)
     local Sprites = session and session._deps and session._deps.Sprites
     if Sprites and type(Sprites.usesKitPose) == "function"
@@ -472,8 +525,8 @@ function H.isChargeTurn(ent, moveId)
 end
 
 -- Walk-in / close-the-gap: contact FX and physicals. Travel FX and
--- non-contact specials cast in place. Bite / Fire Punch stay melee even
--- when Damage.isSpecial(type) is true.
+-- non-contact specials backstep when adjacent, then Shoot. Bite / Fire
+-- Punch stay melee even when Damage.isSpecial(type) is true.
 function Cues.isMeleeAttack(opts, Projectiles)
     opts = opts or {}
     if Projectiles and type(Projectiles.isProjectileSpecial) == "function"

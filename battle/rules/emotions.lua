@@ -12,7 +12,6 @@ Emotions.HEAVY_HIT = 0.25
 Emotions.LEAD_MARGIN = 0.12
 Emotions.FLASH_TURNS = 1
 Emotions.ANGRY_CRIT_TURNS = 2
-Emotions.HAPPY_KO_TURNS = 3
 
 Emotions.FILE = {
     normal = "Normal",
@@ -57,7 +56,7 @@ local function freshSide()
         misses = 0,
         critsTaken = 0,
         angryTurns = 0,
-        happyTurns = 0,
+        happy = false,
         hitsLanded = 0,
         lastHeavy = false,
         announced = nil,
@@ -297,7 +296,8 @@ local function derive(side, selfRatio, foeRatio)
     if selfRatio and selfRatio <= lowHpCut() then
         return "pain"
     end
-    if (side.happyTurns or 0) > 0 then
+    -- Happy latches on a foe KO and stays until another mood wins.
+    if side.happy then
         return "happy"
     end
     if (side.misses or 0) >= 2 or (side.angryTurns or 0) > 0 then
@@ -372,9 +372,6 @@ local function tickSide(side)
     if (side.angryTurns or 0) > 0 then
         side.angryTurns = side.angryTurns - 1
     end
-    if (side.happyTurns or 0) > 0 then
-        side.happyTurns = side.happyTurns - 1
-    end
     if (side.hitsLanded or 0) > 0 then
         side.hitsLanded = side.hitsLanded - 1
     end
@@ -391,18 +388,21 @@ function Emotions.note(battle, ev)
     if kind == "miss" then
         local side = resolveWho(st, battle, ev.side or ev.user)
         if side then
+            side.happy = false
             side.misses = (side.misses or 0) + 1
             side.flash = { mood = "sigh", turns = Emotions.FLASH_TURNS }
         end
     elseif kind == "crit" then
         local victim = resolveWho(st, battle, ev.side or ev.target)
         if victim and not (victim.flash and victim.flash.mood == "stunned") then
+            victim.happy = false
             victim.critsTaken = (victim.critsTaken or 0) + 1
             victim.angryTurns = Emotions.ANGRY_CRIT_TURNS
             victim.flash = { mood = "stunned", turns = Emotions.FLASH_TURNS }
         end
         local attacker = resolveWho(st, battle, ev.user)
         if attacker and attacker ~= victim then
+            attacker.happy = false
             attacker.hitsLanded = (attacker.hitsLanded or 0) + 1
         end
         if ev.foeSurprised then
@@ -415,7 +415,11 @@ function Emotions.note(battle, ev)
         local attacker = resolveWho(st, battle, ev.user or ev.side)
         local target = resolveWho(st, battle, ev.target)
         if attacker then
+            attacker.happy = false
             attacker.hitsLanded = (attacker.hitsLanded or 0) + 1
+        end
+        if target then
+            target.happy = false
         end
         local dmg = tonumber(ev.damage)
         local maxHP = tonumber(ev.maxHp or ev.maxHP)
@@ -428,10 +432,12 @@ function Emotions.note(battle, ev)
         end
     elseif kind == "faint" then
         local _, isPlayer = resolveWho(st, battle, ev.side or ev.battler)
-        -- Our mon just scored the KO: show the Happy portrait.
+        -- Our mon just scored the KO: stay happy until the next mood event.
         if isPlayer == false then
             st.player.flash = { mood = "happy", turns = Emotions.FLASH_TURNS }
-            st.player.happyTurns = Emotions.HAPPY_KO_TURNS
+            st.player.happy = true
+            st.player.hitsLanded = 0
+            st.player.lastHeavy = false
         end
         if isPlayer == true then
             st.player = freshSide()

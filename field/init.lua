@@ -106,12 +106,6 @@ return function(env)
   if not loadOk then
     error(loadErr)
   end
-  if UI then
-    UI.fieldSession = function(battle)
-      return Lifecycle and Lifecycle.get and Lifecycle.get(battle)
-    end
-  end
-
   local deps = {
     Layout = Layout,
     Sprites = Sprites,
@@ -503,6 +497,15 @@ return function(env)
   -- One FIELD overlay pass: game box + REACT chips + banter strip. Callers
   -- must not also run battle.overlay next() (classic / gen3 / bubbles).
   function FBV.drawFrame(battle)
+    -- drawClassic (FIELD wrap) and BattleState.draw both fire overlay.
+    local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
+    local gen = session and session._arPresentGen
+    if battle and gen ~= nil and battle._arHudDrawGen == gen then
+      return
+    end
+    if battle and gen ~= nil then
+      battle._arHudDrawGen = gen
+    end
     FBV.drawUI(battle)
     local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"
       and FBV.fieldAllowsStackedBottomUI(battle)

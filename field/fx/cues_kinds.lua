@@ -6,7 +6,8 @@
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
 --   cast                           overlapping FIRE pose (Charge hold; shot is the attack cue)
---   attack                         physicals walk in; specials Shoot in place
+--   attack                         physicals walk in; specials backstep if
+--                                  adjacent, then charge 1.5s and Shoot
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
@@ -21,7 +22,77 @@
 return function(Cues)
     local H = Cues._H
 
+    local function skipRangedWindup(opts, ent, battle)
+        if opts.rangedReady or opts.followUp or opts.again
+            or opts.releaseStrike or ent._pendingRangedCast then
+            return true
+        end
+        -- FIRE NOW / Again! / the delayed shot itself stay snappy.
+        if opts.fireNow or opts.fireCarry or (battle and battle._arFireNow) then
+            return true
+        end
+        return false
+    end
+
+    local function pendingRangedPayload(opts, category)
+        return {
+            category = category,
+            moveType = opts.moveType,
+            moveId = opts.moveId,
+            slowShot = opts.slowShot,
+            fireCarry = opts.fireCarry,
+        }
+    end
+
+    local function armRangedBackstep(session, side, ent, foe, Grid, g, opts, category, battle)
+        if skipRangedWindup(opts, ent, battle) then
+            return false
+        end
+        -- FIRE NOW is a shot from the ring (or at a charging foe). Do not
+        -- hop further just because close-gap already jumped their occupancy.
+        if foe and foe._pendingCloseStrike then
+            return false
+        end
+        if not (foe and Grid and type(Grid.openGap) == "function") then
+            return false
+        end
+        local dist = type(Grid.padDistance) == "function"
+            and Grid.padDistance(g, ent, foe) or 99
+        if dist > (Cues.RANGED_CLOSE or 1) then
+            return false
+        end
+        local tiles = Grid.openGap(g, ent, foe)
+        if not tiles or tiles < 1 then
+            return false
+        end
+        ent._pendingRangedCast = pendingRangedPayload(opts, category)
+        ent._rangedChargeAt = nil
+        H.note(session, battle or session._battle, "cue path", side,
+            opts.moveId or "-", "backstep", tostring(tiles), H.padSnap(ent))
+        return true
+    end
+
+    local function armRangedWindup(session, side, ent, foe, opts, category, battle)
+        if skipRangedWindup(opts, ent, battle) then
+            return false
+        end
+        local wait = Cues.RANGED_CHARGE or 1.5
+        ent._pendingRangedCast = pendingRangedPayload(opts, category)
+        ent._rangedChargeAt = H.now(session) + wait
+        H.faceToward(ent, foe)
+        H.playChargeHold(session, ent)
+        H.note(session, battle or session._battle, "cue path", side,
+            opts.moveId or "-", "windup", tostring(wait), H.padSnap(ent))
+        return true
+    end
+
     local function playRangedCast(session, side, ent, foe, Grid, g, opts, category, battle)
+        if armRangedBackstep(session, side, ent, foe, Grid, g, opts, category, battle) then
+            return
+        end
+        if armRangedWindup(session, side, ent, foe, opts, category, battle) then
+            return
+        end
         local Projectiles = session._deps and session._deps.Projectiles
         local Audio = session._deps and session._deps.Audio
         H.note(session, battle or session._battle, "cue path", side,
@@ -318,7 +389,7 @@ return function(Cues)
             nudgeCamera(battle, foeSide, 0.45)
         end
         -- Physical: close distance on the pad, then return home.
-        -- Special: hold cell; still play an in-place cast anim.
+        -- Special: hop back if adjacent, charge 1.5s, then Shoot.
         -- Travel FX (beams, Night Shade, …) fly even when the Gen1 type split
         -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
         -- when that split marks them special.

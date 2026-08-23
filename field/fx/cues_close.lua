@@ -164,6 +164,9 @@ return function(Cues)
         if Cues.tossAirPending(session) then
             return true
         end
+        if Cues.rangedCastWalking(session) then
+            return true
+        end
         local p, e = session.playerMon, session.enemyMon
         return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
     end
@@ -246,6 +249,7 @@ return function(Cues)
             return false
         end
         H.clearCloseStrike(ent)
+        H.clearRangedCast(ent)
         ent._closeStruckMoveId = nil
         ent._struckMoves = nil
         H.restoreStepSpeed(ent)
@@ -257,6 +261,25 @@ return function(Cues)
 
     --- True while a physical closer is still walking; engine damage must wait.
     function Cues.shouldHoldEngineHit(session, ctx)
+        if Cues.rangedCastHoldActive(session) then
+            local user = ctx and ctx.user
+            if not user then
+                -- No attacker: only the hop must block HP. In-place charge
+                -- has to reach runDamaging so REACT can open.
+                return Cues.rangedCastWalking(session)
+            end
+            local side = user.isPlayer and "player" or "enemy"
+            local ent = H.sideEnt(session, side)
+            if not (ent and ent._pendingRangedCast) then
+                return false
+            end
+            if Cues.stillWalkingToPad(ent) then
+                return true
+            end
+            -- Player's own special: keep HP on the beam. Incoming specials
+            -- must not hold runDamaging or the REACT menu never appears.
+            return user.isPlayer == true
+        end
         if not Cues.closeGapHoldActive(session) then
             return false
         end
@@ -276,6 +299,11 @@ return function(Cues)
         end
         if battle._arFireNow or battle._arCloseGapResuming then
             return false
+        end
+        if Cues.rangedCastHoldActive(session) then
+            local side = (target and target.isPlayer) and "enemy" or "player"
+            local caster = H.sideEnt(session, side)
+            return caster and caster._pendingRangedCast and true or false
         end
         if not Cues.closeGapHoldActive(session) then
             return false
