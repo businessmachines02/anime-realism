@@ -11,7 +11,7 @@
 --
 -- Flip to false for release builds. When true, lib/log.lua prints battle
 -- traces to the Love / stdout console (independent of DEV OVERLAY).
-local DEV = true
+local DEV = false
 
 return function(mod)
     local Hud
@@ -1508,7 +1508,7 @@ return function(mod)
 
         -- Replace "X grew to level N!" with a generic line. StatBox + move
         -- learning still queue right after via uiNext / learnMove.
-   
+
 
         -- Anime-style trainer callouts for "NAME\nused MOVE!" (not item use).
         -- Wild battles keep the vanilla line. Trainer foes use the trainer's name.
@@ -1760,7 +1760,7 @@ return function(mod)
         -- Idle pulses while braced / hiding during the command menu.
         -- Spot-themed loops (grass → GROWTH, dig spots → DIG, water → SURF…).
         -- Entrench hold: locked stance until a counter opening (or max turns).
-   
+
 
         local function enemyMonName(battle)
             local e = battle and battle.enemy
@@ -2459,14 +2459,14 @@ return function(mod)
                 and (kind == "dodge" or kind == "cover" or kind == "hide"
                     or kind == "brace" or kind == "cast") then
                 if foeOrder and attachOverlapReact(battle, {
-                    side = fieldCue.side,
-                    kind = kind,
-                    text = text,
-                    bubble = bubble,
-                    category = fieldCue.category,
-                    moveType = fieldCue.moveType,
-                    moveId = fieldCue.moveId,
-                }) then
+                        side = fieldCue.side,
+                        kind = kind,
+                        text = text,
+                        bubble = bubble,
+                        category = fieldCue.category,
+                        moveType = fieldCue.moveType,
+                        moveId = fieldCue.moveId,
+                    }) then
                     return true
                 end
                 if not foeOrder then
@@ -3008,7 +3008,7 @@ return function(mod)
             return Fx.enqueueBraceAnim(battle, opts)
         end
 
-                -- Focus cover spot from mon type / scene (feeds hide FX + overlay prop).
+        -- Focus cover spot from mon type / scene (feeds hide FX + overlay prop).
         -- On `dev` to stay under LuaJIT's 200-local limit.
         dev.pickFocusCoverLabel = function(battle)
             -- FIELD: prefer the prop flavor we actually stamped (TREE / ROCK / …).

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build an installable Gen1Recomp mod zip (package folders preserved).
 #
-# One pass through Python's zipfile. Incremental `zip a.zip file` updates
-# plus PMD flip names (`Happy^.png`) make love.filesystem.mount fail
+# Info-ZIP, a handful of updates, same shape as the zips the launcher already
+# mounts. Python zipfile (v4.2.2) and 2k incremental `zip file.zip a` updates
+# plus `Emotion^.png` names all fail love.filesystem.mount
 # ("that .zip could not be opened").
 set -euo pipefail
 
@@ -60,79 +61,61 @@ OUT="${ID}-${VERSION}.zip"
 
 rm -f "$OUT"
 
-python3 - <<'PY' "$OUT"
-import sys
-import zipfile
+# Directory entries included (zip -r), extras stripped (-X). One pass per
+# tree — not one zip-update per portrait.
+zip -q -X -r "$OUT" \
+  main.lua manifest.json LICENSE \
+  lib \
+  hud \
+  battle \
+  field \
+  -x "field/tests/*" \
+  -x "field/tests/*/*" \
+  -x "field/tests/*/*/*" \
+  -x "field/tests/*/*/*/*" \
+  -x "*.DS_Store" \
+  -x "*/*.DS_Store"
+
+if [[ -f "$ROOT/assets/follower-kit.md" ]]; then
+  zip -q -X "$OUT" assets/follower-kit.md
+fi
+if [[ -d "$ROOT/assets/followers/pmd" ]]; then
+  zip -q -X -r "$OUT" assets/followers/pmd \
+    -x "*.DS_Store"
+fi
+
+shopt -s nullglob
+kits=(assets/followers/follower_*.png assets/followers/follower_*.kit)
+if ((${#kits[@]} > 0)); then
+  zip -q -X "$OUT" "${kits[@]}"
+fi
+
+# Faces the mood table actually loads. Flip frames (`^.png`) and unused
+# PMD moods stay out of the archive.
+FACE_LIST="$(mktemp)"
+python3 - <<'PY' > "$FACE_LIST"
 from pathlib import Path
-
-out = Path(sys.argv[1])
-files = []
-
-
-def add_file(path):
-    p = Path(path)
-    if not p.is_file():
-        return
-    name = p.as_posix()
-    if "^" in name or name.endswith(".DS_Store"):
-        return
-    files.append(p)
-
-
-def add_tree(root, skip_parts=()):
-    root = Path(root)
-    if not root.is_dir():
-        return
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        if any(part in skip_parts for part in p.parts):
-            continue
-        add_file(p)
-
-
-add_file("main.lua")
-add_file("manifest.json")
-add_file("LICENSE")
-add_tree("lib")
-add_tree("hud")
-add_tree("battle")
-add_tree("field", skip_parts=("tests",))
-add_file("assets/follower-kit.md")
-add_file("assets/followers/bake_pmd.py")
-add_tree("assets/followers/pmd")
-for p in sorted(Path("assets/followers").glob("follower_*.png")):
-    add_file(p)
-for p in sorted(Path("assets/followers").glob("follower_*.kit")):
-    add_file(p)
-
-portrait = Path("assets/portrait")
-if portrait.is_dir():
-    for i in range(1, 152):
-        folder = portrait / f"{i:04d}"
-        if not folder.is_dir():
-            continue
-        for p in sorted(folder.iterdir()):
-            if p.is_file() and (p.suffix == ".png" or p.name == "credits.txt"):
-                add_file(p)
-
-seen = set()
-ordered = []
-for p in files:
-    key = p.as_posix()
-    if key in seen:
+emotions = (
+    "Normal", "Pain", "Determined", "Worried",
+    "Angry", "Stunned", "Surprised", "Sigh",
+)
+root = Path("assets/portrait")
+for i in range(1, 152):
+    folder = root / f"{i:04d}"
+    if not folder.is_dir():
         continue
-    seen.add(key)
-    ordered.append(p)
-
-with zipfile.ZipFile(
-    out, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=False
-) as zf:
-    for p in ordered:
-        zf.write(p, p.as_posix())
-
-print(f"packed {len(ordered)} files")
+    credits = folder / "credits.txt"
+    if credits.is_file():
+        print(credits.as_posix())
+    for name in emotions:
+        png = folder / f"{name}.png"
+        if png.is_file():
+            print(png.as_posix())
 PY
+if [[ -s "$FACE_LIST" ]]; then
+  zip -q -X -@ "$OUT" < "$FACE_LIST"
+fi
+rm -f "$FACE_LIST"
 
 echo "Built $ROOT/$OUT"
 python3 - <<'PY' "$OUT"
@@ -143,9 +126,14 @@ with zipfile.ZipFile(p) as zf:
     names = zf.namelist()
 faces = [n for n in names if n.startswith("assets/portrait/") and n.endswith(".png")]
 carets = [n for n in names if "^" in n]
+tests = [n for n in names if n.startswith("field/tests/")]
 print(f"  {p.stat().st_size} bytes, {len(names)} entries, {len(faces)} portraits")
 if carets:
-    raise SystemExit(f"error: zip contains {len(carets)} '^' names (PhysicsFS cannot mount)")
+    raise SystemExit(f"error: zip contains {len(carets)} '^' names")
+if tests:
+    raise SystemExit("error: field tests included in zip")
 if "manifest.json" not in names or "main.lua" not in names:
     raise SystemExit("error: zip missing manifest.json or main.lua at root")
+if "lib/" not in names and not any(n.startswith("lib/") for n in names):
+    raise SystemExit("error: zip missing lib/")
 PY
