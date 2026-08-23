@@ -14,42 +14,6 @@
 
 local Sprites = {}
 
-local function loadImage(path)
-  if type(path) ~= "string" or path == "" then
-    return nil
-  end
-  -- Same loader the follower pack uses successfully with absolute paths.
-  local okA, Assets = pcall(require, "src.render.Assets")
-  if okA and Assets and type(Assets.image) == "function" then
-    local ok, img = pcall(Assets.image, path)
-    if ok and img then
-      return img
-    end
-  end
-  if love and love.graphics and love.graphics.newImage then
-    local ok, img = pcall(love.graphics.newImage, path)
-    if ok and img then
-      return img
-    end
-  end
-  return nil
-end
-
-local function findHandle(mod, id)
-  if not (mod and type(mod.find) == "function") then
-    return nil
-  end
-  local ok, handle = pcall(mod.find, mod, id)
-  if ok and handle then
-    return handle
-  end
-  ok, handle = pcall(mod.find, id)
-  if ok and handle then
-    return handle
-  end
-  return nil
-end
-
 function Sprites.bindReader(read)
   Sprites.read = type(read) == "function" and read or nil
 end
@@ -75,6 +39,75 @@ local function sandboxBody(path)
     if ok and type(body) == "string" and body ~= "" then
       return body
     end
+  end
+  return nil
+end
+
+local function imageDataFromBytes(body, name)
+  if type(body) ~= "string" or body == "" then
+    return nil
+  end
+  if not (love and love.image and type(love.image.newImageData) == "function") then
+    return nil
+  end
+  local src = body
+  if love.filesystem and type(love.filesystem.newFileData) == "function" then
+    local ok, fd = pcall(love.filesystem.newFileData, body, name or "sheet.png")
+    if ok and fd then
+      src = fd
+    end
+  end
+  local ok, data = pcall(love.image.newImageData, src)
+  if ok then
+    return data
+  end
+  return nil
+end
+
+local function loadImage(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  -- Same loader the follower pack uses successfully with absolute paths.
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if okA and Assets and type(Assets.image) == "function" then
+    local ok, img = pcall(Assets.image, path)
+    if ok and img then
+      return img
+    end
+  end
+  if love and love.graphics and love.graphics.newImage then
+    local ok, img = pcall(love.graphics.newImage, path)
+    if ok and img then
+      return img
+    end
+  end
+  -- Lab / loose install: bindReader bytes, because Love cannot newImage()
+  -- an absolute disk path outside its source tree.
+  local body = sandboxBody(path)
+  if body and love and love.graphics and love.graphics.newImage then
+    local data = imageDataFromBytes(body, path:match("[^/\\]+$"))
+    if data then
+      local ok, img = pcall(love.graphics.newImage, data)
+      if ok and img then
+        return img
+      end
+    end
+  end
+  return nil
+end
+
+local function findHandle(mod, id)
+  if not (mod and type(mod.find) == "function") then
+    return nil
+  end
+  local ok, handle = pcall(mod.find, mod, id)
+  if ok and handle then
+    return handle
+  end
+  ok, handle = pcall(mod.find, id)
+  if ok and handle then
+    return handle
   end
   return nil
 end
@@ -262,19 +295,15 @@ Sprites.KIT_FACE_SNAP = {
 -- National Dex when game.data is missing (borrowed move tells).
 Sprites.SPECIES_DEX = { DIGLETT = 50, DUGTRIO = 51 }
 -- Shared move tells: play another species' baked kit, never raw PMD.
--- Diglett has no PMD "Move" strip; Walk is the ground-pop.
-Sprites.KIT_BORROW = {
-  vanish_dig = { species = "DIGLETT", anim = "walk" },
-  buried = { species = "DIGLETT", anim = "idle" },
-  emerge_dig = { species = "DIGLETT", anim = "walk" },
-}
+-- Dig is baked onto every kit (Diglett Walk dirt). Do not borrow a sheet.
+Sprites.KIT_BORROW = {}
 Sprites.KIT_IDLE_BLOCK = 6
 Sprites.KIT_FAINT_BLOCK = 7
 Sprites.KIT_BLOCK = {
   walk = 0,
   idle = 6,
   dodge = 1, brace = 2,
-  attack = 3, physical = 3,
+  attack = 3, physical = 3, move = 3,
   jump = 9, counter = 10, miss = 11,
   cast = 4, special = 4, shoot = 4,
   charge = 8,
@@ -288,22 +317,25 @@ Sprites.KIT_BLOCK = {
 
 -- Optional combat strips after flap. A missing flap does not eat these
 -- indices — kitPoseBlockMap places them on the next free row.
-Sprites.KIT_TRAILING = { "kick", "punch", "multi" }
+Sprites.KIT_TRAILING = { "kick", "punch", "multi", "dig" }
 Sprites.KIT_POSE_NAME = {
   attack = "physical", physical = "physical",
+  move = "physical",
   cast = "special", special = "special", shoot = "special",
   selfhit = "hit",
   tumbleback = "tumble",
+  vanish_dig = "dig", emerge_dig = "dig", buried = "dig",
 }
 
 -- Missing extra rows reuse an earlier combat strip instead of walk.
 Sprites.KIT_FALLBACK = {
-  jump = 3, counter = 3, miss = 3,
+  jump = 3, counter = 3, miss = 3, move = 3,
   charge = 4,
   sleep = 6, freeze = 6, confuse = 6,
   float = 1,
   tumble = 5, tumbleback = 5,
   kick = 3, punch = 3, multi = 3,
+  dig = 0, vanish_dig = 0, emerge_dig = 0, buried = 0,
 }
 
 -- Kit faint: four collapse frames, then hold the crumpled pose.
@@ -553,6 +585,9 @@ function Sprites.kitColsFromImage(path, img, blocks, cols, cell, faces)
     local ok, got = pcall(love.image.newImageData, path)
     if ok then
       data = got
+    end
+    if not data then
+      data = imageDataFromBytes(sandboxBody(path), path:match("[^/\\]+$"))
     end
   end
   if not data and img and type(img.getData) == "function" then
@@ -917,7 +952,9 @@ function Sprites.kitColForAnim(ent, anim, moving)
   local last = n - 1
   local blocks = (ent and (ent._kitBlocks or 1)) or 1
   local block = Sprites.kitBlockForAnim(anim, blocks, ent)
-  if anim == "walk" or anim == "flap" or (anim == "idle" and block == 0) then
+  if anim == "walk" or anim == "flap" or anim == "dig"
+      or anim == "vanish_dig" or anim == "emerge_dig" or anim == "buried"
+      or (anim == "idle" and block == 0) then
     if moving then
       if ticks then
         return Sprites.kitColFromClock(
@@ -1166,7 +1203,9 @@ local function syncKitPose(ent, moving)
       sprite = borrow.sprite,
     }
     ent._kitBlock = Sprites.kitBlockForAnim(spec.anim, borrow.kitBlocks or 1, actor)
-    ent._kitCol = Sprites.kitColForAnim(actor, spec.anim, moving)
+    -- Diglett Walk dirt should cycle even when the battler is planted.
+    ent._kitCol = Sprites.kitColForAnim(actor, spec.anim,
+      moving or spec.anim == "walk")
     local sprite = ent.sprite
     if sprite then
       sprite.kit = true
@@ -1195,7 +1234,9 @@ local function syncKitPose(ent, moving)
     return
   end
   ent._kitBlock = Sprites.kitBlockForAnim(anim, blocks, ent)
-  ent._kitCol = Sprites.kitColForAnim(ent, anim, moving)
+  ent._kitCol = Sprites.kitColForAnim(ent, anim, moving
+    or anim == "dig" or anim == "vanish_dig"
+    or anim == "emerge_dig" or anim == "buried")
   stampOwnKit(ent, ent.sprite)
 end
 
@@ -2061,6 +2102,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       g.setColor(0.7, 0.82, 1.0, 0.2)
       g.ellipse("line", bx, by + 3, 9 * pulse, 3.6)
     else
+      -- Baked dig pose is the dirt. Skip the drawn hole so it is not doubled.
+      local anim = self.anim or ""
+      if anim == "vanish_dig" or anim == "buried" or anim == "emerge_dig"
+          or anim == "dig" then
+        return
+      end
       -- Dirt hole while burrowed.
       g.setColor(0.18, 0.1, 0.05, 0.9)
       g.ellipse("fill", bx, by + 5, 9, 4.5)
@@ -2269,12 +2316,8 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._arFieldDetached = nil
       self.drawScale = 1
       self._vanishKind = (kind == "vanish_fly") and "fly" or "dig"
-      if kind == "vanish_dig" then
-        Sprites.ensureKitBorrow(self)
-      else
-        self._borrowVisual = nil
-        self._borrowSpecies = nil
-      end
+      self._borrowVisual = nil
+      self._borrowSpecies = nil
     elseif kind == "emerge_dig" or kind == "emerge_fly" then
       self.hidden = false
       self._emerging = true
@@ -2283,11 +2326,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._vanishKind = (kind == "emerge_fly") and "fly" or "dig"
       if kind == "emerge_dig" then
         self.drawScale = 1
-        Sprites.ensureKitBorrow(self)
-      else
-        self._borrowVisual = nil
-        self._borrowSpecies = nil
       end
+      self._borrowVisual = nil
+      self._borrowSpecies = nil
     elseif kind == "toss" or kind == "tossed" then
       self.hidden = false
       self._tossAir = true
@@ -2301,11 +2342,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self._vanishKind = (kind == "aloft") and "fly" or "dig"
       if kind == "buried" then
         self.drawScale = 1
-        Sprites.ensureKitBorrow(self)
-      else
-        self._borrowVisual = nil
-        self._borrowSpecies = nil
       end
+      self._borrowVisual = nil
+      self._borrowSpecies = nil
     elseif kind == "dodge" then
       self.drawScale = 1
       self._dodgeStyle = Sprites.pickDodgeStyle(self)
@@ -2481,6 +2520,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       if not self._pendingCloseStrike then
         self._walkFrame = 0
       end
+    end
+    -- Dig dirt loops even when the mon is planted.
+    if anim == "vanish_dig" or anim == "buried" or anim == "emerge_dig"
+        or anim == "dig" then
+      self._walkT = (self._walkT or 0) + dt
+      self._idleT = (self._idleT or 0) + dt
     end
 
     if anim == "sendout" then
@@ -2831,26 +2876,16 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "vanish_dig" then
-      -- Diglett Walk is the generic hole-pop; otherwise squash the user in.
-      Sprites.ensureKitBorrow(self)
+      -- Own-kit dig (Diglett Walk dirt). Stay planted.
       self.animT = (self.animT or 0) + dt
       local dur = 0.55
       local t = math.min(1, self.animT / dur)
-      local borrowed = self._borrowVisual
-      if borrowed then
-        oy = oy + t * t * 8
-        ox = ox + math.sin(t * math.pi * 5) * (1 - t) * 1.6
-        self.drawScale = 1
-      else
-        oy = oy + t * t * 20
-        self.drawScale = math.max(0.16, 1 - t * 0.84)
-        ox = ox + math.sin(t * math.pi * 7) * (1 - t) * 3.2
-      end
+      self.drawScale = 1
       self._walkFrame = (math.floor(t * 10) % 2)
       if self.animT >= dur then
         self._fieldVanished = true
         self.hidden = false
-        self.drawScale = borrowed and 1 or 0.2
+        self.drawScale = 1
         self.anim = "buried"
         self.animT = 0
       end
@@ -2871,20 +2906,11 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.animT = 0
       end
     elseif anim == "buried" then
-      -- Semi-invulnerable Dig hold: Diglett peeks, or rumble in the hole.
-      Sprites.ensureKitBorrow(self)
+      -- Semi-invulnerable Dig hold: keep the dirt mound looping.
       self._fieldVanished = true
       self.hidden = false
-      if self._borrowVisual then
-        self.drawScale = 1
-        oy = oy + 2 + math.sin((self.bobT or 0) * 3.4) * 1.2
-        ox = ox + math.sin((self.bobT or 0) * 5.1) * 0.8
-      else
-        self.drawScale = 0.18 + math.sin((self.bobT or 0) * 2.6) * 0.03
-        oy = oy + 15 + math.sin((self.bobT or 0) * 3.4) * 1.4
-        ox = ox + math.sin((self.bobT or 0) * 5.1) * 1.1
-      end
-      self._walkFrame = 0
+      self.drawScale = 1
+      self._walkFrame = (math.floor((self.bobT or 0) * 6) % 2)
     elseif anim == "aloft" then
       -- Semi-invulnerable Fly hold: circle high above the pad.
       self._fieldVanished = true
@@ -2894,27 +2920,12 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       ox = ox + math.sin((self.bobT or 0) * 1.25) * 5
       self._walkFrame = (math.floor((self.bobT or 0) * 4) % 2)
     elseif anim == "emerge_dig" then
-      -- Burst up from the hole (Diglett Walk, then the real mon).
-      Sprites.ensureKitBorrow(self)
+      -- Dirt mound until the real mon returns.
       self.hidden = false
       self._emerging = true
       self.animT = (self.animT or 0) + dt
       local dur = 0.38
-      local t = math.min(1, self.animT / dur)
-      if self._borrowVisual then
-        self.drawScale = 1
-        oy = oy + (1 - t) * (1 - t) * 8 - math.sin(t * math.pi) * 3
-        ox = ox + math.sin(t * math.pi * 3) * (1 - t) * 1.4
-      elseif t < 0.12 then
-        self.drawScale = 0.16 + t * 2
-        oy = oy + 12 - t * 40
-        ox = ox + math.sin(t * 40) * 2
-      else
-        local u = (t - 0.12) / 0.88
-        self.drawScale = 0.4 + 0.6 * u
-        oy = oy + (1 - u) * (1 - u) * 10 - math.sin(u * math.pi) * 6
-        ox = ox + math.sin(u * math.pi * 3) * (1 - u) * 2
-      end
+      self.drawScale = 1
       if self.animT >= dur then
         self.drawScale = 1
         self._fieldVanished = nil

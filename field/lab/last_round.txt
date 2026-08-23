@@ -1,0 +1,7 @@
+# BEEDRILL vs MACHAMP
+P|attack|SLUDGE|special|POISON|65
+E|hit
+E|attack|BODY_SLAM|physical|NORMAL|85
+P|charge
+P|attack|SLUDGE|special|POISON|65
+E|fire

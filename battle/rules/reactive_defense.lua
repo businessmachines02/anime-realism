@@ -90,6 +90,12 @@ RD.UNREACTABLE = {
   HYPER_BEAM = true,
 }
 
+-- First-turn Dig / Fly hide. The strike turn is the one that opens REACT.
+RD.VANISH_MOVES = {
+  DIG = "dig",
+  FLY = "fly",
+}
+
 RD.COVER_PIERCE = {
   EARTHQUAKE = true,
   FISSURE = true,
@@ -471,6 +477,50 @@ function RD.isUnreactable(move)
   return RD.UNREACTABLE[moveId(move)] == true
 end
 
+function RD.vanishKind(move)
+  local id = type(move) == "string" and move:upper() or moveId(move)
+  if not id or id == "" then
+    return nil
+  end
+  return RD.VANISH_MOVES[id]
+end
+
+function RD.chargingMoveId(battler)
+  local charging = battler and battler.charging
+  if type(charging) == "table" then
+    return moveId(charging)
+  end
+  if type(charging) == "string" then
+    return moveId({ id = charging })
+  end
+  return nil
+end
+
+-- Hide turn: Dig/Fly used before the engine has armed `charging`.
+-- Release turn: `charging` is already set from last turn.
+function RD.isVanishHideTurn(user, move)
+  if not RD.vanishKind(move) then
+    return false
+  end
+  local id = RD.chargingMoveId(user)
+  if id and RD.vanishKind(id) then
+    return false
+  end
+  return true
+end
+
+-- Semi-invulnerable Dig/Fly hold. No REACT from underground / the sky.
+function RD.isVanished(battler)
+  if not battler or not battler.invulnerable then
+    return false
+  end
+  local id = RD.chargingMoveId(battler)
+  if not id then
+    return true
+  end
+  return RD.vanishKind(id) ~= nil
+end
+
 function RD.isCoverPierce(move)
   local id = moveId(move)
   if RD.COVER_PIERCE[id] then
@@ -483,6 +533,10 @@ end
 function RD.canReact(battle, isPlayer)
   local side = RD.sideState(battle, isPlayer)
   if side.entrenched and (side.entrenchTurns or 0) > 0 then
+    return false
+  end
+  local battler = isPlayer and battle.player or battle.enemy
+  if RD.isVanished(battler) then
     return false
   end
   return true
@@ -1025,6 +1079,19 @@ function RD.menuActions(battle, move, opts)
       id = "entrench_break",
       label = "BREAK",
       hint = "Leave early",
+      cost = 0,
+      afford = true,
+      focus = side.focus,
+    }
+    return actions
+  end
+
+  if RD.isVanishHideTurn(opts.user or (battle and battle.enemy), move)
+      or RD.isVanished(battle and battle.player) then
+    actions[1] = {
+      id = "commit",
+      label = "PASS",
+      hint = "Wait for the strike",
       cost = 0,
       afford = true,
       focus = side.focus,

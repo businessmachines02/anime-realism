@@ -1290,6 +1290,61 @@ function tests.npc_react_spends_focus_and_mixes_picks()
   RD.clear(battle)
 end
 
+function tests.dig_fly_hide_turn_passes_react()
+  local RD = loadReactiveDefense()
+  local dig = { id = "DIG", power = 80, category = "physical", type = "GROUND" }
+  local fly = { id = "FLY", power = 70, category = "physical", type = "FLYING" }
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  local user = {}
+  truthy(RD.isVanishHideTurn(user, dig), "first Dig is a hide turn")
+  truthy(RD.isVanishHideTurn(user, fly), "first Fly is a hide turn")
+  truthy(not RD.isVanishHideTurn(user, tackle), "Tackle is not a hide")
+  user.charging = { id = "DIG" }
+  truthy(not RD.isVanishHideTurn(user, dig), "second Dig is the strike")
+  user.invulnerable = true
+  truthy(RD.isVanished(user), "charging Dig is vanished")
+  local battle = {
+    player = { mon = { level = 20 } },
+    enemy = {},
+  }
+  RD.state(battle)
+  local actions = RD.menuActions(battle, dig)
+  eq(#actions, 1, "hide turn only lists PASS")
+  eq(actions[1].label, "PASS", "the leftover row is PASS")
+  eq(RD.pickFoeReact(battle, dig, false), "commit",
+    "foe does not lunge at a hole")
+  battle.player.invulnerable = true
+  battle.player.charging = { id = "FLY" }
+  actions = RD.menuActions(battle, tackle)
+  eq(actions[1].label, "PASS", "buried defender only gets PASS")
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  React.bind({
+    RD = RD,
+    opt = function(key)
+      return key == "momentum_counter"
+    end,
+    pickMode = function()
+      return "ALWAYS"
+    end,
+    playerStatusLocked = function()
+      return false
+    end,
+    foeMoveIsSpecial = function()
+      return false
+    end,
+  })
+  local offer = {
+    player = { mon = { level = 20 } },
+    enemy = {},
+  }
+  RD.state(offer)
+  React.state(offer)
+  truthy(not React.shouldOffer(offer, dig), "hide turn does not open REACT")
+  offer.enemy.charging = { id = "DIG" }
+  truthy(React.shouldOffer(offer, dig), "Dig strike still opens REACT")
+  RD.clear(battle)
+end
+
 function tests.npc_react_may_fire_when_the_window_is_open()
   local RD, FoeAi = loadReactiveDefense()
   local ember = { id = "EMBER", power = 40, category = "special", type = "FIRE" }
@@ -5726,6 +5781,23 @@ function tests.dig_fly_vanish_and_emerge()
     _now = 10,
   }
 
+  -- Hide turn fires vanish before the engine sets charging.
+  playerMon._battleBattler.invulnerable = nil
+  playerMon._battleBattler.charging = nil
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
+    category = "physical", moveId = "DIG",
+  }), "first Dig vanishes without a charge flag")
+  eq(playerMon.anim, "vanish_dig", "hide-turn Dig plays vanish_dig")
+  eq(session._lastCueKind, "vanish", "last cue is vanish")
+  playerMon._fieldVanished = true
+  playerMon.anim = "buried"
+  Cues.syncSemiInvuln(session, Grid)
+  eq(playerMon.anim, "buried", "sync does not pop out before invuln is armed")
+
+  playerMon._fieldVanished = nil
+  playerMon.anim = "idle"
+  playerMon._battleBattler.invulnerable = true
+  playerMon._battleBattler.charging = { id = "DIG" }
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "physical", moveId = "DIG",
   }), "charge-turn dig redirects")
@@ -8555,15 +8627,33 @@ function tests.kit_face_from_delta_uses_diagonals()
   eq(Sprites.billboardFacing("up", true), "up", "kit up stays up")
 end
 
-function tests.dig_borrows_diglett_walk()
-  local spec = Sprites.kitBorrowSpec("vanish_dig")
-  eq(spec.species, "DIGLETT", "DIG vanish uses Diglett")
-  eq(spec.anim, "walk", "Diglett Walk is the ground-pop")
-  eq(Sprites.kitBorrowSpec("buried").anim, "idle", "buried holds Diglett idle")
-  eq(Sprites.kitBorrowSpec("emerge_dig").species, "DIGLETT",
-    "emerge uses Diglett too")
-  eq(Sprites.kitBorrowSpec("attack"), nil, "normal attacks keep the user")
-  eq(Sprites.SPECIES_DEX.DIGLETT, 50, "DIGLETT maps to follower_050")
+function tests.dig_uses_baked_diglett_walk()
+  eq(Sprites.kitBorrowSpec("vanish_dig"), nil, "Dig does not borrow a sheet")
+  eq(Sprites.KIT_POSE_NAME.vanish_dig, "dig", "vanish plays the dig row")
+  eq(Sprites.KIT_POSE_NAME.buried, "dig", "buried plays the dig row")
+  eq(Sprites.KIT_POSE_NAME.emerge_dig, "dig", "emerge plays the dig row")
+  local hasDig = false
+  for i = 1, #(Sprites.KIT_TRAILING or {}) do
+    if Sprites.KIT_TRAILING[i] == "dig" then
+      hasDig = true
+    end
+  end
+  truthy(hasDig, "dig is a trailing kit pose")
+  local map = Sprites.kitPoseBlockMap({
+    poses = {
+      walk = { frames = 3, ticks = { 8, 8, 8 } },
+      dig = { frames = 3, ticks = { 8, 8, 8 } },
+    },
+  })
+  eq(map.dig, 17, "dig sits after the flap slot")
+  local kitPath = root .. "/../assets/followers/follower_076.kit"
+  local f = io.open(kitPath, "r")
+  truthy(f, "Golem kit is on disk")
+  local text = f:read("*a")
+  f:close()
+  local meta = Sprites.parseKitMeta(text)
+  truthy(meta.poses.dig, "Golem kit includes the shared dig row")
+  eq(meta.poses.dig.frames, 3, "dig is Diglett Walk's three frames")
 end
 
 function tests.kit_shadow_origin_stays_on_planted_column()

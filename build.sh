@@ -73,6 +73,8 @@ zip -q -X -r "$OUT" \
   -x "field/tests/*/*" \
   -x "field/tests/*/*/*" \
   -x "field/tests/*/*/*/*" \
+  -x "field/lab/*" \
+  -x "field/lab/*/*" \
   -x "*.DS_Store" \
   -x "*/*.DS_Store"
 
@@ -127,11 +129,14 @@ with zipfile.ZipFile(p) as zf:
 faces = [n for n in names if n.startswith("assets/portrait/") and n.endswith(".png")]
 carets = [n for n in names if "^" in n]
 tests = [n for n in names if n.startswith("field/tests/")]
+labs = [n for n in names if n.startswith("field/lab/")]
 print(f"  {p.stat().st_size} bytes, {len(names)} entries, {len(faces)} portraits")
 if carets:
     raise SystemExit(f"error: zip contains {len(carets)} '^' names")
 if tests:
     raise SystemExit("error: field tests included in zip")
+if labs:
+    raise SystemExit("error: field lab included in zip")
 if "manifest.json" not in names or "main.lua" not in names:
     raise SystemExit("error: zip missing manifest.json or main.lua at root")
 if "lib/" not in names and not any(n.startswith("lib/") for n in names):
