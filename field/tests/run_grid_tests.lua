@@ -28,6 +28,7 @@ local Arena = load("stage/arena.lua")
 local Survey = load("pad/survey.lua")
 local Cues = load("fx/cues.lua")
 Cues.attach(load)
+package.loaded.field_type = load("chrome/type.lua")
 local Callouts = load("chrome/callouts.lua")
 local Projectiles = load("fx/projectiles.lua")
 local Audio = load("fx/audio.lua")
@@ -44,6 +45,7 @@ local Hooks = load("chrome/hooks.lua")
 load("chrome/hooks_draw.lua")(Hooks)
 load("chrome/hooks_input.lua")(Hooks)
 load("chrome/hooks_events.lua")(Hooks)
+UI.foeIsDown = Hooks.foeIsDown
 
 do
   local ids = {
@@ -182,9 +184,40 @@ function tests.faint_drops_sticky_move_diamond()
   truthy(Hooks.foeIsDown({
     enemy = { mon = { hp = 0 } },
   }), "KO'd foe drops the diamond")
-  truthy(Hooks.foeIsDown({
+  truthy(not Hooks.foeIsDown({
     enemy = { shownHP = 0, mon = { hp = 8 } },
-  }), "empty foe bar drops the diamond")
+  }), "empty bar on a living foe is send-out, not a KO")
+  local faintedMenu = {
+    phase = "menu",
+    enemy = { mon = { hp = 0 } },
+    current = { text = "Enemy RATTATA\nfainted!" },
+  }
+  truthy(Hooks.holdFightMenu(faintedMenu), "FIGHT stays closed over a fainted foe")
+  local state = UI.layoutState(faintedMenu)
+  truthy(not state.showCommand, "command HUD does not cover faint text")
+  truthy(not state.showMoves, "move HUD does not cover faint text")
+  local intro = {
+    phase = "menu",
+    current = { text = "A wild RATTATA appeared!" },
+    player = { mon = { hp = 20 } },
+    enemy = { shownHP = 0, mon = { hp = 12 } },
+  }
+  truthy(not Hooks.holdFightMenu(intro), "opening dialogue does not lock FIGHT")
+  truthy(UI.layoutState(intro).showCommand, "opening dialogue still reaches the command menu")
+  local sentOut = {
+    phase = "messages",
+    enemySendingOut = true,
+    current = { text = "MISTY sent\nout NINETALES!" },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(sentOut), "trainer send-out is not a FIGHT hold")
+  local playerDown = {
+    phase = "menu",
+    player = { mon = { hp = 0 } },
+    enemy = { mon = { hp = 12 } },
+  }
+  truthy(not Hooks.holdFightMenu(playerDown), "player faint still reaches PKMN")
+  truthy(UI.layoutState(playerDown).showCommand, "player faint keeps the command menu")
 end
 
 function tests.supported_battle_gate()
@@ -767,10 +800,10 @@ function tests.move_hud_shows_b_pause_hint()
   local sawHeaderPP = false
   local up, right, left, down = false, false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then
+    if drawn[i] == "B Pause" then
       hinted = true
     end
-    if drawn[i] == "TACKLE" then
+    if drawn[i] == "Tackle" then
       listed = true
     end
     if drawn[i] == "PP 35/35" then
@@ -841,7 +874,7 @@ function tests.diamond_move_hud_uses_compass()
   package.loaded["src.render.Font"] = nil
   local hinted, up, right, sawHeaderPP = false, false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then hinted = true end
+    if drawn[i] == "B Pause" then hinted = true end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
     if drawn[i] == "PP 35/35" then sawHeaderPP = true end
@@ -859,6 +892,20 @@ function tests.move_hud_pp_label()
     data = { moves = { TACKLE = { pp = 35 } } },
   }, { id = "TACKLE", pp = 12 }, true), "12/35", "remaining over max")
   eq(UI.movePPLabel({}, { struggle = true, pp = 1 }), nil, "struggle has no PP")
+end
+
+function tests.hud_text_uses_lowercase_words()
+  eq(UI.hudText("FIGHT"), "Fight", "command words use the pixel lowercase")
+  eq(UI.hudText("PKMN"), "PKMN", "PKMN stays a tag")
+  eq(UI.hudText("B PAUSE"), "B Pause", "hints title-case the words")
+  eq(UI.hudText("TACKLE"), "Tackle", "move names title-case")
+  eq(UI.hudText("ACID ARMOR"), "Acid Armor", "two-word moves title-case")
+  eq(UI.hudText("PP 35/35"), "PP 35/35", "PP stays a tag")
+  eq(UI.hudText("Go! SQUIRTLE!"), "Go! Squirtle!",
+    "mixed lines only rewrite the ALL-CAPS words")
+  local Type = UI.Type
+  truthy(Type and Type.FILE:find("pokepixel%-gba", 1, false),
+    "HUD typeface is pokepixel-gba")
 end
 
 function tests.hud_plate_is_one_glass_alpha()
@@ -8922,6 +8969,13 @@ function tests.emotions_chip_colors_match_mood()
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
   eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
   eq(E.chip("normal"), nil, "normal has no chip")
+end
+
+function tests.status_chips_are_smaller_than_hud_type()
+  eq(UI.CHIP_H, 11, "chip plate is a short readable pill")
+  eq(UI.CHIP_SCALE, 0.85, "chip type sits under HUD size")
+  eq(UI.HP_LETTER_W, 8, "initial sits on a cream badge")
+  truthy(UI.HP_LETTER_SCALE < 0.7, "initial is smaller than HUD type")
 end
 
 function tests.emotions_chip_ink_is_always_dark()

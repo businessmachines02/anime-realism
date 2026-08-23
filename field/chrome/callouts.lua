@@ -28,6 +28,33 @@ local function font()
   return ok and Font or nil
 end
 
+local Type
+do
+  local ok, mod = pcall(require, "field_type")
+  if ok and type(mod) == "table" then
+    Type = mod
+  end
+end
+Callouts.Type = Type
+
+local function faceText(text)
+  if Type and type(Type.display) == "function" then
+    return Type.display(text)
+  end
+  return tostring(text or "")
+end
+
+local function textWidth(Font, text)
+  if Type and type(Type.width) == "function" then
+    return Type.width(text, Font)
+  end
+  text = faceText(text)
+  if Font and type(Font.width) == "function" then
+    return tonumber(Font.width(text)) or (#text * 8)
+  end
+  return #tostring(text or "") * 8
+end
+
 function Callouts.norm(text)
   local flat = tostring(text or ""):lower():gsub("\v", " "):gsub("\n", " ")
   flat = flat:gsub("%s+", " ")
@@ -276,14 +303,14 @@ end
 
 local function wrapText(Font, text, maxPx)
   local lines = {}
-  local raw = tostring(text or ""):gsub("\v", "\n")
+  local raw = faceText(text):gsub("\v", "\n")
   local function flushWord(word)
     while word ~= "" do
-      if Font.width(word) <= maxPx then
+      if textWidth(Font, word) <= maxPx then
         return word
       end
       local cut = 1
-      while cut < #word and Font.width(word:sub(1, cut + 1)) <= maxPx do
+      while cut < #word and textWidth(Font, word:sub(1, cut + 1)) <= maxPx do
         cut = cut + 1
       end
       if cut < 1 then
@@ -300,7 +327,7 @@ local function wrapText(Font, text, maxPx)
       local line = ""
       for word in chunk:gmatch("%S+") do
         local trial = (line == "") and word or (line .. " " .. word)
-        if Font.width(trial) <= maxPx then
+        if textWidth(Font, trial) <= maxPx then
           line = trial
         else
           if line ~= "" then
@@ -363,14 +390,19 @@ local function drawBox(g, Font, text, vanillaTop, alpha)
     g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
   end
 
-  g.setColor(0.08, 0.06, 0.05, alpha)
+  local ink = { 0.08, 0.06, 0.05, alpha }
   local ty = y + padY
   for i = 1, #lines do
-    local codes = Font.encode(lines[i])
-    local tx = x + padX
-    for j = 1, #codes do
-      Font.drawCode(codes[j], tx, ty)
-      tx = tx + (Font.advanceOf(codes[j]) or 8)
+    if Type and type(Type.draw) == "function" then
+      Type.draw(g, lines[i], x + padX, ty, ink, Font)
+    elseif Font and type(Font.encode) == "function" then
+      g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+      local codes = Font.encode(lines[i])
+      local tx = x + padX
+      for j = 1, #codes do
+        Font.drawCode(codes[j], tx, ty)
+        tx = tx + (Font.advanceOf(codes[j]) or 8)
+      end
     end
     ty = ty + lineH
   end
@@ -398,7 +430,7 @@ function Callouts.draw(session, battle)
     return
   end
   local Font = font()
-  if not Font then
+  if not Font and not (Type and type(Type.draw) == "function") then
     return
   end
   local vanillaTop = battle and battle._arNarratorTop or nil

@@ -63,7 +63,8 @@ function Hooks.playerMustSwitch(battle)
     return false
 end
 
--- Foe fainted / empty bar: do not reopen the move diamond over "fainted!".
+-- Real KO only. shownHP is 0 at send-out / intro while mon.hp is still up;
+-- treating that as a faint ate other mods' opening dialogue.
 function Hooks.foeIsDown(battle)
     if not battle then
         return false
@@ -73,14 +74,20 @@ function Hooks.foeIsDown(battle)
         return false
     end
     local hp = (e.mon and e.mon.hp) or e.hp
-    if type(hp) == "number" and hp <= 0 then
-        return true
+    return type(hp) == "number" and hp <= 0
+end
+
+-- Hide FIGHT / moves over a KO'd foe. Player faint still needs PKMN.
+-- A trainer send-out keeps the old HP at 0 until the new battler lands;
+-- holding FIGHT there parks "X sent out Y!" with nowhere to go.
+function Hooks.holdFightMenu(battle)
+    if not battle or Hooks.playerMustSwitch(battle) then
+        return false
     end
-    local shown = e.shownHP
-    if type(shown) == "number" and shown <= 0 then
-        return true
+    if battle.enemySendingOut then
+        return false
     end
-    return false
+    return Hooks.foeIsDown(battle)
 end
 
 -- B on the move diamond (or the sticky command frame before it reopens)

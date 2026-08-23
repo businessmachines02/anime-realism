@@ -45,7 +45,7 @@ function Hooks.installInput(FBV, mod, ctx)
                     end
                     local entrenched = focusEntrenched(self)
                     local mustSwitch = Hooks.playerMustSwitch(self)
-                    local foeDown = Hooks.foeIsDown(self)
+                    local holdFight = Hooks.holdFightMenu(self)
                     local awaitCallout = self._arAwaitCallout == true
                     local slowerWait = (not awaitCallout)
                         and playerLikelyGoesSecond(self) == true
@@ -61,7 +61,7 @@ function Hooks.installInput(FBV, mod, ctx)
                             self.menuIndex = self.menuIndex or 2
                             self.moveSwapIndex = nil
                         end
-                    elseif foeDown then
+                    elseif holdFight then
                         if self._arAwaitAgain then
                             self._arAwaitCallout = nil
                             self._arAwaitAgain = nil
@@ -69,8 +69,29 @@ function Hooks.installInput(FBV, mod, ctx)
                         end
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
-                        if self.phase == "moveSelect" or self.phase == "mimicSelect" then
+                        -- FIGHT over a KO parks updateQueue. Only remount the
+                        -- narrator while faint / EXP rows are actually live.
+                        -- Inventing afterQueue on an empty toast leaves
+                        -- "sent out" stuck after the next trainer mon.
+                        local q = self.queue
+                        local live = self.current ~= nil
+                            or (type(q) == "table" and q[1] ~= nil)
+                            or self.msgWaiting or self.msgPrompt
+                            or self.draining or self.animPlaying
+                            or self.waitingUI
+                            or (tonumber(self.waitFrames) or 0) > 0
+                        if live and (self.phase == "moveSelect"
+                            or self.phase == "mimicSelect"
+                            or self.phase == "menu") then
                             self.phase = "messages"
+                            self.moveSwapIndex = nil
+                            if not self.afterQueue then
+                                self.afterQueue = "menu"
+                            end
+                        elseif self.phase == "moveSelect"
+                            or self.phase == "mimicSelect" then
+                            self.phase = "menu"
+                            self.menuIndex = self.menuIndex or 1
                             self.moveSwapIndex = nil
                         end
                     end
@@ -86,7 +107,7 @@ function Hooks.installInput(FBV, mod, ctx)
                         and Hooks.fieldPausePressed(input, self)
                     if pauseEdge and Hooks.applyFieldPause(self) then
                         swallowPause = true
-                    elseif awaitCallout and not mustSwitch and not foeDown
+                    elseif awaitCallout and not mustSwitch and not holdFight
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
                         and #(self.player.curMoves) > 0 then
@@ -101,7 +122,7 @@ function Hooks.installInput(FBV, mod, ctx)
                         self._arFieldPreferMoves = nil
                         self._arFieldCommandHold = true
                     elseif self.phase == "menu" and self._arFieldPreferMoves
-                        and not entrenched and not mustSwitch and not foeDown
+                        and not entrenched and not mustSwitch and not holdFight
                         and not slowerWait
                         and not self.safari and not self.demo
                         and self.player and self.player.curMoves
@@ -250,19 +271,18 @@ function Hooks.installInput(FBV, mod, ctx)
 
                     -- FIGHT (menu → moveSelect via A) latches move mode.
                     if phaseBefore == "menu" and self.phase == "moveSelect" and pressedA
-                        and not mustSwitch and not foeDown and not slowerWait then
+                        and not mustSwitch and not holdFight and not slowerWait then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
                     end
                     -- Also latch when COVER!/ENTRENCH! STRIKE/EMERGE/BREAK called
                     -- goMoveSelect (phase becomes moveSelect without our A).
                     if self.phase == "moveSelect" and not entrenched
-                        and not mustSwitch and not foeDown and not slowerWait
+                        and not mustSwitch and not holdFight and not slowerWait
                         and (phaseBefore == "menu" or pressedA) then
                         self._arFieldPreferMoves = true
                         self._arFieldCommandHold = nil
                     end
-
                     return result[1], result[2], result[3]
                 end
                 return origUpdate(self, dt, ...)

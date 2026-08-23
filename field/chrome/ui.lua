@@ -34,9 +34,26 @@ do
     end
 end
 
+local Type
+do
+    local ok, mod = pcall(require, "field_type")
+    if ok and type(mod) == "table" then
+        Type = mod
+    end
+end
+UI.Type = Type
+
 local function font()
     local ok, Font = pcall(require, "src.render.Font")
     return ok and Font or nil
+end
+
+-- Authored HUD copy: ALL-CAPS words → lowercase for the pixel face.
+function UI.hudText(text)
+    if Type and type(Type.display) == "function" then
+        return Type.display(text)
+    end
+    return tostring(text or "")
 end
 
 local function clamp01(n)
@@ -151,23 +168,31 @@ function UI.easeHpFill(cur, target)
     return target
 end
 
+local function measureText(Font, text)
+    if Type and type(Type.width) == "function" then
+        return Type.width(text, Font)
+    end
+    text = UI.hudText(text)
+    if Font and type(Font.width) == "function" then
+        return tonumber(Font.width(text)) or (#text * 8)
+    end
+    return #tostring(text or "") * 8
+end
+
 local function fitText(Font, value, maxWidth)
-    local text = tostring(value or "POKéMON")
-    if not (Font and type(Font.width) == "function") then
+    local text = UI.hudText(value or "POKéMON")
+    if measureText(Font, text) <= maxWidth then
         return text
     end
-    if Font.width(text) <= maxWidth then
-        return text
-    end
-    while #text > 1 and Font.width(text .. "+") > maxWidth do
+    while #text > 1 and measureText(Font, text .. "+") > maxWidth do
         text = text:sub(1, -2)
     end
     return text .. "+"
 end
 
--- Command / move HUD: one cream plate.
--- Plain dialogue: one light glass slab, always the same fill.
-UI.HUD_PANEL_A = 0.40
+-- Command / move HUD: cream plate, opaque enough that the floor
+-- cannot eat the pixel type. Dialogue stays a lighter glass.
+UI.HUD_PANEL_A = 0.92
 UI.DIALOGUE_FILL = { 0.98, 0.96, 0.90 }
 UI.DIALOGUE_A = 0.78
 UI.DIALOGUE_X = 4
@@ -209,10 +234,9 @@ function UI.paintDialoguePlate(g, x, y, w, h, alpha)
     g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
 end
 
--- Move / command chrome: a single translucent fill. No second frame, no halo.
+-- Move / command chrome: same cream plate as dialogue, no halo.
 local function hudBox(g, x, y, w, h)
-    g.setColor(0.96, 0.92, 0.82, UI.HUD_PANEL_A)
-    g.rectangle("fill", x, y, w, h)
+    UI.paintDialoguePlate(g, x, y, w, h, UI.HUD_PANEL_A)
 end
 
 local function hpBar(g, x, y, w, ratio, fill)
@@ -270,10 +294,11 @@ end
 
 -- Letter + bar + pointer: keep the chip on the canvas when a mon is
 -- near the top (or side) of the view.
-UI.HP_LETTER_W = 6
+UI.HP_LETTER_W = 8
 UI.HP_BAR_W = 20
 UI.HP_CHIP_W = UI.HP_LETTER_W + 1 + UI.HP_BAR_W
 UI.HP_CHIP_H = 7
+UI.HP_LETTER_SCALE = 0.55
 UI.FACE_SIZE = 28
 UI.FACE_GAP = 28
 UI.FACE_LIFT = 10
@@ -520,6 +545,21 @@ local function stackedPrompt(battle)
     return top ~= nil and top ~= battle and top.isOpaque ~= true
 end
 
+local function foeIsDown(battle)
+    if type(UI.foeIsDown) == "function" then
+        return UI.foeIsDown(battle)
+    end
+    if not battle then
+        return false
+    end
+    local e = battle.enemy
+    if not e then
+        return false
+    end
+    local hp = (e.mon and e.mon.hp) or e.hp
+    return type(hp) == "number" and hp <= 0
+end
+
 -- Lane 1: engine narrator. Banter (Name:) and chip-owned REACT toasts stay out.
 function UI.gameDialogue(battle)
     if not battle or battle.phase ~= "messages" then
@@ -537,12 +577,15 @@ end
 
 function UI.layoutState(battle)
     local phase = battle and battle.phase or ""
+    local hold = foeIsDown(battle)
+    local showCommand = phase == "menu" and not hold
+    local showMoves = (phase == "moveSelect" or phase == "mimicSelect") and not hold
     return {
         phase = phase,
         showHUD = false,
-        showCommand = phase == "menu",
-        showMoves = phase == "moveSelect" or phase == "mimicSelect",
-        showDialogue = UI.gameDialogue(battle),
+        showCommand = showCommand,
+        showMoves = showMoves,
+        showDialogue = (not showCommand and not showMoves) and UI.gameDialogue(battle),
         menuIndex = battle and battle.menuIndex or 1,
         moveIndex = phase == "mimicSelect"
             and (battle and battle.mimicIndex or 1)
@@ -574,8 +617,8 @@ local function barInitial(battler)
 end
 
 UI.CHIP_HOLD = 90
-UI.CHIP_H = 10
-UI.CHIP_SCALE = 0.75
+UI.CHIP_H = 11
+UI.CHIP_SCALE = 0.85
 
 -- Successful REACT! outcomes, plus accuracy MISS on the attacker.
 -- Orders and failed reacts stay toasts / notices — they must not paint a chip.
@@ -708,14 +751,10 @@ local function moodChipOf(battle, isPlayer)
 end
 
 local function drawStatusChip(g, Font, chip, x, y, canvasW)
-    local text = chip.text
-    local scale = UI.CHIP_SCALE or 0.6
-    local tw = (#text) * 8
-    if Font and type(Font.width) == "function" then
-        tw = tonumber(Font.width(text)) or tw
-    end
-    tw = tw * scale
-    local w, h = math.floor(tw + 5), UI.CHIP_H
+    local text = tostring(chip.text or ""):lower()
+    local scale = UI.CHIP_SCALE or 0.75
+    local tw = math.max(1, math.floor(measureText(Font, text) * scale + 0.5))
+    local w, h = tw + 5, UI.CHIP_H
     local cx = math.floor(x - w / 2)
     if cx + w > canvasW - 1 then
         cx = canvasW - 1 - w
@@ -733,13 +772,16 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
     g.rectangle("fill", cx, y, w, h)
     g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
     g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
-    if Font and type(Font.draw) == "function" then
-        g.push()
-        g.translate(cx + 2, y + 1)
-        g.scale(scale, scale)
+    g.push()
+    g.translate(cx + 2, y + 2)
+    g.scale(scale, scale)
+    if Type and type(Type.draw) == "function" then
+        Type.draw(g, text, 0, 0, ink, Font, { track = 0 })
+    elseif Font and type(Font.draw) == "function" then
+        g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
         Font.draw(text, 0, 0)
-        g.pop()
     end
+    g.pop()
     resetTint(g)
     g.pop()
 end
@@ -825,17 +867,21 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local letterW = UI.HP_LETTER_W
             local totalW = letterW + 1 + barW
             local left = x - math.floor(totalW / 2)
-            if Font and type(Font.draw) == "function" then
+            local badgeY = y - 1
+            UI.paintDialoguePlate(g, left, badgeY, letterW, UI.HP_CHIP_H, UI.HUD_PANEL_A)
+            g.push()
+            g.translate(left + 1, badgeY + 1)
+            g.scale(UI.HP_LETTER_SCALE or 0.55, UI.HP_LETTER_SCALE or 0.55)
+            if Type and type(Type.draw) == "function" then
+                Type.draw(g, initial, 0, 0, DARK_INK, Font, { track = 0 })
+            elseif Font and type(Font.draw) == "function" then
                 g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
-                g.push()
-                g.translate(left, y - 1)
-                g.scale(0.75, 0.75)
                 Font.draw(initial, 0, 0)
-                g.pop()
             else
                 g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
-                g.print(initial, left, y - 2)
+                g.print(initial, 0, 0)
             end
+            g.pop()
             resetTint(g)
             if showFocus and type(UI.focusRatio) == "function" then
                 local target = tonumber(UI.focusRatio(battle, item.side == "player"))
@@ -891,33 +937,31 @@ local function drawScaled(g, Font, text, x, y, scale)
 end
 
 local function labelWidth(Font, text)
-    if Font and type(Font.getWidth) == "function" then
-        return tonumber(Font.getWidth(text)) or (#text * 8)
-    end
-    if Font and type(Font.width) == "function" then
-        return tonumber(Font.width(text)) or (#text * 8)
-    end
-    return #tostring(text or "") * 8
+    return measureText(Font, text)
 end
 
 local function drawHudLabel(g, Font, text, x, y, scale, alignRight, ink)
-    if not (Font and type(Font.draw) == "function") then
+    text = UI.hudText(text)
+    if text == "" then
         return
     end
-    scale = scale or 1
     ink = ink or DARK_INK
     local ox = 0
     if alignRight then
         ox = -labelWidth(Font, text)
     end
     g.push("all")
-    g.translate(x, y)
-    if scale ~= 1 then
-        g.scale(scale, scale)
+    g.translate(x + ox, y)
+    if Type and type(Type.draw) == "function" then
+        Type.draw(g, text, 0, 0, ink, Font)
+    elseif Font and type(Font.draw) == "function" then
+        scale = scale or 1
+        if scale ~= 1 then
+            g.scale(scale, scale)
+        end
+        g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+        Font.draw(text, 0, 0)
     end
-    g.translate(ox, 0)
-    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
-    Font.draw(text, 0, 0)
     g.pop()
 end
 
@@ -1066,10 +1110,8 @@ local function drawMovesClassic(g, Font, battle)
         and (battle.mimicIndex or 1) or (battle.moveIndex or 1)
     local x, y, w, h = 4, 100, 152, 40
     hudBox(g, x, y, w, h)
-    if Font and type(Font.draw) == "function" then
-        drawHudLabel(g, Font, "B PAUSE", x + 6, y + 3, 1, false, { 0.35, 0.30, 0.25, 1 })
-        drawHeaderPP(g, Font, battle, rows[index], x + w - 6, y + 3)
-    end
+    drawHudLabel(g, Font, "B PAUSE", x + 6, y + 3, 1, false, { 0.35, 0.30, 0.25, 1 })
+    drawHeaderPP(g, Font, battle, rows[index], x + w - 6, y + 3)
     local slots = {
         { i = 1, label = "U", col = 0, row = 0 },
         { i = 2, label = "R", col = 1, row = 0 },
@@ -1108,10 +1150,8 @@ local function drawMovesDiamond(g, Font, battle)
         { i = 4, label = "D", x = 44, y = 120 },
     }
     hudBox(g, 0, 64, 160, 80)
-    if Font and type(Font.draw) == "function" then
-        drawHudLabel(g, Font, "B PAUSE", 4, 68, 1, false, { 0.35, 0.30, 0.25, 1 })
-        drawHeaderPP(g, Font, battle, rows[index], 154, 68)
-    end
+    drawHudLabel(g, Font, "B PAUSE", 4, 68, 1, false, { 0.35, 0.30, 0.25, 1 })
+    drawHeaderPP(g, Font, battle, rows[index], 154, 68)
     for s = 1, #slots do
         local slot = slots[s]
         local move = rows[slot.i]
