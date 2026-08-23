@@ -182,6 +182,7 @@ local function resetMomentum(battle)
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
     battle._arReactLocked = nil
+    battle._arNoCounterThisTurn = nil
     battle._arAwaitingReact = nil
     battle._arAwaitAgain = nil
     battle._arAwaitAgainSide = nil
@@ -760,6 +761,9 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     if action == "fire" or action == "charge" then
         lockReactHud(battle)
     end
+    if action == "charge" then
+        battle._arNoCounterThisTurn = true
+    end
     local pending = state.pendingDamage
     state.pendingDamage = nil
     state.enemyActedThisTurn = true
@@ -993,7 +997,8 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                 origRunDamaging(battle, pending.ctx, pending.record)
             end
         end
-        if not result.fireNow then
+        if not result.fireNow and not result.chargeNow
+            and not battle._arNoCounterThisTurn then
             queueReactCounterStrike(battle, result, pending.ctx)
         end
     end
@@ -1351,6 +1356,7 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
     local function beginChargeNow(shots, prefIdx)
         local st = momentumState(battle)
         lockReactHud(battle)
+        battle._arNoCounterThisTurn = true
         st.reactEpoch = (st.reactEpoch or 0) + 1
         scrubReactPickRows(battle)
         shots = shots or {}
@@ -1541,6 +1547,10 @@ maybeQueueSameTurnCounter = function(battle)
         return
     end
     state.offerSameTurnCounter = nil
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
+        log(battle, "COUNTER! skip", "charge")
+        return
+    end
     if hostCall("playerStatusLocked", battle) then
         log(battle, "COUNTER! skip", "status-locked")
         return
@@ -1738,6 +1748,9 @@ local function shouldAutoCounter(battle, ctx)
     if not user or not user.isPlayer or not target or target.isPlayer then
         return false
     end
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
+        return false
+    end
     if not move or (move.power or 0) <= 0 or move.category == "status" then
         return false
     end
@@ -1865,6 +1878,9 @@ function React.isGuaranteedCounterHit(battle, user, target)
         return false
     end
     if target and target.isPlayer then
+        return false
+    end
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
         return false
     end
     if battle._arGuaranteedHit or battle._arCounterClash then

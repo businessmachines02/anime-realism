@@ -442,12 +442,26 @@ function H.finishingFocus(session, atkSide, opts)
 end
 
 --- Player hit that just dropped the foe to 0 HP.
+--- A faint already owns the exit beat — do not pile a clash / "Finish it!"
+--- on a mon that is down or already playing faint.
 function Cues.isFinishingBlow(user, target)
     if not (user and user.isPlayer and target and not target.isPlayer) then
         return false
     end
+    if target._fainting or target._faintDone or target._removed
+        or target._recallDone then
+        return false
+    end
+    local battler = target._battleBattler
+    if battler and (battler._fainting or battler._faintDone) then
+        return false
+    end
     local hp = target.mon and target.mon.hp
-    return type(hp) == "number" and hp <= 0
+    if type(hp) ~= "number" or hp > 0 then
+        return false
+    end
+    -- Already KO'd: the faint cue / HP bar owns this. No extra finisher.
+    return false
 end
 
 --- Contact juice without a fake zoom: freeze a few frames and bump the camera.

@@ -1997,6 +1997,44 @@ function tests.counter_proc_does_not_play_a_player_miss()
   eq(enemy.lastAnim, nil, "the foe does not sidestep the proc")
 end
 
+function tests.charge_does_not_proc_a_counter()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  local player = { isPlayer = true }
+  local enemy = { isPlayer = false }
+  local battle = { _arChargeNow = true }
+  React.state(battle)
+  local st = React.peek(battle)
+  st.mode = "counter"
+  truthy(not React.isGuaranteedCounterHit(battle, player, enemy),
+    "CHARGE is not a counter hit")
+  battle._arChargeNow = nil
+  battle._arNoCounterThisTurn = true
+  truthy(not React.isGuaranteedCounterHit(battle, player, enemy),
+    "CHARGE spends the counter for the turn")
+  battle._arNoCounterThisTurn = nil
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "without CHARGE an armed opening still counters")
+end
+
+function tests.finish_calls_drop_after_a_faint()
+  local Dialogue = assert(loadfile(root .. "/../battle/rules/dialogue.lua"))()
+  truthy(Dialogue.isFinishCallText("OK, PIKACHU!\nFinish it!"),
+    "ok finish-it is a finish shout")
+  truthy(Dialogue.isFaintText("Enemy RATTATA\nfainted!"), "faint line")
+  local battle = {
+    nextInsert = 2,
+    current = { text = "PIKACHU! Finish it!" },
+    queue = {
+      { text = "Enemy RATTATA\nfainted!" },
+      { text = "Finish it! PIKACHU! TACKLE!" },
+    },
+  }
+  Dialogue.scrubFinishCalls(battle)
+  eq(battle.current, nil, "live finish shout is dropped")
+  eq(#battle.queue, 1, "queued finish shout is dropped")
+  eq(battle.queue[1].text, "Enemy RATTATA\nfainted!", "faint line stays")
+end
+
 function tests.fire_locks_the_react_hud()
   local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
   React.bind({
@@ -3159,52 +3197,18 @@ function tests.finishing_blow_plays_the_clash()
     { isPlayer = true },
     { isPlayer = false, mon = { hp = 12 } }
   ), "a living foe is not a finisher")
-  truthy(Cues.isFinishingBlow(
+  truthy(not Cues.isFinishingBlow(
     { isPlayer = true },
     { isPlayer = false, mon = { hp = 0 } }
-  ), "KO from the player is a finisher")
+  ), "a fainted foe does not play the finish clash")
   truthy(not Cues.isFinishingBlow(
     { isPlayer = false },
     { isPlayer = true, mon = { hp = 0 } }
   ), "the foe KOing you is not your finisher")
-
-  local plan = Layout.plan(0, 0, 8, 0)
-  local grid = Grid.build({
-    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
-  }, plan)
-  local player = {
-    id = "player", padU = 2, padV = 0,
-    play = function(self, kind) self.lastAnim = kind end,
-  }
-  local enemy = {
-    id = "enemy", padU = 4, padV = 0,
-    play = function(self, kind) self.lastAnim = kind end,
-  }
-  Grid.setPad(grid, player, player.padU, player.padV)
-  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
-  local session = {
-    live = true,
-    grid = grid,
-    playerMon = player,
-    enemyMon = enemy,
-    _now = 50,
-    _battle = { kind = "wild" },
-    _deps = { Projectiles = Projectiles },
-  }
-  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
-    category = "physical", moveId = "TACKLE", finishing = true,
-  }), "finishing hit cue")
-  eq(player.lastAnim, "counter", "attacker plays the counter pose")
-  eq(enemy.lastAnim, "tumble", "foe takes the KO")
-  truthy(session._clashPunch, "camera punch-in is armed")
-  truthy((session._clashSlowT or 0) >= 0.7, "slow-mo holds the beat")
-  truthy(enemy._heavyHit, "KO knock is heavy")
-  local styles = {}
-  for i = 1, #(session.projectiles or {}) do
-    styles[session.projectiles[i].style] = true
-  end
-  truthy(styles.clash_glow, "finisher rims the mons with glow")
-  truthy(styles.clash_trail, "finisher paints hair trails")
+  truthy(not Cues.isFinishingBlow(
+    { isPlayer = true },
+    { isPlayer = false, mon = { hp = 0 }, _fainting = true }
+  ), "an in-progress faint is not a finisher")
 end
 
 function tests.brace_counter_waits_for_the_incoming_hit()

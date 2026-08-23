@@ -160,6 +160,45 @@ function Dialogue.formatEnemyMoveCall(trainer, mon, move)
     return mon .. "!\n" .. move .. "!"
 end
 
+function Dialogue.isFaintText(text)
+    return tostring(text or ""):lower():find("fainted", 1, true) ~= nil
+end
+
+function Dialogue.isFinishCallText(text)
+    local flat = tostring(text or ""):lower():gsub("\v", " "):gsub("\n", " ")
+    return flat:find("finish it", 1, true) ~= nil
+        or flat:find("finish them", 1, true) ~= nil
+        or flat:find("end it!", 1, true) ~= nil
+        or flat:find("this is it", 1, true) ~= nil
+        or flat:find("take 'em down", 1, true) ~= nil
+        or flat:find("now's our chance", 1, true) ~= nil
+end
+
+--- Drop leftover "Finish it!" / Again finish shouts once someone is down.
+function Dialogue.scrubFinishCalls(battle)
+    if type(battle) ~= "table" then
+        return
+    end
+    local function drop(item)
+        return type(item) == "table" and Dialogue.isFinishCallText(item.text)
+    end
+    if drop(battle.current) then
+        battle.current = nil
+    end
+    local q = battle.queue
+    if type(q) ~= "table" then
+        return
+    end
+    for i = #q, 1, -1 do
+        if drop(q[i]) then
+            table.remove(q, i)
+            if type(battle.nextInsert) == "number" and i <= battle.nextInsert then
+                battle.nextInsert = math.max(0, battle.nextInsert - 1)
+            end
+        end
+    end
+end
+
 function Dialogue.isExpGainDialogue(text)
     local s = tostring(text or "")
     if s == "" or Dialogue.isGrewToLevelText(s) then
@@ -294,6 +333,9 @@ function Dialogue.wrapBattleSay(methodName)
         end
         local displayText = Dialogue.rewriteBattleText(self, text)
         hostCall("noteBattleLine", self, text or displayText)
+        if Dialogue.isFaintText(text) or Dialogue.isFaintText(displayText) then
+            Dialogue.scrubFinishCalls(self)
+        end
         local pendingNpcOrder
         if hostCall("fieldFlowsText", self) and mon and isEnemy then
             local narrative = Dialogue.rewriteLevelUpText(text)
@@ -439,6 +481,13 @@ function Dialogue.wrapBattleSay(methodName)
                         end
                     end
                 end
+            end
+        end
+        if reaction and Dialogue.isFinishCallText(reaction) then
+            local foe = self.enemy and self.enemy.mon
+            if (foe and (foe.hp or 0) <= 0)
+                or Dialogue.isFaintText((self.current and self.current.text) or "") then
+                reaction = nil
             end
         end
         if reaction then

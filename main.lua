@@ -1209,6 +1209,8 @@ return function(mod)
             end
             local countering = user.isPlayer and target and not target.isPlayer
                 and state.mode == "counter" and not state.boosted
+                and not battle._arNoCounterThisTurn
+                and not battle._arChargeNow
             if countering then
                 state.counterWhiffed = true
                 state.mode = nil
@@ -3430,6 +3432,7 @@ return function(mod)
             else
                 battle._arReactLocked = true
             end
+            battle._arNoCounterThisTurn = true
             battle._arChargeNow = true
             local ok, err = pcall(battle.performMove, battle, user, target, action)
             battle._arChargeNow = nil
@@ -4145,9 +4148,13 @@ return function(mod)
                 return nil
             end
             if opt("anime_move_calls") and enemyLooksWeak(battle) then
-                return pickFormatted(S.PLAYER_FINISH_CALLS, bare, moveName)
-                    or ("Finish it!\n" .. bare .. "!"), nil, false,
-                    { side = "player", kind = "attack" }
+                -- Faint owns the exit. Do not queue "Finish it!" behind it.
+                local foe = battle.enemy and battle.enemy.mon
+                if foe and (foe.hp or 0) > 0 then
+                    return pickFormatted(S.PLAYER_FINISH_CALLS, bare, moveName)
+                        or ("Finish it!\n" .. bare .. "!"), nil, false,
+                        { side = "player", kind = "attack" }
+                end
             end
             return nil
         end
