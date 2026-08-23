@@ -120,10 +120,11 @@ jobs:
               sys.exit(1)
           faces = [n for n in names
                    if n.startswith("assets/portrait/") and n.endswith(".png")]
-          if len(faces) < 1000:
+          # Only the eight moods the game loads (not every PMD root PNG).
+          if len(faces) < 800:
               print(
                   f"ERROR: ZIP has {len(faces)} portrait PNGs "
-                  "(Gen 1 roots must be tracked; see .gitignore)",
+                  "(expected the 8 used Gen 1 moods; see .gitignore)",
                   file=sys.stderr,
               )
               sys.exit(1)
