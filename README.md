@@ -2,6 +2,14 @@
 
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
+
+<img width="800" height="639" alt="ScreenRecording2026-08-23at1 51 54AM-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/b482e6a3-9311-4389-99c7-74a8a00710c6" />
+
+<img width="800" height="639" alt="ScreenRecording2026-08-23at1 11 26AM-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/1a6da062-aef2-4c18-b513-8e5cfe1d9b8a" />
+
+
+
+
 <p align="center">
   <img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" style="display: inline-block; margin-right: 8px;" />
   <img width="550" height="410" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
