@@ -9065,6 +9065,69 @@ function tests.react_chips_follow_the_mon()
   eq(ry, 90 - UI.CHIP_H - UI.REACT_CHIP_LIFT, "REACT pill sits over the mon")
   truthy(UI.CHIP_AIR >= 4, "emotion pill has a gap above the HP row")
   eq(UI.HP_FACE_GAP, 0, "HP row hugs the portrait")
+
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local player = {
+    _arFieldBattler = true,
+    _arFieldSide = "player",
+    px = 40, py = 90, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    frame = 1,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 20, mon = { name = "GEODUDE", stats = { hp = 20 } } },
+    game = {
+      overworld = { camera = { x = 0, y = 0 }, entities = { player } },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.armStatusChip(battle, "player", "DODGE")
+  local spriteX = (player.px or 0) + 8
+  local spriteY = (player.py or 0) - (player._fieldBarLift or 0)
+  local chipX, chipY = UI.reactChipAboveMon(spriteX, spriteY)
+  local function sawChip()
+    for i = 1, #painted do
+      if painted[i].y == chipY then
+        return true
+      end
+    end
+    return false
+  end
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  truthy(not sawChip(), "HUD pass does not paint REACT on the mon")
+  painted = {}
+  UI.drawReactChips(battle, 0, 0)
+  love = prevLove
+  truthy(sawChip(), "REACT pill paints over the battler on the overlay")
+  local hit
+  for i = 1, #painted do
+    if painted[i].y == chipY then
+      hit = painted[i]
+      break
+    end
+  end
+  truthy(hit and hit.x <= chipX and (hit.x + 40) >= chipX,
+    "REACT pill is centered on the sprite X")
 end
 
 function tests.emotions_chip_ink_is_always_dark()

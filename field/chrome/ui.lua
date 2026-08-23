@@ -12,10 +12,11 @@
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
 --
--- Battler chrome (HP / Focus / chips / face) is authored on the UI overlay
--- corners, then docked to the window via setBattleUIAnchor (same path as
--- Gen1BetterMenus / WideBattle EXTENDED). Move chrome stays in the letterbox.
--- Floor / cover / projectiles still paint from Lifecycle.drawWorldOverlay.
+-- Battler chrome (HP / Focus / emotion pills / face) is authored on the UI
+-- overlay corners, then docked via setBattleUIAnchor. REACT / MISS chips
+-- paint on the full 160×144 battle overlay (same pass as projectiles) so
+-- they sit on the mon. Move chrome stays in the letterbox. Floor / cover
+-- still paint from Lifecycle.drawWorldOverlay.
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -876,8 +877,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
             end
 
-            -- Emotion pill stays on the HUD. REACT / MISS follows the mon.
-            local reactChip = statusChip(battle, item.side)
+            -- Emotion pill stays on the HUD. REACT / MISS paints later on
+            -- the full battle overlay (drawReactChips) so the HUD crop
+            -- cannot clip it off the battler.
             local moodSpec = select(1, moodChipOf(battle, item.side == "player"))
             local moodTop = moodSpec and ((UI.CHIP_H or 13) + (UI.CHIP_AIR or 4)) or 0
             local faceOn = type(UI.faceEnabled) == "function" and UI.faceEnabled(battle)
@@ -967,11 +969,6 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 local mx, my = UI.moodChipAboveHp(x, y, extraTop)
                 drawStatusChip(g, Font, moodSpec, mx, my, canvasW)
             end
-            -- DODGE / BRACE / COVER / HOLD / MISS sits over the battler.
-            if reactChip then
-                local rx, ry = UI.reactChipAboveMon(spriteX, spriteY)
-                drawStatusChip(g, Font, reactChip, rx, ry, canvasW)
-            end
             -- PMD portrait under the HP row.
             if faceImg and (faceA or 1) > 0.02 and fx then
                 UI.drawFace(g, faceImg, fx, fy, fs, faceA)
@@ -981,6 +978,45 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 local bx, by, bw, bh = UI.hudStackBox(fx, fy, fs, stackH)
                 UI.anchorFieldHud(battle, item.side, bx, by, bw, bh)
             end
+        end
+    end
+    resetTint(g)
+end
+
+-- DODGE / BRACE / COVER / HOLD / MISS on the 160×144 battle overlay.
+-- Must not run inside beginBattleHUDPass: that canvas is cropped to the
+-- corner HP stack, so a chip at the sprite would never reach the window.
+function UI.drawReactChips(battle, camX, camY)
+    if not (love and love.graphics) then
+        return
+    end
+    local g = love.graphics
+    local Font = font()
+    camX = camX or 0
+    camY = camY or 0
+    local ren = battle and battle.game and battle.game.renderer
+    local ow = battle and battle.game and battle.game.overworld
+    if (camX == 0 and camY == 0) and ow and ow.camera then
+        camX = ow.camera.x or 0
+        camY = ow.camera.y or 0
+    end
+    local canvasW = select(1, overlaySize(ren))
+    for _, item in ipairs({
+        { side = "player", battler = battle and battle.player },
+        { side = "enemy",  battler = battle and battle.enemy },
+    }) do
+        local ent = fieldEntity(battle, item.side)
+        local chip = statusChip(battle, item.side)
+        if chip and ent and item.battler and not ent.hidden and not ent._removed then
+            local lift = UI.barLift(ent)
+            local wx = (ent.px or 0) - camX + 8
+            local wy = (ent.py or 0) - camY - lift
+            local spriteX, spriteY = wx, wy
+            if Coords and type(Coords.worldViewToUi) == "function" then
+                spriteX, spriteY = Coords.worldViewToUi(wx, wy, ren)
+            end
+            local rx, ry = UI.reactChipAboveMon(spriteX, spriteY)
+            drawStatusChip(g, Font, chip, rx, ry, canvasW)
         end
     end
     resetTint(g)
@@ -1309,6 +1345,8 @@ function UI.draw(battle, style)
         pcall(ren.endBattleHUDPass, ren, hudPrev)
     end
     resetTint(g)
+    -- After the HUD crop: chips sit on the same overlay as projectiles.
+    UI.drawReactChips(battle)
     local paintedDialogue = false
     if state.showCommand then
         drawCommand(g, Font, battle)
