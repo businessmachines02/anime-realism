@@ -60,9 +60,10 @@ local HIT_SFX = {
 
 -- Engine Sound.playMove is one Game Boy SFX bus: a new row either drops or
 -- stops the last source. FIELD stacks voices and ducks whatever is still up.
-Audio.DUCK = 0.55
+-- Keep attack voices well under the engine's 0.8 base — overlaps add up.
+Audio.DUCK = 0.45
 Audio.MAX_VOICES = 8
-Audio.VOICE_VOL = 0.80
+Audio.VOICE_VOL = 0.32
 
 local live = {}
 local protoCache = {}
