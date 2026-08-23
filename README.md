@@ -3,23 +3,35 @@
 A [Gen1Recomp](https://github.com/bryanthaboi/gen1recomp) mod for anime-style immersion: Play by feel instead of numbers, and experience the major overhaul of the REACT battle system focused on live overworld field battles. In the anime, you never see a health bar or level — just whether a Pokémon looks strong, tired, or ready to keep fighting, and now, battles play **out in the overworld** with dynamic reactions and focus-based mechanics for a more cinematic feel.
 
 
-<img width="800" height="639" alt="ScreenRecording2026-08-23at1 51 54AM-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/b482e6a3-9311-4389-99c7-74a8a00710c6" />
+<!--
+  Note: GitHub Markdown (including on readmes shown on github.com) does not support scripting or dynamic "loading" indicators for images.
+  However, you can provide a fallback alt text or a placeholder image (which will be visible if the image fails to load),
+  or you can visually indicate that an image is "loading"—but in practice, images either display or they don't, and users will see a blank box until loaded.
+  The best user hint is to provide descriptive alt text. You can also add a note for users with slow connections.
+-->
 
-<img width="800" height="639" alt="ScreenRecording2026-08-23at1 11 26AM-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/1a6da062-aef2-4c18-b513-8e5cfe1d9b8a" />
+<!-- Loading note for readers (optional, up to you): -->
+<p align="center"><i>(Large gifs and images below - may take a moment to load)</i></p>
 
+<img width="800" height="639" alt="Overworld FIELD battle in progress (loading…)" src="https://github.com/user-attachments/assets/b482e6a3-9311-4389-99c7-74a8a00710c6" />
 
-
+<img width="800" height="639" alt="Aerial view of pad battler animation (loading…)" src="https://github.com/user-attachments/assets/1a6da062-aef2-4c18-b513-8e5cfe1d9b8a" />
 
 <p align="center">
-  <img width="550" height="410" alt="ezgif com-optimize" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" style="display: inline-block; margin-right: 8px;" />
-  <img width="550" height="410" alt="added-animations-ezgif com-optimize" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
+  <img width="550" height="410" alt="Battle action freeze-frame (loading…)" src="https://github.com/user-attachments/assets/cd3cd582-08dc-4b5a-8e24-87603efa9c53" style="display: inline-block; margin-right: 8px;" />
+  <img width="550" height="410" alt="Special animation close-up (loading…)" src="https://github.com/user-attachments/assets/74ea5cd7-0f45-41cd-ab26-db53226e0c43" style="display: inline-block;" />
 </p>
 <p align="center">
-  <img width="400" height="298" alt="water" src="https://github.com/user-attachments/assets/eb277dcf-562a-4adc-a44d-481071a1c10a" style="display: inline-block; vertical-align: top; margin-right: 8px;" />
-  <img width="400" height="298" alt="wild-encounter" src="https://github.com/user-attachments/assets/6f86a3a4-6e48-43c2-a0df-c94ac85b4449" style="display: inline-block; vertical-align: top;" />
+  <img width="400" height="298" alt="Surf on water (loading…)" src="https://github.com/user-attachments/assets/eb277dcf-562a-4adc-a44d-481071a1c10a" style="display: inline-block; vertical-align: top; margin-right: 8px;" />
+  <img width="400" height="298" alt="Wild encounter scene (loading…)" src="https://github.com/user-attachments/assets/6f86a3a4-6e48-43c2-a0df-c94ac85b4449" style="display: inline-block; vertical-align: top;" />
 </p>
-<img width="800" height="614" alt="caves-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/56d2ea5f-9469-493f-8d89-b78ed2815563" />
+<img width="800" height="614" alt="Cave battle sequence (loading…)" src="https://github.com/user-attachments/assets/56d2ea5f-9469-493f-8d89-b78ed2815563" />
 
+<!--
+  For a detailed explanation: GitHub does not support JavaScript or dynamic content in rendered markdown, so there's
+  no way to show a spinner or actual "loading" overlay on image load. All you can do is prepare your `alt` text
+  (shown while loading for some users) and optionally inform readers that images may take a moment.
+-->
 
 
 
