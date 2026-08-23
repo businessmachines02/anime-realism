@@ -127,6 +127,14 @@ jobs:
                   file=sys.stderr,
               )
               sys.exit(1)
+          carets = [n for n in names if "^" in n]
+          if carets:
+              print(
+                  f"ERROR: ZIP has {len(carets)} '^' names; "
+                  "PhysicsFS cannot mount those",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
           print("ZIP root check: ok")
           print(f"  files: {len(names)}")
           print(f"  portraits: {len(faces)}")

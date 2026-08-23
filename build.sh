@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Build an installable Gen1Recomp mod zip (package folders preserved).
+#
+# One pass through Python's zipfile. Incremental `zip a.zip file` updates
+# plus PMD flip names (`Happy^.png`) make love.filesystem.mount fail
+# ("that .zip could not be opened").
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -55,45 +59,93 @@ VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vers
 OUT="${ID}-${VERSION}.zip"
 
 rm -f "$OUT"
-zip -q -r "$OUT" \
-  main.lua manifest.json LICENSE \
-  lib \
-  hud \
-  battle \
-  field \
-  -x "field/tests/*" \
-  -x "field/tests/**" \
-  -x "*.DS_Store" \
-  -x "**/.DS_Store"
 
-if [[ -f "$ROOT/assets/follower-kit.md" ]]; then
-  zip -q "$OUT" assets/follower-kit.md
-fi
-if [[ -f "$ROOT/assets/followers/bake_pmd.py" ]]; then
-  zip -q "$OUT" assets/followers/bake_pmd.py
-fi
-if [[ -d "$ROOT/assets/followers/pmd" ]]; then
-  zip -q -r "$OUT" assets/followers/pmd \
-    -x "**/.DS_Store"
-fi
-# Baked kits only — never pack PMD source folders (0001/…).
-while IFS= read -r kit; do
-  zip -q "$OUT" "$kit"
-done < <(find assets/followers -maxdepth 1 \( -name 'follower_*.png' -o -name 'follower_*.kit' \) | sort)
+python3 - <<'PY' "$OUT"
+import sys
+import zipfile
+from pathlib import Path
 
-# Gen 1 PMD portraits only (root emotion PNGs + credits). Later-gen /
-# form folders stay on disk and are not shipped.
-if [[ -d "$ROOT/assets/portrait" ]]; then
-  for i in $(seq 1 151); do
-    dex="$(printf '%04d' "$i")"
-    dir="assets/portrait/$dex"
-    if [[ -d "$dir" ]]; then
-      while IFS= read -r face; do
-        zip -q "$OUT" "$face"
-      done < <(find "$dir" -maxdepth 1 \( -name '*.png' -o -name 'credits.txt' \) | sort)
-    fi
-  done
-fi
+out = Path(sys.argv[1])
+files = []
+
+
+def add_file(path):
+    p = Path(path)
+    if not p.is_file():
+        return
+    name = p.as_posix()
+    if "^" in name or name.endswith(".DS_Store"):
+        return
+    files.append(p)
+
+
+def add_tree(root, skip_parts=()):
+    root = Path(root)
+    if not root.is_dir():
+        return
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if any(part in skip_parts for part in p.parts):
+            continue
+        add_file(p)
+
+
+add_file("main.lua")
+add_file("manifest.json")
+add_file("LICENSE")
+add_tree("lib")
+add_tree("hud")
+add_tree("battle")
+add_tree("field", skip_parts=("tests",))
+add_file("assets/follower-kit.md")
+add_file("assets/followers/bake_pmd.py")
+add_tree("assets/followers/pmd")
+for p in sorted(Path("assets/followers").glob("follower_*.png")):
+    add_file(p)
+for p in sorted(Path("assets/followers").glob("follower_*.kit")):
+    add_file(p)
+
+portrait = Path("assets/portrait")
+if portrait.is_dir():
+    for i in range(1, 152):
+        folder = portrait / f"{i:04d}"
+        if not folder.is_dir():
+            continue
+        for p in sorted(folder.iterdir()):
+            if p.is_file() and (p.suffix == ".png" or p.name == "credits.txt"):
+                add_file(p)
+
+seen = set()
+ordered = []
+for p in files:
+    key = p.as_posix()
+    if key in seen:
+        continue
+    seen.add(key)
+    ordered.append(p)
+
+with zipfile.ZipFile(
+    out, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=False
+) as zf:
+    for p in ordered:
+        zf.write(p, p.as_posix())
+
+print(f"packed {len(ordered)} files")
+PY
 
 echo "Built $ROOT/$OUT"
-unzip -l "$OUT"
+python3 - <<'PY' "$OUT"
+import sys, zipfile
+from pathlib import Path
+p = Path(sys.argv[1])
+with zipfile.ZipFile(p) as zf:
+    names = zf.namelist()
+faces = [n for n in names if n.startswith("assets/portrait/") and n.endswith(".png")]
+carets = [n for n in names if "^" in n]
+print(f"  {p.stat().st_size} bytes, {len(names)} entries, {len(faces)} portraits")
+if carets:
+    raise SystemExit(f"error: zip contains {len(carets)} '^' names (PhysicsFS cannot mount)")
+if "manifest.json" not in names or "main.lua" not in names:
+    raise SystemExit("error: zip missing manifest.json or main.lua at root")
+PY
