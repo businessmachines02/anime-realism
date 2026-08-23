@@ -458,13 +458,33 @@ function H.impactKick(session, spec)
         return false
     end
     local heavy = spec.powerful == true or spec.clash == true
-    if spec.noStop ~= true and spec.clash ~= true and (session._clashSlowT or 0) <= 0 then
-        session._hitStopT = heavy and 0.08 or 0.045
+    -- Clash already owns the clock. A short contact punch-in still wants a freeze.
+    local clashHold = session._clashPunch == true
+        or spec.clash == true
+        or (session._clashSlowDur or 0) >= 0.55
+    if spec.noStop ~= true and not clashHold then
+        session._hitStopT = heavy and 0.12 or 0.07
     end
-    session._camShakeDur = heavy and 0.16 or 0.10
+    session._camShakeDur = heavy and 0.24 or 0.16
     session._camShakeT = session._camShakeDur
-    session._camShakeAmp = heavy and 2.8 or 1.6
+    session._camShakeAmp = heavy and 3.8 or 2.6
     return true
+end
+
+--- Short punch-in + slow-mo on a connecting hit. Clash / finishing stay bigger.
+function H.contactFocus(session, side, spec)
+    spec = spec or {}
+    if not session or session._clashPunch then
+        return false
+    end
+    return H.punchIn(session, side, {
+        mode = "hit",
+        focus = spec.focus or "user",
+        hold = spec.hold or 0.44,
+        slow = spec.slow or 0.22,
+        lift = spec.lift or 5,
+        opts = spec.opts,
+    })
 end
 
 function H.cueMoveId(opts)

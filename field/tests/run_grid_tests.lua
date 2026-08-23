@@ -2869,12 +2869,44 @@ function tests.powerful_moves_push_and_impact()
   truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
   truthy((session._hitStopT or 0) > 0, "contact freezes a few frames")
   truthy((session._camShakeT or 0) > 0, "contact bumps the camera")
+  truthy((session._clashSlowT or 0) > 0 and (session._clashSlowT or 0) < 0.45,
+    "regular hit gets a short punch-in, not a clash hold")
+  truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
+    "regular hit punches the camera in")
 
   Projectiles.clear(session)
   enemy.padU = 4
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
   enemy._heavyHit = nil
   enemy.lastAnim = nil
+  session._clashSlowT = nil
+  session._clashPunch = nil
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    moveId = "EMBER",
+    movePower = 40,
+    moveType = "FIRE",
+    category = "special",
+    push = false,
+  }), "regular special hit cue")
+  eq(enemy.lastAnim, "hit", "special still plays a flinch")
+  local specialStyles = {}
+  for i = 1, #(session.projectiles or {}) do
+    specialStyles[session.projectiles[i].style] = true
+  end
+  truthy(specialStyles.light_hit, "special hit still sparks on the target")
+  truthy(specialStyles.special_impact, "special hit paints a land burst")
+  truthy(specialStyles.ground_kick, "special hit still kicks the tile")
+  truthy(not specialStyles.power_hit, "regular special is not the heavy burst")
+  truthy((session._clashSlowT or 0) >= 0.20 and (session._clashSlowT or 0) < 0.45,
+    "special punch-in is longer than a physical, shorter than a clash")
+
+  Projectiles.clear(session)
+  enemy.padU = 4
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  enemy._heavyHit = nil
+  enemy.lastAnim = nil
+  session._clashSlowT = nil
+  session._clashPunch = nil
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
     moveId = "TACKLE",
     movePower = 35,

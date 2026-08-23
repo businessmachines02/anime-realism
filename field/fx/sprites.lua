@@ -934,7 +934,7 @@ function Sprites.kitColForAnim(ent, anim, moving)
         or (style == "lift" and 0.46)
         or 0.38
   elseif anim == "hit" then
-    dur = (ent and ent._heavyHit) and 0.52 or 0.42
+    dur = (ent and ent._heavyHit) and 0.62 or 0.56
   end
   dur = dur or 0.40
   if (ent and ent._kitSheet) or ticks or n > 4 then
@@ -2653,7 +2653,7 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       self.animT = (self.animT or 0) + dt
       local heavy = self._heavyHit == true
       local kit = Sprites.usesKitPose(self, "hit")
-      local knock = math.min(1, self.animT / (heavy and 0.22 or 0.18))
+      local knock = math.min(1, self.animT / (heavy and 0.26 or 0.22))
       local tx = self.basePx - (towardX or self.basePx)
       local ty = self.basePy - (towardY or self.basePy)
       local len = math.sqrt(tx * tx + ty * ty)
@@ -2662,16 +2662,22 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       else
         tx, ty = 0, 1
       end
-      local knockReach = heavy and (kit and 10 or 14) or (kit and 6 or 8)
-      local knockLift = heavy and (kit and 4 or 7) or (kit and 3 or 5)
+      local knockReach = heavy and (kit and 12 or 16) or (kit and 8 or 11)
+      local knockLift = heavy and (kit and 5 or 8) or (kit and 4 or 6)
       ox = ox + tx * knock * knockReach
       oy = oy + ty * knock * knockLift
+      local squash = math.sin(math.min(1, self.animT / 0.16) * math.pi)
+      self.drawScaleX = 1 + squash * (kit and 0.08 or 0.12)
+      self.drawScaleY = 1 - squash * (kit and 0.10 or 0.16)
+      oy = oy + squash * (kit and 1.4 or 2.2)
       if not kit then
-        local flash = (math.floor(self.animT * 22) % 2 == 0) and 1 or -1
+        local flash = (math.floor(self.animT * 20) % 2 == 0) and 1 or -1
         ox = ox + flash * (heavy and 6 or 4)
         oy = oy + 2
+        self.drawAngle = math.sin(math.min(1, self.animT / 0.56) * math.pi)
+            * (tx >= 0 and 1 or -1) * (heavy and 0.16 or 0.12)
       end
-      local hitDur = heavy and 0.52 or 0.42
+      local hitDur = heavy and 0.62 or 0.56
       if kit then
         hitDur = Sprites.kitClipDuration(self, "hit", hitDur)
       end
@@ -2679,6 +2685,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
         self.anim = "idle"
         self.animT = 0
         self._heavyHit = nil
+        self.drawScaleX = nil
+        self.drawScaleY = nil
+        self.drawAngle = 0
       end
     elseif anim == "tumble" then
       -- Heavy knock: farther slip and a longer recover than a flinch.

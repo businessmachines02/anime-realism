@@ -3082,50 +3082,77 @@ end
 local function drawLightHit(g, p, x, y, t)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local fade = 1 - t
-  g.setColor(1, 1, 1, 0.75 * fade)
-  g.circle("fill", x, y, 1.6 * (1 - t * 0.4))
-  for i = 1, 5 do
-    local a = i * 1.2566 + t * 2.4
-    local dist = 2.2 + t * 8
+  local flash = math.max(0, 1 - t * 1.8)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.38 * flash)
+    g.circle("fill", x, y, 5 + t * 10)
+    g.setColor(1, 1, 1, 0.62 * flash)
+    g.circle("fill", x, y, 2.4)
+  end)
+  g.setLineWidth(2.1)
+  g.setColor(c[1], c[2], c[3], 0.70 * fade)
+  g.circle("line", x, y, 3 + t * 13)
+  g.setLineWidth(1.1)
+  g.setColor(1, 1, 1, 0.42 * fade)
+  g.circle("line", x, y, 1.8 + t * 8)
+  g.setColor(1, 1, 1, 0.82 * fade)
+  g.circle("fill", x, y, 2.0 * (1 - t * 0.35))
+  for i = 1, 8 do
+    local a = i * 0.7854 + t * 2.1
+    local dist = 2.6 + t * 11
     local px = x + math.cos(a) * dist
-    local py = y + math.sin(a) * dist * 0.72 - t * 2
-    g.setColor(c[1], c[2], c[3], 0.85 * fade)
-    g.circle("fill", px, py, 1.3)
-    g.setColor(1, 1, 1, 0.55 * fade)
-    g.circle("fill", px - 0.3, py - 0.3, 0.55)
+    local py = y + math.sin(a) * dist * 0.72 - t * 2.4
+    g.setColor(c[1], c[2], c[3], 0.90 * fade)
+    g.circle("fill", px, py, 1.45)
+    g.setColor(1, 1, 1, 0.60 * fade)
+    g.circle("fill", px - 0.3, py - 0.3, 0.6)
   end
-  drawContact(g, p, x, y, math.min(1, t * 1.15))
+  for i = 1, 4 do
+    local a = i * (math.pi * 0.5) + t * 0.8
+    g.setColor(c[1], c[2], c[3], 0.72 * fade)
+    g.setLineWidth(1.6)
+    g.line(x + math.cos(a) * 2, y + math.sin(a) * 2,
+      x + math.cos(a) * (7 + t * 8), y + math.sin(a) * (5 + t * 6))
+  end
+  if g.ellipse then
+    g.setColor(c[1], c[2], c[3], 0.28 * fade)
+    g.ellipse("fill", x, y + 5, 7 + t * 5, 2.2)
+  end
+  drawContact(g, p, x, y, math.min(1, t * 1.05))
 end
 
 -- Extra beat when a special travel shot arrives: rings, shards, typed flash.
 local function drawSpecialImpact(g, p, x, y, t)
   local c = p.color or { 0.85, 0.75, 1.00 }
   local fade = 1 - t
-  local flash = math.max(0, 1 - t * 2.2)
+  local flash = math.max(0, 1 - t * 1.55)
   withAdd(g, function()
-    g.setColor(c[1], c[2], c[3], 0.40 * flash)
-    g.circle("fill", x, y, 6 + t * 11)
-    g.setColor(1, 1, 1, 0.58 * flash)
-    g.circle("fill", x, y, 2.6)
+    g.setColor(c[1], c[2], c[3], 0.48 * flash)
+    g.circle("fill", x, y, 8 + t * 16)
+    g.setColor(1, 1, 1, 0.70 * flash)
+    g.circle("fill", x, y, 3.4)
   end)
-  g.setLineWidth(2.2)
-  g.setColor(c[1], c[2], c[3], 0.75 * fade)
-  g.circle("line", x, y, 3.5 + t * 15)
-  g.setLineWidth(1.2)
-  g.setColor(1, 1, 1, 0.50 * fade)
-  g.circle("line", x, y, 2 + t * 9)
-  for i = 1, 8 do
-    local a = i * (math.pi / 4) + t * 0.9
-    local d0 = 3 + t * 12
-    local d1 = d0 + 5 + (i % 2) * 2
-    g.setColor(c[1], c[2], c[3], 0.88 * fade)
-    g.setLineWidth(1.9)
+  g.setLineWidth(2.6)
+  g.setColor(c[1], c[2], c[3], 0.82 * fade)
+  g.circle("line", x, y, 4.2 + t * 20)
+  g.setLineWidth(1.6)
+  g.setColor(1, 1, 1, 0.58 * fade)
+  g.circle("line", x, y, 2.6 + t * 13)
+  g.setLineWidth(1.0)
+  g.setColor(c[1], c[2], c[3], 0.40 * fade)
+  g.circle("line", x, y, 1.4 + t * 8)
+  for i = 1, 12 do
+    local a = i * (math.pi / 6) + t * 0.85
+    local d0 = 3.4 + t * 14
+    local d1 = d0 + 6 + (i % 2) * 3
+    g.setColor(c[1], c[2], c[3], 0.90 * fade)
+    g.setLineWidth((i % 2 == 0) and 2.2 or 1.5)
     g.line(x + math.cos(a) * d0, y + math.sin(a) * d0 * 0.7,
       x + math.cos(a) * d1, y + math.sin(a) * d1 * 0.7)
   end
   if g.ellipse then
-    g.setColor(c[1], c[2], c[3], 0.30 * fade)
-    g.ellipse("fill", x, y + 4, 8 + t * 5, 2.4)
+    g.setColor(c[1], c[2], c[3], 0.36 * fade)
+    g.ellipse("fill", x, y + 5, 11 + t * 7, 3.0)
   end
 end
 
@@ -5227,7 +5254,7 @@ function Projectiles.lightHit(session, side, opts)
     style = "light_hit",
     glitz = glitz,
     sx = x, sy = y, ex = x, ey = y,
-    duration = 0.32,
+    duration = 0.46,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType] or TYPE_COLORS.NORMAL,
   })
@@ -5317,8 +5344,8 @@ function Projectiles.groundKick(session, side, opts)
     kind = "effect",
     style = "ground_kick",
     glitz = glitz,
-    sx = x, sy = y + 5, ex = x + fx * 6, ey = y + 3,
-    duration = 0.40,
+    sx = x, sy = y + 5, ex = x + fx * 8, ey = y + 3,
+    duration = 0.50,
     arc = 4,
     color = GROUND_KICK_COLORS[glitz] or GROUND_KICK_COLORS.dust,
   })
@@ -5682,7 +5709,7 @@ function Projectiles.specialImpact(session, spec)
     style = "special_impact",
     glitz = spec.glitz or moveType,
     sx = x, sy = y, ex = x, ey = y,
-    duration = 0.40,
+    duration = 0.56,
     arc = 0,
     color = spec.color or TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
     pinTip = spec.followSide ~= nil,

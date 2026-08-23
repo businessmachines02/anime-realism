@@ -516,7 +516,14 @@ return function(Cues)
         end
 
         if type(nudgeCamera) == "function" and battle and not clash then
-            nudgeCamera(battle, side, 0.35)
+            nudgeCamera(battle, side, (category == "special") and 0.52 or 0.44)
+        end
+        if not clash and not finishing then
+            H.contactFocus(session, side, {
+                hold = (category == "special") and 0.50 or 0.42,
+                slow = (category == "special") and 0.28 or 0.20,
+                opts = opts,
+            })
         end
         local Audio = session._deps and session._deps.Audio
         if Audio and type(Audio.playHit) == "function" then
@@ -551,12 +558,19 @@ return function(Cues)
         if Projectiles and type(Projectiles.lightHit) == "function" then
             Projectiles.lightHit(session, side, opts)
         end
+        local cat = category or session._lastAttackCategory or "physical"
+        if cat == "special" and Projectiles and type(Projectiles.specialImpact) == "function" then
+            Projectiles.specialImpact(session, {
+                followSide = side,
+                moveType = opts.moveType,
+                color = opts.color,
+            })
+        end
         if Projectiles and type(Projectiles.groundKick) == "function" then
             Projectiles.groundKick(session, side, opts)
         end
-        local cat = category or session._lastAttackCategory or "physical"
         -- Both can shove; physical more often / more reliably.
-        local pushChance = (cat == "special") and 0.45 or 0.78
+        local pushChance = (cat == "special") and 0.82 or 0.94
         if opts.push == false then
             pushChance = 0
         elseif opts.push == true then
