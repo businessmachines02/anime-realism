@@ -50,6 +50,7 @@ function Portraits.emotionFile(mood)
         stunned = "Stunned",
         surprised = "Surprised",
         sigh = "Sigh",
+        happy = "Happy",
     }
     return map[tostring(mood or "")] or "Normal"
 end

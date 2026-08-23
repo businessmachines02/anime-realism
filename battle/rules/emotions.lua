@@ -12,6 +12,7 @@ Emotions.HEAVY_HIT = 0.25
 Emotions.LEAD_MARGIN = 0.12
 Emotions.FLASH_TURNS = 1
 Emotions.ANGRY_CRIT_TURNS = 2
+Emotions.HAPPY_KO_TURNS = 3
 
 Emotions.FILE = {
     normal = "Normal",
@@ -22,6 +23,7 @@ Emotions.FILE = {
     stunned = "Stunned",
     surprised = "Surprised",
     sigh = "Sigh",
+    happy = "Happy",
 }
 
 -- Face stays up while the mood is not normal, then fades out.
@@ -32,10 +34,11 @@ Emotions.CHIP = {
     angry = { text = "ANGRY", fill = { 0.82, 0.22, 0.16 }, ink = { 1.00, 0.96, 0.94 } },
     pain = { text = "TIRED", fill = { 0.56, 0.34, 0.40 }, ink = { 1.00, 0.94, 0.94 } },
     determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = { 0.16, 0.10, 0.04 } },
-    worried = { text = "WARY", fill = { 0.86, 0.78, 0.30 }, ink = { 0.18, 0.14, 0.04 } },
+    worried = { text = "WRRY", fill = { 0.86, 0.78, 0.30 }, ink = { 0.18, 0.14, 0.04 } },
     stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = { 0.12, 0.10, 0.22 } },
     sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = { 0.10, 0.12, 0.16 } },
-    surprised = { text = "WOW", fill = { 0.96, 0.84, 0.22 }, ink = { 0.16, 0.12, 0.04 } },
+    surprised = { text = "!!!!", fill = { 0.96, 0.84, 0.22 }, ink = { 0.16, 0.12, 0.04 } },
+    happy = { text = "HAPPY", fill = { 0.98, 0.72, 0.28 }, ink = { 0.18, 0.10, 0.04 } },
 }
 
 local host = {}
@@ -54,6 +57,7 @@ local function freshSide()
         misses = 0,
         critsTaken = 0,
         angryTurns = 0,
+        happyTurns = 0,
         hitsLanded = 0,
         lastHeavy = false,
         announced = nil,
@@ -193,6 +197,7 @@ Emotions.HEAT = {
     stunned = { powerMul = 0.92, takenMul = 1.10, accuracy = -0.10, dodge = -0.10 },
     sigh = { powerMul = 1.00, takenMul = 1.00, accuracy = -0.04, dodge = 0.00 },
     surprised = { powerMul = 1.00, takenMul = 1.06, accuracy = 0.00, dodge = -0.04 },
+    happy = { powerMul = 1.00, takenMul = 1.00, accuracy = 0.00, dodge = 0.00 },
 }
 
 local function emptyMods()
@@ -292,6 +297,9 @@ local function derive(side, selfRatio, foeRatio)
     if selfRatio and selfRatio <= lowHpCut() then
         return "pain"
     end
+    if (side.happyTurns or 0) > 0 then
+        return "happy"
+    end
     if (side.misses or 0) >= 2 or (side.angryTurns or 0) > 0 then
         return "angry"
     end
@@ -364,6 +372,9 @@ local function tickSide(side)
     if (side.angryTurns or 0) > 0 then
         side.angryTurns = side.angryTurns - 1
     end
+    if (side.happyTurns or 0) > 0 then
+        side.happyTurns = side.happyTurns - 1
+    end
     if (side.hitsLanded or 0) > 0 then
         side.hitsLanded = side.hitsLanded - 1
     end
@@ -415,7 +426,19 @@ function Emotions.note(battle, ev)
             and (dmg / maxHP) >= Emotions.HEAVY_HIT then
             target.lastHeavy = true
         end
-    elseif kind == "faint" or kind == "switch" then
+    elseif kind == "faint" then
+        local _, isPlayer = resolveWho(st, battle, ev.side or ev.battler)
+        -- Our mon just scored the KO: show the Happy portrait.
+        if isPlayer == false then
+            st.player.flash = { mood = "happy", turns = Emotions.FLASH_TURNS }
+            st.player.happyTurns = Emotions.HAPPY_KO_TURNS
+        end
+        if isPlayer == true then
+            st.player = freshSide()
+        elseif isPlayer == false then
+            st.enemy = freshSide()
+        end
+    elseif kind == "switch" then
         local _, isPlayer = resolveWho(st, battle, ev.side or ev.battler)
         if isPlayer == true then
             st.player = freshSide()

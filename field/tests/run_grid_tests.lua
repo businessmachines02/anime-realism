@@ -634,15 +634,16 @@ function tests.move_hud_shows_b_pause_hint()
     moveIndex = 1,
     player = {
       curMoves = {
-        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+        { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 },
+        { id = "TAIL_WHIP", pp = 30 }, { id = "SCRATCH", pp = 0 },
       },
     },
     data = {
       moves = {
-        TACKLE = { name = "TACKLE", type = "NORMAL" },
-        GROWL = { name = "GROWL", type = "NORMAL" },
-        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL" },
-        SCRATCH = { name = "SCRATCH", type = "NORMAL" },
+        TACKLE = { name = "TACKLE", type = "NORMAL", pp = 35 },
+        GROWL = { name = "GROWL", type = "NORMAL", pp = 40 },
+        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL", pp = 30 },
+        SCRATCH = { name = "SCRATCH", type = "NORMAL", pp = 35 },
       },
     },
     game = {
@@ -659,6 +660,7 @@ function tests.move_hud_shows_b_pause_hint()
   package.loaded["src.render.Font"] = nil
   local hinted = false
   local listed = false
+  local sawHeaderPP = false
   local up, right, left, down = false, false, false, false
   for i = 1, #drawn do
     if drawn[i] == "B PAUSE" then
@@ -667,6 +669,9 @@ function tests.move_hud_shows_b_pause_hint()
     if drawn[i] == "TACKLE" then
       listed = true
     end
+    if drawn[i] == "PP 35/35" then
+      sawHeaderPP = true
+    end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
     if drawn[i] == "L" then left = true end
@@ -674,6 +679,7 @@ function tests.move_hud_shows_b_pause_hint()
   end
   truthy(hinted, "classic MOVE HUD tells the player to pause with B")
   truthy(listed, "classic MOVE HUD lists move names")
+  truthy(sawHeaderPP, "classic MOVE HUD shows selected PP on the B PAUSE row")
   truthy(up and right and left and down,
     "classic MOVE HUD labels slots U/R/L/D")
 end
@@ -695,6 +701,8 @@ function tests.diamond_move_hud_uses_compass()
       rectangle = function() end,
       push = function() end,
       pop = function() end,
+      translate = function() end,
+      scale = function() end,
     },
   }
   local battle = {
@@ -703,15 +711,16 @@ function tests.diamond_move_hud_uses_compass()
     moveIndex = 1,
     player = {
       curMoves = {
-        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+        { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 },
+        { id = "TAIL_WHIP", pp = 30 }, { id = "SCRATCH", pp = 35 },
       },
     },
     data = {
       moves = {
-        TACKLE = { name = "TACKLE" },
-        GROWL = { name = "GROWL" },
-        TAIL_WHIP = { name = "TAIL WHIP" },
-        SCRATCH = { name = "SCRATCH" },
+        TACKLE = { name = "TACKLE", pp = 35 },
+        GROWL = { name = "GROWL", pp = 40 },
+        TAIL_WHIP = { name = "TAIL WHIP", pp = 30 },
+        SCRATCH = { name = "SCRATCH", pp = 35 },
       },
     },
     game = {
@@ -726,14 +735,37 @@ function tests.diamond_move_hud_uses_compass()
   UI.draw(battle, "DIAMOND")
   love = prevLove
   package.loaded["src.render.Font"] = nil
-  local hinted, up, right = false, false, false
+  local hinted, up, right, sawHeaderPP = false, false, false, false
   for i = 1, #drawn do
     if drawn[i] == "B PAUSE" then hinted = true end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
+    if drawn[i] == "PP 35/35" then sawHeaderPP = true end
   end
   truthy(hinted, "diamond MOVE HUD keeps the B pause hint")
   truthy(up and right, "diamond MOVE HUD paints the U/R compass labels")
+  truthy(sawHeaderPP, "diamond MOVE HUD shows selected PP on the B PAUSE row")
+end
+
+function tests.move_hud_pp_label()
+  eq(UI.movePPLabel(nil, nil), nil, "missing move has no PP")
+  eq(UI.movePPLabel({}, { id = "TACKLE" }), nil, "unset PP is omitted")
+  eq(UI.movePPLabel({}, { id = "TACKLE", pp = 12 }), "12", "remaining PP")
+  eq(UI.movePPLabel({
+    data = { moves = { TACKLE = { pp = 35 } } },
+  }, { id = "TACKLE", pp = 12 }, true), "12/35", "remaining over max")
+  eq(UI.movePPLabel({}, { struggle = true, pp = 1 }), nil, "struggle has no PP")
+end
+
+function tests.hud_plate_thickens_in_caves()
+  local cave = { _arFieldSession = { coverScene = "cave" } }
+  truthy(UI.hudDark(cave), "caves use the dark HUD")
+  truthy(UI.hudPanelAlpha(cave) > UI.HUD_PANEL_A, "cave plate is thicker")
+  local grave = { _arFieldSession = { coverScene = "grave" } }
+  truthy(UI.hudDark(grave), "graves use the dark HUD")
+  local route = { _arFieldSession = { coverScene = "route" } }
+  truthy(not UI.hudDark(route), "route keeps the glass plate")
+  eq(UI.hudPanelAlpha(route), UI.HUD_PANEL_A, "route uses the glass alpha")
 end
 
 function tests.move_hud_style_defaults_to_classic()
@@ -8026,6 +8058,28 @@ function tests.emotions_hp_lead_and_hit_is_determined()
   E.clear(battle)
 end
 
+function tests.emotions_player_ko_flashes_happy()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 0, 100)
+  E.note(battle, { kind = "faint", side = "enemy" })
+  eq(E.mood(battle, true), "happy", "KO flashes happy on our mon")
+  eq(E.fileName("happy"), "Happy", "happy uses the Happy portrait")
+  eq(E.chip("happy").text, "HAPPY", "happy chip label")
+  eq(E.portraitMood(battle, true), "happy", "KO face is happy")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "happy", "happy holds after the flash turn")
+  E.clear(battle)
+end
+
+function tests.emotions_player_faint_is_not_a_party()
+  local E = loadEmotions()
+  local battle = moodBattle(0, 100, 80, 100)
+  E.note(battle, { kind = "faint", side = "player" })
+  eq(E.mood(battle, true) ~= "happy", true, "our faint is not a celebration")
+  eq(E.mood(battle, false) ~= "happy", true, "the foe does not celebrate")
+  E.clear(battle)
+end
+
 function tests.emotions_switch_clears_mood()
   local E = loadEmotions()
   local battle = moodBattle(80, 100, 80, 100)
@@ -8041,6 +8095,7 @@ end
 function tests.portraits_resolve_gen1_root_path()
   local P = loadPortraits()
   eq(P.relPath(4, "angry"), "assets/portrait/0004/Angry.png", "dex 4 angry")
+  eq(P.relPath(4, "happy"), "assets/portrait/0004/Happy.png", "dex 4 happy")
   eq(P.relPath(1, "normal"), "assets/portrait/0001/Normal.png", "dex 1 normal")
   eq(P.emotionFile("pain"), "Pain", "pain file")
   local battle = moodBattle(80, 100, 80, 100)

@@ -121,10 +121,62 @@ local function fitText(Font, value, maxWidth)
     return text .. "+"
 end
 
-local function box(g, x, y, w, h)
-    g.setColor(0.96, 0.92, 0.82, 0.96)
+-- Command / move HUD plate. Dialogue keeps the default `box` alpha.
+-- Dark scenes (caves, graves, dim floors) use a thicker plate so labels read.
+UI.HUD_PANEL_A = 0.36
+UI.HUD_PANEL_DARK_A = 0.78
+UI.HUD_DARK_SCENES = { cave = true, grave = true }
+UI.HUD_DARK_FLOOR = 0.32
+
+local function battleScene(battle)
+    local session
+    if type(UI.fieldSession) == "function" then
+        session = UI.fieldSession(battle)
+    end
+    session = session or (battle and (battle._arFieldSession or battle._arSession))
+    local scene = session and session.coverScene
+    if type(scene) == "string" and scene ~= "" then
+        return scene
+    end
+    local ok, Themes = pcall(require, "themes")
+    if ok and Themes and type(Themes.scene) == "function" then
+        return Themes.scene(battle)
+    end
+    return nil
+end
+
+function UI.hudDark(battle)
+    local scene = tostring(battleScene(battle) or "")
+    if UI.HUD_DARK_SCENES[scene] then
+        return true
+    end
+    local ok, Themes = pcall(require, "themes")
+    local kit = ok and Themes and type(Themes.kit) == "function" and Themes.kit(scene)
+    local floor = kit and kit.floor
+    if type(floor) == "table" then
+        local lum = 0.2126 * (tonumber(floor[1]) or 0)
+            + 0.7152 * (tonumber(floor[2]) or 0)
+            + 0.0722 * (tonumber(floor[3]) or 0)
+        return lum < (UI.HUD_DARK_FLOOR or 0.32)
+    end
+    return false
+end
+
+function UI.hudPanelAlpha(battle)
+    if UI.hudDark(battle) then
+        return UI.HUD_PANEL_DARK_A
+    end
+    return UI.HUD_PANEL_A
+end
+
+local function box(g, x, y, w, h, fillA)
+    fillA = tonumber(fillA)
+    if fillA == nil then
+        fillA = 0.96
+    end
+    g.setColor(0.96, 0.92, 0.82, fillA)
     g.rectangle("fill", x, y, w, h)
-    g.setColor(0.10, 0.07, 0.06, 1)
+    g.setColor(0.10, 0.07, 0.06, math.min(1, fillA + 0.40))
     g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
     if w > 3 and h > 3 then
         g.rectangle("line", x + 1.5, y + 1.5, w - 3, h - 3)
@@ -674,6 +726,45 @@ local function drawScaled(g, Font, text, x, y, scale)
     g.pop()
 end
 
+local function labelWidth(Font, text)
+    if Font and type(Font.getWidth) == "function" then
+        return tonumber(Font.getWidth(text)) or (#text * 8)
+    end
+    if Font and type(Font.width) == "function" then
+        return tonumber(Font.width(text)) or (#text * 8)
+    end
+    return #tostring(text or "") * 8
+end
+
+-- Dark-on-cream ink with a 1px light halo so cave floors cannot swallow labels.
+local function drawHudLabel(g, Font, text, x, y, scale, halo, alignRight, ink)
+    if not (Font and type(Font.draw) == "function") then
+        return
+    end
+    scale = scale or 1
+    ink = ink or { 0.08, 0.06, 0.05, 1 }
+    local ox = 0
+    if alignRight then
+        ox = -labelWidth(Font, text)
+    end
+    g.push()
+    g.translate(x, y)
+    if scale ~= 1 then
+        g.scale(scale, scale)
+    end
+    g.translate(ox, 0)
+    if halo then
+        g.setColor(0.98, 0.95, 0.88, 0.95)
+        Font.draw(text, -1, 0)
+        Font.draw(text, 1, 0)
+        Font.draw(text, 0, -1)
+        Font.draw(text, 0, 1)
+    end
+    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+    Font.draw(text, 0, 0)
+    g.pop()
+end
+
 local function drawCodeScaled(g, Font, code, x, y, scale)
     if not (Font and type(Font.drawCode) == "function") then return end
     g.push()
@@ -693,7 +784,9 @@ end
 local function drawCommand(g, Font, battle)
     -- Draws FIGHT/PKMN/ITEM/RUN at the panel corners: TL, TR, BL, BR.
     local x, y, w, h = 48, 100, 140, 36  -- x a little more left, w wider
-    box(g, x, y, w, h)
+    local dark = UI.hudDark(battle)
+    box(g, x, y, w, h, UI.hudPanelAlpha(battle))
+
     local labels = commandLabels(battle)
     local index = math.max(1, math.min(4, battle.menuIndex or 1))
     local scale = 0.90
@@ -711,34 +804,17 @@ local function drawCommand(g, Font, battle)
     for i = 1, 4 do
         local tx = panel[i].tx
         local ty = panel[i].ty
-        if Font and type(Font.draw) == "function" then
-            g.setColor(0.08, 0.06, 0.05, 1)
-            g.push()
-            g.translate(tx, ty)
-            g.scale(scale, scale)
-            -- Text anchor: align left for TL/BL, right for TR/BR
-            if i == 2 or i == 4 then
-                -- Move left for right alignment
-                local label = labels[i] or ""
-                local textWidth = Font.getWidth and Font.getWidth(label) or (#label * 8)
-                g.translate(-textWidth, 0)
-            end
-            Font.draw(labels[i], 0, 0)
-            g.pop()
-        end
+        drawHudLabel(g, Font, labels[i], tx, ty, scale, dark, i == 2 or i == 4)
         if i == index then
             -- Slightly to left for TL/BL, rightward for TR/BR
             local selX = tx
             if i == 2 or i == 4 then
-                local label = labels[i] or ""
-                local textWidth = Font.getWidth and Font.getWidth(label) or (#label * 8)
-                selX = tx - textWidth
-                drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
-            else
-                drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
+                selX = tx - labelWidth(Font, labels[i] or "")
             end
+            drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
         end
     end
+    g.setColor(1, 1, 1, 1) -- Reset color afterwards
 end
 
 local function moveRows(battle)
@@ -748,10 +824,76 @@ local function moveRows(battle)
     return battle.player and battle.player.curMoves or {}
 end
 
+local function moveDefOf(battle, move)
+    if not (battle and move) then
+        return nil
+    end
+    if type(battle.moveDef) == "function" then
+        local ok, def = pcall(battle.moveDef, battle, move)
+        if ok and type(def) == "table" then
+            return def
+        end
+    end
+    local dex = battle.data and battle.data.moves
+    local id = move.id
+    if id and type(dex) == "table" and type(dex[id]) == "table" then
+        return dex[id]
+    end
+    return nil
+end
+
 local function moveName(battle, move)
     if not move then return "-" end
-    local def = battle.data and battle.data.moves and battle.data.moves[move.id]
-    return def and def.name or tostring(move.id or "-")
+    local def = moveDefOf(battle, move)
+    return (def and def.name) or tostring(move.id or "-")
+end
+
+-- Remaining PP, plus max when the instance or dex has one.
+function UI.movePP(battle, move)
+    if not move or move.struggle then
+        return nil, nil
+    end
+    local cur = tonumber(move.pp)
+    if cur == nil then
+        return nil, nil
+    end
+    if cur < 0 then
+        cur = 0
+    end
+    cur = math.floor(cur)
+    local def = moveDefOf(battle, move)
+    local max = tonumber(move.maxPP or move.ppMax or move.maxPp)
+        or tonumber(def and (def.maxPP or def.ppMax or def.pp))
+    if max ~= nil then
+        max = math.floor(max)
+        if max < 0 then
+            max = 0
+        end
+    end
+    return cur, max
+end
+
+function UI.movePPLabel(battle, move, withMax)
+    local cur, max = UI.movePP(battle, move)
+    if cur == nil then
+        return nil
+    end
+    if withMax and max ~= nil then
+        return tostring(cur) .. "/" .. tostring(max)
+    end
+    return tostring(cur)
+end
+
+local function drawHeaderPP(g, Font, battle, move, right, y, halo)
+    local header = UI.movePPLabel(battle, move, true)
+    if not header then
+        return
+    end
+    local cur = UI.movePP(battle, move)
+    local ink = cur == 0
+        and { 0.78, 0.18, 0.12, 1 }
+        or { 0.35, 0.30, 0.25, 1 }
+    drawHudLabel(g, Font, "PP " .. header, right, y, 1, halo, true, ink)
 end
 
 function UI.moveHudStyle(style)
@@ -768,10 +910,11 @@ local function drawMovesClassic(g, Font, battle)
     local index = battle.phase == "mimicSelect"
         and (battle.mimicIndex or 1) or (battle.moveIndex or 1)
     local x, y, w, h = 4, 100, 152, 40
-    box(g, x, y, w, h)
+    local dark = UI.hudDark(battle)
+    box(g, x, y, w, h, UI.hudPanelAlpha(battle))
     if Font and type(Font.draw) == "function" then
-        g.setColor(0.35, 0.30, 0.25, 1)
-        Font.draw("B PAUSE", x + 6, y + 3)
+        drawHudLabel(g, Font, "B PAUSE", x + 6, y + 3, 1, dark, false, { 0.35, 0.30, 0.25, 1 })
+        drawHeaderPP(g, Font, battle, rows[index], x + w - 6, y + 3, dark)
     end
     local slots = {
         { i = 1, label = "U", col = 0, row = 0 },
@@ -791,17 +934,15 @@ local function drawMovesClassic(g, Font, battle)
                 drawCodeScaled(g, Font, 0xED, tx, ty, 0.9)
             end
             local name = fitText(Font, moveName(battle, move), 52)
-            if Font and type(Font.draw) == "function" then
-                g.setColor(0.08, 0.06, 0.05, 1)
-                Font.draw(slot.label, tx + 12, ty)
-                Font.draw(name, tx + 22, ty)
-            end
+            drawHudLabel(g, Font, slot.label, tx + 12, ty, 1, dark)
+            drawHudLabel(g, Font, name, tx + 22, ty, 1, dark)
         end
     end
+    g.setColor(1, 1, 1, 1) -- Reset color afterwards, just in case
 end
 
 local function drawMovesDiamond(g, Font, battle)
-    -- Diamond compass: direction matches slot. Opaque panel covers TYPE/PP ghosts.
+    -- Diamond compass: direction matches slot. Translucent plate over the field.
     --   U = 1, R = 2, L = 3, D = 4
     local rows = moveRows(battle)
     local index = battle.phase == "mimicSelect"
@@ -812,14 +953,11 @@ local function drawMovesDiamond(g, Font, battle)
         { i = 3, label = "L", x = 4,  y = 106 },
         { i = 4, label = "D", x = 44, y = 120 },
     }
-    g.setColor(0.96, 0.92, 0.82, 1)
-    g.rectangle("fill", 0, 64, 160, 80)
-    g.setColor(0.10, 0.07, 0.06, 1)
-    g.rectangle("line", 0.5, 64.5, 159, 79)
-    g.rectangle("line", 1.5, 65.5, 157, 77)
+    local dark = UI.hudDark(battle)
+    box(g, 0, 64, 160, 80, UI.hudPanelAlpha(battle))
     if Font and type(Font.draw) == "function" then
-        g.setColor(0.35, 0.30, 0.25, 1)
-        Font.draw("B PAUSE", 4, 68)
+        drawHudLabel(g, Font, "B PAUSE", 4, 68, 1, dark, false, { 0.35, 0.30, 0.25, 1 })
+        drawHeaderPP(g, Font, battle, rows[index], 154, 68, dark)
     end
     for s = 1, #slots do
         local slot = slots[s]
@@ -830,20 +968,18 @@ local function drawMovesDiamond(g, Font, battle)
             if selected then
                 g.setColor(0.16, 0.30, 0.55, 1)
             else
-                g.setColor(0.99, 0.96, 0.88, 1)
+                g.setColor(0.99, 0.96, 0.88, 0.42)
             end
             g.rectangle("fill", cx, cy, cw, ch)
             g.setColor(0.10, 0.08, 0.06, 1)
             g.rectangle("line", cx + 0.5, cy + 0.5, cw - 1, ch - 1)
             local name = fitText(Font, moveName(battle, move), 52)
-            if Font and type(Font.draw) == "function" then
-                if selected then
-                    g.setColor(1, 1, 1, 1)
-                else
-                    g.setColor(0.08, 0.06, 0.05, 1)
-                end
-                Font.draw(slot.label, cx + 2, cy + 2)
-                Font.draw(name, cx + 12, cy + 2)
+            if selected then
+                drawHudLabel(g, Font, slot.label, cx + 2, cy + 2, 1, false, false, { 1, 1, 1, 1 })
+                drawHudLabel(g, Font, name, cx + 12, cy + 2, 1, false, false, { 1, 1, 1, 1 })
+            else
+                drawHudLabel(g, Font, slot.label, cx + 2, cy + 2, 1, dark)
+                drawHudLabel(g, Font, name, cx + 12, cy + 2, 1, dark)
             end
         end
     end

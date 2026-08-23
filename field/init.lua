@@ -106,6 +106,11 @@ return function(env)
   if not loadOk then
     error(loadErr)
   end
+  if UI then
+    UI.fieldSession = function(battle)
+      return Lifecycle and Lifecycle.get and Lifecycle.get(battle)
+    end
+  end
 
   local deps = {
     Layout = Layout,
