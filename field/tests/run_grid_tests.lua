@@ -590,6 +590,23 @@ function tests.status_chip_abbreviations()
   eq(battle._arStatusChips.enemy.text, "MISS", "accuracy miss arms a MISS chip")
 end
 
+function tests.mood_portrait_sits_beside_the_sprite()
+  local lift = UI.FACE_LIFT
+  local px, py = UI.faceAnchor("player", 40, 80, 28, nil, 160)
+  eq(px, UI.FACE_MARGIN, "player face hugs the left edge")
+  eq(py, 80 - 14 - lift, "face tracks the body Y")
+  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, nil, 160)
+  eq(ex, 160 - UI.FACE_MARGIN - 28, "foe face hugs the right edge")
+  eq(ey, 80 - 14 - lift, "foe face shares the body Y")
+  local hx, hy = UI.hpAboveFace(px, py, 28)
+  eq(hx, px + 14, "HP sits on the face midline")
+  eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 53 }), 14,
+    "tall hop-padded kits still plant HP on the ~24px body")
+  eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
+    "32px kits sit a couple px above the cell top")
+end
+
 function tests.move_hud_shows_b_pause_hint()
   local drawn = {}
   package.loaded["src.render.Font"] = {
@@ -2223,13 +2240,13 @@ function tests.engaged_trainers_face_each_other()
   Lifecycle._testUnbind(battle)
 end
 
-function tests.asleep_mons_sleepwalk()
+function tests.asleep_mons_do_not_wander()
   local grid, plan = sampleGrid()
   local pHome = grid.home.player
   local eHome = grid.home.enemy
   local player = {
     id = "player", padU = pHome.u, padV = pHome.v, anim = "idle",
-    facing = "up", _wanderCD = 99,
+    facing = "up", _wanderCD = 0, wanderTx = 40, wanderTy = 40,
     _battleBattler = { mon = { status = "SLP" } },
   }
   local enemy = {
@@ -2262,11 +2279,13 @@ function tests.asleep_mons_sleepwalk()
   Lifecycle._testBind(battle, session)
   Lifecycle.tick(battle, 0.20, session._deps)
   eq(player.facing, "up", "sleep does not snap them to face the foe")
-  eq(player.padU, pHome.u, "asleep mon holds until a sleepwalk")
+  eq(player.padU, pHome.u, "asleep mon does not wander u")
+  eq(player.padV, pHome.v, "asleep mon does not wander v")
+  eq(player.wanderTx, nil, "sleep clears a queued wander")
   player._wanderCD = 0
   Lifecycle.tick(battle, 1 / 30, session._deps)
-  truthy(player.padU ~= pHome.u or player.padV ~= pHome.v,
-    "asleep mon sleepwalks a cell")
+  eq(player.padU, pHome.u, "asleep mon still holds u after cooldown")
+  eq(player.padV, pHome.v, "asleep mon still holds v after cooldown")
 
   player._battleBattler.mon.status = "FRZ"
   local frozenU, frozenV = player.padU, player.padV
@@ -2274,6 +2293,49 @@ function tests.asleep_mons_sleepwalk()
   Lifecycle.tick(battle, 1 / 30, session._deps)
   eq(player.padU, frozenU, "frozen mon does not wander u")
   eq(player.padV, frozenV, "frozen mon does not wander v")
+  Lifecycle._testUnbind(battle)
+end
+
+function tests.idle_mons_face_each_other_diagonally()
+  local grid, plan = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v, anim = "idle",
+    facing = "right", _kitSheet = true,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v + 2, anim = "idle",
+    facing = "left", _kitSheet = true,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {
+    game = { overworld = { camera = { x = 0, y = 0 } } },
+    animPlaying = false,
+  }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    plan = plan,
+    midX = plan.midX,
+    midY = plan.midY,
+    playerMon = player,
+    enemyMon = enemy,
+    _deps = {
+      Grid = Grid,
+      Sprites = Sprites,
+      Cast = { tick = function() end },
+      Cues = { pumpCurrent = function() end, tickReturns = function() end },
+      Anims = { cache = function() end },
+      Projectiles = { tick = function() end },
+    },
+  }
+  Lifecycle._testBind(battle, session)
+  Lifecycle.tick(battle, 0.20, session._deps)
+  eq(player.facing, "down-right", "idle player looks diagonally at an offset foe")
+  eq(enemy.facing, "up-left", "idle foe looks back along the same diagonal")
   Lifecycle._testUnbind(battle)
 end
 
@@ -7131,7 +7193,7 @@ function tests.kit_idle_override_follows_status()
   }, false), "sleep", "asleep standing uses sleep")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "SLP" } },
-  }, true), nil, "sleepwalk keeps walk")
+  }, true), nil, "a shove while asleep still uses walk")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "FRZ" } },
   }, false), "freeze", "frozen standing uses freeze")
@@ -7169,6 +7231,80 @@ function tests.kit_move_override_flaps_when_flying()
   }, true), nil, "no FlapAround row stays on Walk")
   eq(Sprites.kitMoveOverride(pidgeot, false), nil, "standing clears the flap burst")
   eq(pidgeot._flapWalk, nil, "next walk can roll flap again")
+end
+
+function tests.physical_kit_prefers_specialized_strips()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "kit 32 8",
+    "walk 8 10 8 10",
+    "physical 2 4 2 2",
+    "idle 8 8",
+    "faint 8 8",
+    "flap 4 4 4 4",
+    "kick 2 2 2 4",
+    "punch 2 6 2",
+    "multi 2 2 2 2 2",
+  }, "\n"))
+  local _, _, poseBlock = Sprites.kitMetaBlockTables(meta)
+  eq(poseBlock.flap, 17, "flap stays on its fixed row")
+  eq(poseBlock.kick, 18, "kick follows flap")
+  eq(poseBlock.punch, 19, "punch follows kick")
+  eq(poseBlock.multi, 20, "multi follows punch")
+  local noFlap = Sprites.parseKitMeta(table.concat({
+    "kit 32 8",
+    "walk 8 10 8 10",
+    "physical 2 4 2 2",
+    "multi 2 2 2 2",
+  }, "\n"))
+  local _, _, noFlapBlocks = Sprites.kitMetaBlockTables(noFlap)
+  eq(noFlapBlocks.multi, 17, "multi takes the flap slot when flap is missing")
+  local ent = {
+    _kitSheet = true,
+    _kitBlocks = 21,
+    _kitPoseBlock = poseBlock,
+  }
+  truthy(Sprites.kitHasPose(ent, "multi"), "sidecar lists multi")
+  truthy(Sprites.usesKitPose(ent, "kick"), "kick row is a combat pose")
+  eq(Cues.physicalKitAnim(ent, { moveId = "TACKLE" }, Sprites), "attack",
+    "generic contact keeps Attack when both exist")
+  eq(Cues.physicalKitAnim(ent, { moveId = "FURY_ATTACK" }, Sprites), "multi",
+    "multi-hit uses MultiStrike / Double")
+  eq(Cues.physicalKitAnim(ent, { moveId = "DOUBLE_KICK" }, Sprites), "multi",
+    "Double Kick prefers multi over kick")
+  eq(Cues.physicalKitAnim(ent, { moveId = "LOW_KICK" }, Sprites), "kick",
+    "single kick uses Kick")
+  eq(Cues.physicalKitAnim(ent, { moveId = "MEGA_PUNCH" }, Sprites), "punch",
+    "punch move uses Punch")
+  local kickOnly = {
+    _kitSheet = true,
+    _kitBlocks = 19,
+    _kitPoseBlock = { physical = 3, kick = 18 },
+  }
+  eq(Cues.physicalKitAnim(kickOnly, { moveId = "DOUBLE_KICK" }, Sprites), "kick",
+    "multi-hit falls back to Kick when Multi is missing")
+  eq(Cues.physicalKitAnim({ _kitSheet = true }, { moveId = "FURY_ATTACK" }, Sprites),
+    "attack", "no sidecar extras stay on Attack")
+end
+
+function tests.pose_keeps_kit_on_the_plant()
+  local grid, plan = sampleGrid()
+  local overworld = { entities = {} }
+  local battle = {
+    game = { overworld = overworld },
+    player = { mon = { species = "TEST_PLAYER" } },
+    enemy = { mon = { species = "TEST_ENEMY" } },
+  }
+  local session = { plan = plan, grid = grid }
+  Cast.stageEnemy(session, battle, nil, Sprites, Grid)
+  local player = Cast.stagePlayer(session, battle, nil, Sprites, Grid)
+  player._kitSheet = true
+  player._kitCell = 32
+  player._fieldBarLift = 24
+  player.px, player.py = 16, 64
+  local sprite, vx, vy = player:pose()
+  truthy(sprite, "pose returns a sprite")
+  eq(vx, 16, "vx stays on the plant x")
+  eq(vy, 64, "vy stays on py so the body does not float off its shadow")
 end
 
 function tests.kit_pose_requires_combat_block()
@@ -7387,6 +7523,74 @@ function tests.kit_cell_origin_uses_block_facing_and_col()
   eq(u, 38, "large-mon kits use the sidecar cell size")
   eq(Sprites.kitCellSize({ _kitCell = 48 }), 48,
     "hop-overflow cells stay in range")
+  local eight = { _kitBlock = 0, _kitCol = 0, _kitFaces = 8 }
+  u, v = Sprites.kitCellOrigin(eight, "down-right")
+  eq(u, 0, "diagonal origin x")
+  eq(v, 128, "walk down-right is row 4 on an 8-face kit")
+  u, v = Sprites.kitCellOrigin({
+    _kitBlock = 3, _kitCol = 1, _kitFaces = 8, facing = "left",
+  }, "left")
+  eq(v, 800, "8-face physical left is row 25")
+  eq(Sprites.kitFaceIndex({ _kitFaces = 4 }, "down-right"), 2,
+    "4-face kits snap a diagonal to the side")
+end
+
+function tests.kit_idle_stays_on_idle_block_when_8face()
+  local meta = Sprites.parseKitMeta(table.concat({
+    "kit 45 16 8",
+    "walk 8 10 8 10",
+    "dodge 2 2",
+    "brace 2 8",
+    "physical 4 2",
+    "special 2 8",
+    "hit 2 8",
+    "idle 40 2 2 2",
+    "faint 30 35",
+  }, "\n"))
+  eq(meta.faces, 8, "sidecar stores 8 faces")
+  eq(#meta.poses.idle.ticks, 4, "idle keeps every breathe column")
+  local colsBy, ticksBy, poseBlock = Sprites.kitMetaBlockTables(meta)
+  eq(poseBlock.idle, 6, "idle stays the 7th block")
+  eq(poseBlock.faint, 7, "faint stays after idle")
+  eq(colsBy[6], 4, "idle frame count is the sidecar row")
+  eq(#ticksBy[7], 2, "faint ticks do not replace idle")
+  local ent = {
+    _kitBlock = 6, _kitCol = 0, _kitFaces = 8, _kitCell = 45,
+    _kitBlocks = 18, _kitPoseBlock = poseBlock,
+    _kitColsByBlock = colsBy, _kitTicksByBlock = ticksBy,
+    _idleT = 0,
+  }
+  eq(Sprites.kitBlockForAnim("idle", 18, ent), 6, "standing uses idle")
+  eq(Sprites.kitFrameCount(ent, "idle"), 4, "all idle columns play")
+  local _, v = Sprites.kitCellOrigin(ent, "down")
+  eq(v, 6 * 8 * 45, "idle down is block 6 × 8 rows")
+  _, v = Sprites.kitCellOrigin(ent, "down-right")
+  eq(v, (6 * 8 + 4) * 45, "idle diagonal stays inside idle")
+  _, v = Sprites.kitCellOrigin({
+    _kitBlock = 7, _kitCol = 0, _kitFaces = 8, _kitCell = 45,
+  }, "down")
+  eq(v, 7 * 8 * 45, "faint is the next 8-row block")
+  eq(Sprites.kitFacesFromSheet(720, 6480, 45, meta), 8,
+    "18 poses × 144 rows is 8-face even if tagged 4")
+  local stale = Sprites.parseKitMeta("kit 45 16\nwalk 2\ndodge 2\nbrace 2\n"
+    .. "physical 2\nspecial 2\nhit 2\nidle 2\nfaint 2\n")
+  eq(stale.faces, 4, "old sidecar omits the 8")
+  eq(Sprites.kitFacesFromSheet(720, 6480, 45, stale), 8,
+    "image height beats a stale 4-face tag")
+  eq(Sprites.kitBlockForAnim("idle", 18, { _kitPoseBlock = { walk = 0, faint = 6 } }),
+    0, "missing Idle falls back to Walk, not Faint")
+end
+
+function tests.kit_face_from_delta_uses_diagonals()
+  eq(Sprites.faceFromDelta(10, 0), "right", "east is right")
+  eq(Sprites.faceFromDelta(0, 10), "down", "south is down")
+  eq(Sprites.faceFromDelta(10, 10), "down-right", "southeast is diagonal")
+  eq(Sprites.faceFromDelta(-8, -8), "up-left", "northwest is diagonal")
+  eq(Sprites.faceFromDelta(10, 2), "right", "shallow angle stays cardinal")
+  eq(Sprites.cardinalFacing("down-right"), "right", "voxel gets a cardinal")
+  eq(Sprites.billboardFacing("down-right", true), "left",
+    "kit diagonal does not GSC-flip")
+  eq(Sprites.billboardFacing("up", true), "up", "kit up stays up")
 end
 
 function tests.dig_borrows_diglett_walk()
@@ -7479,6 +7683,8 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
   }, 2)
   eq(kitMesh.via, "kit", "kit def does not use Wilds column-0 card")
   truthy(lastVerts and lastVerts[1], "kit card has verts")
+  eq(lastVerts[1][2], 0, "body quad plants at y=0")
+  eq(lastVerts[3][2], 32, "32px body top is the cell height")
   local u0 = lastVerts[1][4]
   local expect = (32 + 0.02) / 128
   assert(math.abs(u0 - expect) < 1e-6, "kit UVs sample column 1, not 0")
@@ -7494,6 +7700,7 @@ function tests.kit_billboards_stay_outermost_after_wilds_wrap()
     frameHeight = 32,
   }, 2)
   eq(shadowMesh.via, "kit", "kit shadow stays on the kit sheet")
+  eq(lastVerts[1][2], 0, "shadow quad stays planted at y=0")
   local shadowU = lastVerts[1][4]
   local planted = (0 + 0.02) / 128
   assert(math.abs(shadowU - planted) < 1e-6, "ground blob samples planted column 0")
@@ -7542,6 +7749,7 @@ function tests.kit_sheet_beats_wilds_when_present()
     "sidecar cell stays in the bake range")
   eq(sheet.frameWidth, cell, "sheet uses sidecar cell size")
   eq(sheet.trueColor, true, "true-color kit")
+  eq((meta and tonumber(meta.faces)) or 4, 8, "rebaked Pikachu kit is 8-face")
 end
 
 function tests.projectile_style_registry_is_public()
@@ -7749,6 +7957,218 @@ do
     follow = BattleFx.pickAgainCallMove(battle, battle.player, { id = "PSYCHIC" })
     eq(follow and follow.id, "PSYCHIC", "same move is used when the pool has no alt")
   end
+end
+
+local function loadEmotions()
+  return assert(loadfile(root .. "/../battle/rules/emotions.lua"))()
+end
+
+local function loadPortraits()
+  return assert(loadfile(root .. "/../battle/chrome/portraits.lua"))()
+end
+
+local function moodBattle(php, pmax, ehp, emax)
+  return {
+    player = {
+      isPlayer = true,
+      mon = { hp = php, stats = { hp = pmax }, name = "CHARMANDER", dex = 4 },
+    },
+    enemy = {
+      mon = { hp = ehp, stats = { hp = emax }, name = "SQUIRTLE", dex = 7 },
+    },
+  }
+end
+
+function tests.emotions_low_hp_is_pain()
+  local E = loadEmotions()
+  local battle = moodBattle(10, 100, 80, 100)
+  E.refresh(battle)
+  eq(E.mood(battle, true), "pain", "player at 10% is tired")
+  eq(E.mood(battle, false), "normal", "healthy foe stays normal")
+  E.clear(battle)
+end
+
+function tests.emotions_two_misses_make_angry()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  eq(E.mood(battle, true), "sigh", "first miss flashes sigh")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "normal", "one miss is not angry yet")
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "two misses become angry")
+  local mods = E.modifiers(battle, true)
+  eq(type(mods), "table", "modifiers is a table")
+  eq(mods.powerMul, 1.12, "angry hits harder")
+  eq(mods.accuracy, -0.08, "angry swings wilder")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 112,
+    "angry power applies to outgoing damage")
+  E.clear(battle)
+end
+
+function tests.emotions_crit_stuns_then_angers()
+  local E = loadEmotions()
+  local battle = moodBattle(70, 100, 70, 100)
+  E.note(battle, { kind = "crit", side = "player" })
+  eq(E.mood(battle, true), "stunned", "received crit flashes stunned")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "after the flash the mon stays angry")
+  E.clear(battle)
+end
+
+function tests.emotions_hp_lead_and_hit_is_determined()
+  local E = loadEmotions()
+  local battle = moodBattle(90, 100, 40, 100)
+  E.note(battle, { kind = "hit", user = "player", target = "enemy", damage = 10, maxHp = 100 })
+  eq(E.mood(battle, true), "determined", "HP lead plus a landed hit is determined")
+  eq(E.mood(battle, false), "worried", "the trailing foe looks worried")
+  E.clear(battle)
+end
+
+function tests.emotions_switch_clears_mood()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "setup: angry from misses")
+  E.note(battle, { kind = "switch", side = "player" })
+  eq(E.mood(battle, true), "normal", "switch resets the incoming mon")
+  E.clear(battle)
+end
+
+function tests.portraits_resolve_gen1_root_path()
+  local P = loadPortraits()
+  eq(P.relPath(4, "angry"), "assets/portrait/0004/Angry.png", "dex 4 angry")
+  eq(P.relPath(1, "normal"), "assets/portrait/0001/Normal.png", "dex 1 normal")
+  eq(P.emotionFile("pain"), "Pain", "pain file")
+  local battle = moodBattle(80, 100, 80, 100)
+  eq(P.dexOf(battle, battle.player), 4, "reads mon.dex")
+end
+
+function tests.emotions_chip_colors_match_mood()
+  local E = loadEmotions()
+  local angry = E.chip("angry")
+  eq(angry.text, "ANGRY", "angry chip label")
+  truthy(angry.fill and angry.fill[1] > 0.6, "angry fill is red")
+  eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
+  eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
+  eq(E.chip("normal"), nil, "normal has no chip")
+end
+
+function tests.emotions_portrait_holds_until_normal()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "setup angry")
+  eq(E.consumeChange(battle, true), "angry", "first change arms a portrait")
+  eq(E.consumeChange(battle, true), nil, "same mood does not re-fire")
+  eq(E.portraitAlpha(battle, true), 1, "portrait stays while angry")
+  local side = E.side(battle, true)
+  side.portraitAt = (os.clock()) - 8
+  eq(E.portraitAlpha(battle, true), 1, "elapsed time does not hide an active mood")
+  eq(E.portraitMood(battle, true), "angry", "face matches the live mood")
+  side.mood = "normal"
+  side.flash = nil
+  side.fadeAt = (os.clock()) - 2
+  side.portraitMood = "angry"
+  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after fading back to normal")
+  E.clear(battle)
+end
+
+function tests.emotions_heat_follows_shown_mood()
+  local E = loadEmotions()
+  local battle = moodBattle(90, 100, 40, 100)
+  E.note(battle, { kind = "hit", user = "player", target = "enemy", damage = 10, maxHp = 100 })
+  eq(E.mood(battle, true), "determined", "setup determined")
+  eq(E.mood(battle, false), "worried", "setup worried")
+  local det = E.modifiers(battle, true)
+  local wary = E.modifiers(battle, false)
+  eq(det.accuracy, 0.08, "determined is more accurate")
+  eq(wary.dodge, 0.08, "worried ducks better")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 106,
+    "determined power, worried takes normal")
+  E.note(battle, { kind = "crit", side = "player" })
+  eq(E.mood(battle, true), "stunned", "crit flash overrides determined")
+  eq(E.modifiers(battle, true).takenMul, 1.10, "stunned takes more this turn")
+  E.clear(battle)
+end
+
+function tests.emotions_heat_off_when_faces_off()
+  local E = loadEmotions()
+  E.bind({
+    facesOn = function()
+      return false
+    end,
+  })
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "mood still derives with faces off")
+  local mods = E.modifiers(battle, true)
+  eq(mods.powerMul, 1, "heat is identity when faces are off")
+  eq(mods.accuracy, 0, "no accuracy nudge when faces are off")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 100,
+    "damage is unchanged when faces are off")
+  E.clear(battle)
+end
+
+function tests.emotions_announce_is_not_dialogue()
+  local E = loadEmotions()
+  local pushed = 0
+  E.bind({
+    facesOn = function()
+      return true
+    end,
+    pushNotice = function()
+      pushed = pushed + 1
+    end,
+  })
+  local battle = moodBattle(10, 100, 80, 100)
+  E.announce(battle)
+  eq(E.mood(battle, true), "pain", "low HP is pain")
+  eq(pushed, 0, "mood does not push a notice line")
+  E.clear(battle)
+end
+
+function tests.mood_aura_paints_when_angry()
+  local rects = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      setLineWidth = function() end,
+      rectangle = function()
+        rects = rects + 1
+      end,
+      circle = function() end,
+      ellipse = function() end,
+      line = function() end,
+    },
+    timer = { getTime = function() return 1.4 end },
+  }
+  Projectiles.moodOf = function(_, isPlayer)
+    return isPlayer and "angry" or "normal"
+  end
+  local session = {
+    live = true,
+    playerMon = { px = 16, py = 32 },
+    enemyMon = { px = 80, py = 32 },
+  }
+  Projectiles.drawMoodAuras(session, {}, 0, 0)
+  truthy(rects > 0, "angry paints rising heat ticks")
+  Projectiles.moodOf = function()
+    return "normal"
+  end
+  rects = 0
+  Projectiles.drawMoodAuras(session, {}, 0, 0)
+  eq(rects, 0, "normal mood has no body aura")
+  Projectiles.moodOf = nil
+  love = prevLove
 end
 
 local count = 0

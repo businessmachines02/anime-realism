@@ -107,7 +107,7 @@ budget). Target facades, who may call whom, and remaining extracts live in
 | Package | Owns at runtime | Still in `main.lua` |
 |---------|-----------------|---------------------|
 | `hud/` | `Hide.install` (levels/HP/XP) + `Rewards.install` | Overlay hook that *calls* bubble paint |
-| `battle/` | `ReactiveDefense` + `React` + `Fx` (incl. classic picFx) + `Dialogue` (incl. banter enqueue) + `Strings` | Queue insert / ambient pulses; `React.bind` / `Fx.bind` / `Dialogue.bind` host callbacks |
+| `battle/` | `ReactiveDefense` + `React` + `Fx` (incl. classic picFx) + `Dialogue` (incl. banter enqueue) + `Strings` + `Emotions` + `Portraits` | Queue insert / ambient pulses; `React.bind` / `Fx.bind` / `Dialogue.bind` / `Emotions.bind` host callbacks |
 | `field/` | Intercept, session, pad cues (`Cues.register`), sprites, FX catalog, compact UI, style painters, hand arenas | Forwards `battle.*` into `FBV.*` |
 
 ## Engine seams `main.lua` wraps
@@ -205,13 +205,13 @@ Loaded from `battle/init.lua`. Siblings via `env.load("rules/react.lua")` /
 
 | Folder | Files | Role |
 |--------|-------|------|
-| `rules/` | `reactive_defense`, `react`, `dialogue` | Focus math, REACT pipeline, callout rewrite |
-| `chrome/` | `pick`, `bubbles` | REACT HUD, speech bubbles, trainer cameo |
+| `rules/` | `reactive_defense`, `react`, `dialogue`, `emotions` | Focus math, REACT pipeline, callout rewrite, mood |
+| `chrome/` | `pick`, `bubbles`, `portraits` | REACT HUD, speech bubbles, trainer cameo, faces |
 | (root) | `fx.lua`, `strings.lua` | Animation policy, copy |
 
 Public facade is unchanged: `Battle.ReactiveDefense` / `React` / `Fx` /
-`Dialogue` / `Strings`. `Dialogue.Banter` / `Dialogue.Bubbles` still exist;
-chrome attaches them at package load.
+`Dialogue` / `Strings` / `Emotions` / `Portraits`. `Dialogue.Banter` /
+`Dialogue.Bubbles` still exist; chrome attaches them at package load.
 
 ## FIELD presentation
 
@@ -485,7 +485,7 @@ Stable for `field/tests/run_grid_tests.lua` (`loadfile` + partial
 | Caller | May call | Must not call |
 |--------|----------|---------------|
 | `main.lua` | `Hud.install`, `Battle.install`, `FBV` facade, `RD.*` (until Battle.install owns REACT) | FIELD submodules, `session` guts |
-| `battle/` | `RD.*`, `FBV.react`, `FBV.isFieldBattle` | `FBV.Cues`, `FBV.Lifecycle`, `session._deps` |
+| `battle/` | `RD.*`, `Emotions.*`, `FBV.react`, `FBV.isFieldBattle` | `FBV.Cues`, `FBV.Lifecycle`, `session._deps` |
 | `Lifecycle` | anything on the `deps` bag | `mod._arPackages` |
 | `Cues` / `Projectiles` | Grid / spawn APIs passed in or on `session._deps` until registries land | `Lifecycle`, `RD` |
 | `Hooks` | FBV facade | `mod._arPackages` |
@@ -539,6 +539,7 @@ Do not “fix” these by rewriting:
 | Speech bubbles / trainer cameo | `battle/chrome/bubbles.lua` + `battle/strings.lua` (`Dialogue.bind`) |
 | Callout rewrite / banter enqueue | `battle/rules/dialogue.lua` |
 | Focus react animation | `battle/fx.lua` (`Fx.play` + classic picFx enqueue) |
+| Battle mood / faces / heat | `battle/rules/emotions.lua` + `battle/chrome/portraits.lua` (hooks in `main.lua`) |
 | FIELD intercept / no wipe | `field/session/intercept.lua` |
 | Pad steps / Dig-Fly | `field/fx/cues.lua` (`Cues.register`) + `field/pad/grid.lua` |
 | Move VFX | `field/fx/fx_catalog.lua` then `Projectiles.registerStyle` |

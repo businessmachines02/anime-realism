@@ -96,6 +96,7 @@ So levels stay hidden for the same reason as HP: keep decisions grounded in what
 - **Reactive Defense:** Focus-meter reactions under fire — **Commit / Dodge / Take Cover / Brace / Entrench**. Toggle **REACTIVE DEF**; pick how often the menu appears via **REACT MENU** (ALWAYS / THREAT / OFF). Trainer foes still auto-react; your physical **COUNTER** openings and **Again!** remain.
 - **Field Battles:** Wild and trainer single battles can stay on the live map (**BATTLE STAGE = FIELD**), with both Pokémon represented by grid-tracked overworld sprites while the normal battle rules and menus remain in control.
 - **Field choreography:** Contact slashes, projectiles, beams, area rings, and status effects play in world space; pad battlers use this mod’s baked 32px combat kits (walk, idle, dodge, brace, physical, special, hit, faint, plus charge / jump / counter / miss / status / tumble / flap when present); switching recalls the old Pokémon before the replacement appears; Poké Balls arc toward wild targets and resolve their shakes/capture on the field.
+- **Battle faces:** A colored mood chip (ANGRY / TIRED / DTRMD / WARY) sits on the battler. The PMD portrait stays while the mood is not normal, then fades. A light body aura matches the emotion. The same mood also nudges damage, accuracy, and dodge (see [Battle Heat](./battle/OVERVIEW.md#battle-heat-emotions)). Toggle **BATTLE FACES** to hide chrome and turn heat off.
 
 ## Mechanics
 
@@ -210,6 +211,7 @@ remain on their normal presentation path.
 | **REACT MENU** | ALWAYS | `ALWAYS` = Focus **REACT!** every damaging hit; `THREAT` = serious hits only; `OFF` = no Focus menu |
 | **REACT HUD** | GRID | `GRID` is the compact 2×2 (U/R/L/D + **A**). `TABS` is a full-width row that slides up from the bottom. `DIAMOND` is the U/R/L/D compass |
 | **CLOSE THE GAP** | On | Physical attacks close to the foe when more than a tile away, then idle 1–2 tiles off instead of returning home. Gait follows Speed; Attack adds a boost, with a cap so fast mons do not teleport |
+| **BATTLE FACES** | On | Mood chip + portrait + body aura, plus small damage / accuracy / dodge heat. Off is identity combat |
 | **DEV OVERLAY** | Off | Compact top-right battle debug chip (live cover/counter + last event) |
 
 
@@ -238,12 +240,14 @@ Pad battler art baked from [PMD Collab](https://sprites.pmdcollab.org/) is **not
 
 ## Art credits
 
-FIELD pad kits (`assets/followers/follower_XXX.png`) are baked from the
+FIELD pad kits (`assets/followers/follower_XXX.png`) and battle portraits
+(`assets/portrait/NNNN/{Emotion}.png`) are from the
 [PMD Sprite Repository](https://sprites.pmdcollab.org/) /
 [SpriteCollab](https://github.com/PMDCollab/SpriteCollab). Community frames are
 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (credit the
 artists, non-commercial). Official Explorers-style frames belong to
-**Spike Chunsoft**.
+**Spike Chunsoft**. Keep each folder’s `credits.txt`. The release zip ships
+Gen 1 root portraits only.
 
 You guys are legendary ❤️
 
@@ -256,6 +260,7 @@ You guys are legendary ❤️
 - `battle/` — battle systems (`rules/` math + pipeline, `chrome/` HUD paint)
 - `field/` — overworld FIELD combat (tile-grid movement tracker)
 - `assets/followers/` — baked pad kits (`follower_XXX.png` + `.kit`) plus PMD unpacks
+- `assets/portrait/` — PMD 40×40 emotion faces (`NNNN/Angry.png`, …); zip packs Gen 1 roots
 - `assets/followers/run_bake.sh` — local venv + `bake_pmd.py` (all packs, or `0005`)
 - `assets/follower-kit.md` — 32px 4-facing sheet layout (hand-drawn 4-col or baked N-col)
 - `LICENSE` — CC BY 4.0 (attribution required; does not cover PMD Collab art)

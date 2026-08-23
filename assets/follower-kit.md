@@ -95,7 +95,7 @@ Cover-jumps, a melee COUNTER clash, and a whiff. Same four facings as Physical, 
 
 ### Sleep / Freeze / Confuse
 
-Standing still while afflicted. Sleep is a downed breathe, freeze is a held sit, confuse is a wobble or spin. Walking (sleepwalk) still uses Walk.
+Standing still while afflicted. Sleep is a downed breathe, freeze is a held sit, confuse is a wobble or spin. Asleep and frozen mons do not idle-wander.
 
 ### Hit
 
@@ -113,12 +113,12 @@ The Pokémon **goes flying**. Powerful hits, crits, clashes, and FIRE NOW knocks
 |---|---|
 | Cell | 32×32 |
 | Full kit (hand-drawn) | **4 columns × 68 rows = 128×2176** (plus optional flap → 128×2304) |
-| Full kit (baked PMD) | **N columns × 68 rows = (N×32)×2176**, N = longest pose |
+| Full kit (baked PMD) | **N columns × 68 rows = (N×32)×2176** (4-face) or **×136 rows** (8-face), N = longest pose |
 | Origin | top-left; row 1 is the top |
 
 Walk-only hand-drawn is **128×128**. Add more height in chunks of 128 pixels (four rows) for each extra pose. Hand-drawn width stays 128. Baked width grows with the longest PMD row.
 
-## Facing (every 4-row block)
+## Facing (every 4-row or 8-row block)
 
 Top → bottom inside the block:
 
@@ -128,8 +128,14 @@ Top → bottom inside the block:
 | 2 | Left |
 | 3 | Right |
 | 4 | Back (up) |
+| 5 | Down-right (baked 8-face kits) |
+| 6 | Down-left |
+| 7 | Up-right |
+| 8 | Up-left |
 
-Same order as the current Charmeleon four-by-four. Older follower packs store one “side” drawing and flip it for the right; we draw left and right ourselves.
+Hand-drawn kits stay four rows. Baked PMD packs that have 8-dir strips write all eight; the sidecar is `kit 32 14 8`. A diagonal close uses those extra rows. A 4-row kit snaps the diagonal to left/right. Dramatic Shape still gets a cardinal facing so the voxel pass does not crash; the kit UVs sample the diagonal cell.
+
+Same order as the current Charmeleon four-by-four for the first four rows. Older follower packs store one “side” drawing and flip it for the right; we draw left and right ourselves.
 
 ## Columns
 
@@ -163,6 +169,7 @@ Baked PMD blocks use the entire source row. Combat one-shots still finish in the
 | 1920–2047 | 61–64 | Float | 4 | Flying dodge (Ghost dodge still uses Dodge, paler). |
 | 2048–2175 | 65–68 | TumbleBack | 4 | Heavy knock / crit. |
 | 2176–2303 | 69–72 | Flap | 4 | Optional. FlapAround / Hover while moving (Flying types). |
+| after Flap | — | Kick / Punch / Multi | baked | Optional. Used for kick, punch, and multi-hit contact when the PMD pack has that strip. |
 
 ## Incremental sizes (32px cells)
 

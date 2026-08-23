@@ -416,6 +416,10 @@ function Lifecycle.drawWorldOverlay(battle)
             return
         end
         local lift = ent._fieldBarLift or 10
+        local UI = deps and deps.UI
+        if UI and type(UI.barLift) == "function" then
+            lift = UI.barLift(ent)
+        end
         local worldX = (ent.px or 0) - cameraX + 8
         local worldY = (ent.py or 0) - cameraY - lift
         ent._fieldWorldX, ent._fieldWorldY = worldX, worldY
@@ -1716,7 +1720,7 @@ local function monStatus(ent)
     return nil
 end
 
-local function wanderBusy(ent, asleep)
+local function wanderBusy(ent)
     if not ent then
         return true
     end
@@ -1735,9 +1739,6 @@ local function wanderBusy(ent, asleep)
         or anim == "buried" or anim == "aloft" then
         return true
     end
-    if asleep then
-        return false
-    end
     return anim ~= "idle"
 end
 
@@ -1750,11 +1751,11 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         return
     end
     local status = monStatus(ent)
-    if status == "FRZ" then
+    if status == "FRZ" or status == "SLP" then
+        ent.wanderTx, ent.wanderTy = nil, nil
         return
     end
-    local asleep = status == "SLP"
-    if wanderBusy(ent, asleep) then
+    if wanderBusy(ent) then
         return
     end
     -- Still lerping to a cell target.
@@ -1766,7 +1767,7 @@ local function tickIdleWander(session, Grid, ent, side, dt)
             return
         end
     end
-    local wait = asleep and (1.2 + rand() * 0.8) or (2.5 + rand() * 1.5)
+    local wait = 2.5 + rand() * 1.5
     ent._wanderCD = (ent._wanderCD or wait) - dt
     if ent._wanderCD > 0 then
         return
@@ -1779,8 +1780,8 @@ local function tickIdleWander(session, Grid, ent, side, dt)
     local hazeOut = session.grid and Grid.hasHaze
         and Grid.hasHaze(session.grid)
     -- Awake mons often hold the lane. Hurt / glass cannons step away more.
-    -- A live hazard: always walk home. Sleepwalkers take the step.
-    if not asleep and not hazeOut and rand() > (0.35 + 0.45 * keep) then
+    -- A live hazard: always walk home.
+    if not hazeOut and rand() > (0.35 + 0.45 * keep) then
         ent._wanderCD = 2.8 + rand() * 2.4
         return
     end
@@ -1792,9 +1793,9 @@ local function tickIdleWander(session, Grid, ent, side, dt)
         end
     end
     if Grid.idleWander(session.grid, ent, side, foe) then
-        ent._wanderCD = asleep and (1.4 + rand() * 1.1) or (3.2 + rand() * 2.8)
+        ent._wanderCD = 3.2 + rand() * 2.8
     else
-        ent._wanderCD = asleep and (0.8 + rand() * 0.6) or (2.0 + rand() * 1.5)
+        ent._wanderCD = 2.0 + rand() * 1.5
     end
 end
 
@@ -2438,7 +2439,31 @@ function Lifecycle.tick(battle, dt, deps)
     if session._faceAcc >= 0.15 then
         session._faceAcc = 0
         local grid = session.grid
-        local function faceToward(ent, other)
+        local Sprites = deps and deps.Sprites
+        local function facingFromDelta(dx, dy, diagonal)
+            local face
+            if Sprites and type(Sprites.faceFromDelta) == "function" then
+                face = Sprites.faceFromDelta(dx, dy)
+            elseif math.abs(dx or 0) >= math.abs(dy or 0) then
+                face = (dx or 0) >= 0 and "right" or "left"
+            else
+                face = (dy or 0) >= 0 and "down" or "up"
+            end
+            if diagonal then
+                return face
+            end
+            if Sprites and type(Sprites.cardinalFacing) == "function" then
+                return Sprites.cardinalFacing(face)
+            end
+            if face == "down-right" or face == "up-right" then
+                return "right"
+            end
+            if face == "down-left" or face == "up-left" then
+                return "left"
+            end
+            return face
+        end
+        local function faceToward(ent, other, diagonal)
             if not (ent and other) then
                 return
             end
@@ -2454,31 +2479,25 @@ function Lifecycle.tick(battle, dt, deps)
                 dx = (other.cellX or 0) - (ent.cellX or 0)
                 dy = (other.cellY or 0) - (ent.cellY or 0)
             end
-            if math.abs(dx) >= math.abs(dy) then
-                ent.facing = dx >= 0 and "right" or "left"
-            else
-                ent.facing = dy >= 0 and "down" or "up"
-            end
+            ent.facing = facingFromDelta(dx, dy, diagonal)
         end
-        local function faceCell(ent, worldX, worldY)
+        local function faceCell(ent, worldX, worldY, diagonal)
             if not ent or ent._stepTX or worldX == nil then
                 return
             end
             local dx = (worldX or 0) - (ent.cellX or 0)
             local dy = (worldY or 0) - (ent.cellY or 0)
-            if math.abs(dx) >= math.abs(dy) then
-                ent.facing = dx >= 0 and "right" or "left"
-            else
-                ent.facing = dy >= 0 and "down" or "up"
-            end
+            ent.facing = facingFromDelta(dx, dy, diagonal)
         end
+        -- Battle mons use 8-way so an off-axis idle still looks at the foe.
+        -- Trainers stay cardinal (no diagonal OW art).
         if playerMon and enemyMon and (not playerMon.anim or playerMon.anim == "idle")
             and monStatus(playerMon) ~= "SLP" then
-            faceToward(playerMon, enemyMon)
+            faceToward(playerMon, enemyMon, true)
         end
         if enemyMon and playerMon and (not enemyMon.anim or enemyMon.anim == "idle")
             and monStatus(enemyMon) ~= "SLP" then
-            faceToward(enemyMon, playerMon)
+            faceToward(enemyMon, playerMon, true)
         end
         -- Engaged trainers watch the duel: prefer facing each other; in wild
         -- fights the player faces the foe mon / fight mid.

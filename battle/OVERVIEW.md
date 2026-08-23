@@ -91,6 +91,60 @@ Every Pokémon has a **Focus Meter** (0–100).
 | **Entrench** | 30 (upfront, covers full duration) | High (locked out of all other reactions for 2-3 turns) | Highest flat mitigation in the game | Committed tanks, "the mountain doesn't move" |
 | **Commit** | 0 | None reactive | Best Focus regen | Resource banking, aggressive players |
 
+---
+
+## Battle Heat (Emotions)
+
+Mood is a **battle submodule** (`battle/rules/emotions.lua`), not a fourth package. FIELD paints the face and chip; it does not own mood math.
+
+**BATTLE FACES** (default On) is the master switch: Off hides portraits/chips **and** turns heat back to identity. Mood is still derived from fight events either way so flipping the option mid-fight does not desync state.
+
+### How mood is derived
+
+One persistent mood per side, plus a short **flash** that wins while it lasts (`Emotions.mood()` returns the flash first).
+
+| Mood | When it sticks | Chip |
+|---|---|---|
+| **normal** | Default / after a switch or faint | — |
+| **pain** | Own HP ≤ 20% | TIRED |
+| **angry** | Two or more misses this fight, or a received crit (lingers 2 turns) | ANGRY |
+| **worried** | Trailing by ≥12% HP, or just ate a hit ≥25% of max HP | WARY |
+| **determined** | Leading by ≥12% HP **and** just landed a hit | DTRMD |
+
+Flashes (1 turn, then the persistent mood underneath):
+
+| Flash | Trigger | Chip |
+|---|---|---|
+| **stunned** | Received a crit | STUN |
+| **sigh** | Just missed | SIGH |
+| **surprised** | Optional beat when a crit lands | WOW |
+
+Priority in `derive()`: pain (low HP) beats angry, which beats worried, which beats determined. A switch or faint resets that side to a fresh mon.
+
+Portraits and chips stay up for the whole non-normal mood, then fade (`PORTRAIT_FADE` 0.45s) when it returns to normal. There is no mood dialogue.
+
+### How heat hits the fight
+
+`Emotions.modifiers(battle, isPlayer)` reads the **shown** mood (flash included). Hooks apply it after the engine roll:
+
+- **Damage** (`battle.damage`): attacker `powerMul` × defender `takenMul`, then clamp **0.80–1.25**, then round. Runs even if REACT (`momentum_counter`) is Off.
+- **Accuracy** (`battle.accuracy`): after the engine hit/miss, a second roll can flip the result by `|accuracy|`. Guaranteed counter hits are not nudged.
+- **Dodge** (`RD.dodgeSuccessChance`): defender `dodge` is added to the Focus dodge chance, then clamped 5–90%.
+
+| Mood | Power out | Damage taken | Accuracy nudge | Dodge nudge |
+|---|---|---|---|---|
+| angry | ×1.12 | ×1.08 | −8% | −5% |
+| pain | ×0.94 | ×1.06 | −6% | −8% |
+| determined | ×1.06 | ×1.00 | +8% | +4% |
+| worried | ×0.96 | ×1.00 | — | +8% |
+| stunned | ×0.92 | ×1.10 | −10% | −10% |
+| sigh | — | — | −4% | — |
+| surprised | — | ×1.06 | — | −4% |
+
+Angry swings harder and wilder. Determined is the clutch read. Worried (WARY) ducks better and hits a little softer. Pain is tired. Flashes are one-turn spikes, not a second persistent track.
+
+Heat is **not** part of the growth-layer +15% stack. It is a small, readable overlay on the same fight the REACT options already shape.
+
 ## Resolved Additions
 
 ### Focus Cap Scaling

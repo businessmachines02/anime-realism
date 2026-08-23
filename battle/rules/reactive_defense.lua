@@ -491,14 +491,17 @@ function RD.addFocus(battle, isPlayer, amount)
 end
 
 -- Depending on where our pokemon is fighting, some poke
-function RD.dodgeSuccessChance(defender, attacker)
+function RD.dodgeSuccessChance(defender, attacker, battle)
   local speDef = speedStat(defender)
   local speAtk = speedStat(attacker)
   local chance = clamp(35 + (speDef - speAtk) * 0.14, 20, 85) / 100
   if hasCoverTypeBonus(defender) then
-    return clamp(chance * 1.5, 0, 1)
+    chance = clamp(chance * 1.5, 0, 1)
   end
-  return chance
+  if type(RD.emotionDodgeBonus) == "function" then
+    chance = chance + (tonumber(RD.emotionDodgeBonus(defender, attacker, battle)) or 0)
+  end
+  return clamp(chance, 0.05, 0.90)
 end
 
 -- Trainer-foe picks live in rules/foe_ai.lua (FoeAi.attach installs
@@ -699,7 +702,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     end
     result.focusSpent = cost
     side.reactedThisTurn = true
-    local chance = RD.dodgeSuccessChance(target, user)
+    local chance = RD.dodgeSuccessChance(target, user, battle)
     if rng() <= chance then
       result.forceMiss = true
       result.cancelAnim = false -- keep swing for drama; main may still cancel

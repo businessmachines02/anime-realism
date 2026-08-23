@@ -21,8 +21,10 @@ need=(
   "$ROOT/battle/rules/reactive_defense.lua"
   "$ROOT/battle/rules/react.lua"
   "$ROOT/battle/rules/dialogue.lua"
+  "$ROOT/battle/rules/emotions.lua"
   "$ROOT/battle/chrome/pick.lua"
   "$ROOT/battle/chrome/bubbles.lua"
+  "$ROOT/battle/chrome/portraits.lua"
   "$ROOT/battle/fx.lua"
   "$ROOT/battle/strings.lua"
   "$ROOT/field/init.lua"
@@ -78,6 +80,20 @@ fi
 while IFS= read -r kit; do
   zip -q "$OUT" "$kit"
 done < <(find assets/followers -maxdepth 1 \( -name 'follower_*.png' -o -name 'follower_*.kit' \) | sort)
+
+# Gen 1 PMD portraits only (root emotion PNGs + credits). Later-gen /
+# form folders stay on disk and are not shipped.
+if [[ -d "$ROOT/assets/portrait" ]]; then
+  for i in $(seq 1 151); do
+    dex="$(printf '%04d' "$i")"
+    dir="assets/portrait/$dex"
+    if [[ -d "$dir" ]]; then
+      while IFS= read -r face; do
+        zip -q "$OUT" "$face"
+      done < <(find "$dir" -maxdepth 1 \( -name '*.png' -o -name 'credits.txt' \) | sort)
+    fi
+  done
+fi
 
 echo "Built $ROOT/$OUT"
 unzip -l "$OUT"
