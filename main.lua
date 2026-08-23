@@ -3355,6 +3355,13 @@ return function(mod)
             if type(battle.performMove) ~= "function" then
                 return false
             end
+            -- The shot is the react. Do not open REACT on this performMove
+            -- (foe FIRE used to land as a new incoming and reopen the HUD).
+            if React and type(React.lockHud) == "function" then
+                React.lockHud(battle)
+            else
+                battle._arReactLocked = true
+            end
             battle._arFireNow = true
             battle._arFireNowHit = nil
             battle._arFireCarryThrough = nil
@@ -3417,6 +3424,11 @@ return function(mod)
             end
             if type(battle.performMove) ~= "function" then
                 return false
+            end
+            if React and type(React.lockHud) == "function" then
+                React.lockHud(battle)
+            else
+                battle._arReactLocked = true
             end
             battle._arChargeNow = true
             local ok, err = pcall(battle.performMove, battle, user, target, action)

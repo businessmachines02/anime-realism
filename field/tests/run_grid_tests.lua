@@ -1997,6 +1997,42 @@ function tests.counter_proc_does_not_play_a_player_miss()
   eq(enemy.lastAnim, nil, "the foe does not sidestep the proc")
 end
 
+function tests.fire_locks_the_react_hud()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  React.bind({
+    opt = function(key)
+      return key == "momentum_counter"
+    end,
+    pickMode = function()
+      return "ALWAYS"
+    end,
+    playerStatusLocked = function()
+      return false
+    end,
+    foeMoveIsSpecial = function()
+      return false
+    end,
+  })
+  local tackle = { id = "TACKLE", power = 40, category = "physical", type = "NORMAL" }
+  local battle = {
+    player = { mon = { level = 20 } },
+    enemy = { mon = { level = 20 } },
+  }
+  React.state(battle)
+  truthy(React.shouldOffer(battle, tackle), "incoming still opens REACT")
+  battle._arFireNow = true
+  truthy(not React.shouldOffer(battle, tackle),
+    "a FIRE shot does not open REACT")
+  battle._arFireNow = nil
+  React.lockHud(battle)
+  truthy(React.isLocked(battle), "FIRE latches the HUD closed")
+  truthy(not React.shouldOffer(battle, tackle),
+    "after FIRE the HUD stays closed")
+  React.reset(battle)
+  truthy(not React.isLocked(battle), "the lock clears on the next turn")
+  truthy(React.shouldOffer(battle, tackle), "next turn can REACT again")
+end
+
 function tests.empty_focus_skips_react_hud()
   local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
   local battle = {

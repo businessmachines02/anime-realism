@@ -181,6 +181,7 @@ local function resetMomentum(battle)
     -- Battle-owned latches survive hot-reload weak-table resets.
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
+    battle._arReactLocked = nil
     battle._arAwaitingReact = nil
     battle._arAwaitAgain = nil
     battle._arAwaitAgainSide = nil
@@ -214,6 +215,12 @@ clearCalloutPickState = function(battle)
         end
     end
     -- Keep _arPickOfferedThisTurn until turn_started (resetMomentum).
+end
+
+local function lockReactHud(battle)
+    if type(battle) == "table" then
+        battle._arReactLocked = true
+    end
 end
 
 local function scrubReactPickRows(battle)
@@ -388,6 +395,11 @@ local function shouldOfferCalloutPick(battle, move)
     end
     -- Frozen / asleep: can't dodge, brace, or take orders.
     if hostCall("playerStatusLocked", battle) then
+        return false
+    end
+    -- FIRE / CHARGE already committed this beat (yours or the foe's).
+    -- The shot is the react — do not open REACT on it, or again after it.
+    if battle._arReactLocked or battle._arFireNow then
         return false
     end
     -- Battle-owned latches: survive hot-reload weak momentum tables and
@@ -745,6 +757,9 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     battle._arAwaitingReact = nil
     -- Invalidate any leftover REACT ui rows still sitting in the queue.
     state.reactEpoch = (state.reactEpoch or 0) + 1
+    if action == "fire" or action == "charge" then
+        lockReactHud(battle)
+    end
     local pending = state.pendingDamage
     state.pendingDamage = nil
     state.enemyActedThisTurn = true
@@ -1313,13 +1328,18 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
         return
     end
     local function beginFireNow(shots, prefIdx)
+        local st = momentumState(battle)
+        -- FIRE is the react. Kill leftover REACT rows so the HUD cannot
+        -- reopen while the shot picker (or the shot itself) is live.
+        lockReactHud(battle)
+        st.reactEpoch = (st.reactEpoch or 0) + 1
+        scrubReactPickRows(battle)
         shots = shots or {}
         if #shots == 0 then
             finishCalloutPick(battle, me, moveName, "commit", nil)
             return
         end
         if #shots == 1 then
-            local st = momentumState(battle)
             st.fireNowMove = shots[1].moveInst
             st.checkNow = shots[1].checkNow == true
             st.hazeNow = shots[1].hazeNow == true
@@ -1329,13 +1349,16 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
         queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
     end
     local function beginChargeNow(shots, prefIdx)
+        local st = momentumState(battle)
+        lockReactHud(battle)
+        st.reactEpoch = (st.reactEpoch or 0) + 1
+        scrubReactPickRows(battle)
         shots = shots or {}
         if #shots == 0 then
             finishCalloutPick(battle, me, moveName, "commit", nil)
             return
         end
         if #shots == 1 then
-            local st = momentumState(battle)
             st.chargeNowMove = shots[1].moveInst
             finishCalloutPick(battle, me, moveName, "charge", nil)
             return
@@ -1681,7 +1704,8 @@ local function shouldDeferForCalloutPick(battle, ctx)
     if not user or user.isPlayer or not target or not target.isPlayer then
         return false
     end
-    if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn then
+    if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn
+        or battle._arReactLocked or battle._arFireNow then
         return false
     end
     if not shouldOfferCalloutPick(battle, move) then
@@ -1752,6 +1776,15 @@ end
 
 function React.clearPick(battle)
     return clearCalloutPickState(battle)
+end
+
+--- FIRE / CHARGE spent this beat: the REACT HUD stays closed.
+function React.lockHud(battle)
+    lockReactHud(battle)
+end
+
+function React.isLocked(battle)
+    return battle ~= nil and battle._arReactLocked == true
 end
 
 function React.resolvePending(battle)
