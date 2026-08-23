@@ -2197,7 +2197,16 @@ function tests.fire_clashes_with_an_incoming_special()
   for i = 1, #(session.projectiles or {}) do
     styles[session.projectiles[i].style] = true
   end
-  truthy(styles.clash_glow, "clash burst at mid")
+  truthy(styles.clash_glow, "clash glow at mid")
+  truthy(styles.clash_burst, "beam clash paints a smoke-screen boom")
+  local burst
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "clash_burst" then
+      burst = session.projectiles[i]
+    end
+  end
+  truthy(burst and (burst.age or 0) < 0, "boom waits until the shots meet")
+  truthy(burst and burst.color2, "boom tints both specials")
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()

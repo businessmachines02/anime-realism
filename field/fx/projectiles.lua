@@ -778,6 +778,69 @@ local function drawClashTrail(g, p, x, y, t, c)
   end)
 end
 
+--- Two specials slam together: typed flash, then a smoke screen at mid.
+local function drawClashExplosion(g, p, x, y, t)
+  local c = p.color or { 1.00, 0.72, 0.28 }
+  local c2 = p.color2 or { 0.45, 0.72, 1.00 }
+  local age = p.age or 0
+  local fade = 1 - t * 0.22
+  if t > 0.68 then
+    fade = fade * (1 - (t - 0.68) / 0.32)
+  end
+  local flash = math.max(0, 1 - t * 2.4)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.58 * flash)
+    g.circle("fill", x, y, 12 + t * 26)
+    g.setColor(c2[1], c2[2], c2[3], 0.42 * flash)
+    g.circle("fill", x, y, 8 + t * 18)
+    g.setColor(1, 1, 1, 0.86 * flash)
+    g.circle("fill", x, y, 4.5 + flash * 3.2)
+  end)
+  g.setLineWidth(3.0)
+  g.setColor(c[1], c[2], c[3], 0.78 * fade)
+  g.circle("line", x, y, 6 + t * 26)
+  g.setLineWidth(1.8)
+  g.setColor(c2[1], c2[2], c2[3], 0.58 * fade)
+  g.circle("line", x, y, 4 + t * 18)
+  g.setLineWidth(1.1)
+  g.setColor(1, 1, 1, 0.40 * fade)
+  g.circle("line", x, y, 2.4 + t * 11)
+  for i = 1, 14 do
+    local a = i * (math.pi * 2 / 14) + t * 0.65
+    local d0 = 4 + t * 17
+    local d1 = d0 + 8 + (i % 3) * 3
+    local col = (i % 2 == 0) and c or c2
+    g.setColor(col[1], col[2], col[3], 0.90 * fade)
+    g.setLineWidth((i % 2 == 0) and 2.5 or 1.6)
+    g.line(x + math.cos(a) * d0, y + math.sin(a) * d0 * 0.68,
+      x + math.cos(a) * d1, y + math.sin(a) * d1 * 0.68)
+  end
+  for i = 1, 16 do
+    local a = age * 1.45 + i * 0.82
+    local life = math.min(1, t * 1.12 + (i % 5) * 0.035)
+    local dist = 3.2 + life * (14 + (i % 4) * 3.4)
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.62 - life * (6 + i % 5)
+    local r = 3.8 + life * (7 + (i % 3) * 2.2)
+    local puff = (0.70 - life * 0.32) * fade
+    g.setColor(0.18, 0.16, 0.16, puff * 0.58)
+    g.circle("fill", px, py, r + 2.6)
+    local tint = (i % 2 == 0) and c or c2
+    g.setColor(
+      tint[1] * 0.42 + 0.30,
+      tint[2] * 0.42 + 0.28,
+      tint[3] * 0.42 + 0.28,
+      puff)
+    g.circle("fill", px, py, r)
+    g.setColor(0.82, 0.80, 0.76, puff * 0.30)
+    g.circle("fill", px - r * 0.22, py - r * 0.28, r * 0.44)
+  end
+  if g.ellipse then
+    g.setColor(0.14, 0.12, 0.12, 0.42 * fade)
+    g.ellipse("fill", x, y + 7, 16 + t * 12, 4.6)
+  end
+end
+
 local function drawBall(g, x, y)
   g.setColor(0.08, 0.06, 0.07, 1)
   g.circle("fill", x, y, 4)
@@ -4050,6 +4113,9 @@ end)
 Projectiles.registerStyle("clash_trail", function(g, p, x, y, ox, oy, t, c, glitz)
     drawClashTrail(g, p, x, y, t, c)
 end)
+Projectiles.registerStyle("clash_burst", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawClashExplosion(g, p, x, y, t)
+end)
 Projectiles.registerStyle("power_impact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
 end)
@@ -5581,7 +5647,7 @@ function Projectiles.clashBurst(session, side, opts)
   return Projectiles.powerHit(session, foeSide, opts)
 end
 
---- Two specials meet in the middle. Short streaks + a burst at the midpoint.
+--- Two specials meet in the middle. Streaks slam, then a smoke-screen boom.
 function Projectiles.beamClash(session, playerOpts, enemyOpts)
   playerOpts = playerOpts or {}
   enemyOpts = enemyOpts or {}
@@ -5592,7 +5658,8 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
   if not (ax and bx) then
     return nil
   end
-  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5 - 2
+  local meet = 0.28
   local function streak(sx, sy, opts)
     local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
     local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
@@ -5601,27 +5668,34 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
       moveType = moveType,
       category = "special",
     })
-    return spawn(session, {
+    local shot = spawn(session, {
       kind = "move",
       style = (fx and fx.style ~= "contact" and fx.style) or "beam",
       glitz = fx and fx.glitz,
       sx = sx, sy = sy, ex = mx, ey = my,
-      duration = 0.28,
+      duration = meet,
       arc = 0,
       color = (fx and fx.color) or color,
       moveId = opts.moveId or opts.id,
       moveType = moveType,
     })
+    if shot then
+      shot.noLand = true
+    end
+    return shot
   end
   streak(ax, ay, playerOpts)
   streak(bx, by, enemyOpts)
   local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local eType = tostring(enemyOpts.moveType or enemyOpts.type or "NORMAL"):upper()
   local color = TYPE_COLORS[pType] or TYPE_COLORS.NORMAL
+  local color2 = TYPE_COLORS[eType] or TYPE_COLORS.NORMAL
   spawn(session, {
     kind = "effect",
     style = "clash_glow",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.72,
+    duration = 0.82,
+    delay = meet * 0.85,
     arc = 0,
     color = color,
   })
@@ -5629,18 +5703,24 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
     kind = "effect",
     style = "clash_trail",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.48,
+    duration = 0.52,
+    delay = meet * 0.85,
     arc = 0,
     color = color,
   })
-  return spawn(session, {
+  local burst = spawn(session, {
     kind = "effect",
-    style = "power_hit",
+    style = "clash_burst",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.36,
+    duration = 0.88,
+    delay = meet * 0.92,
     arc = 0,
     color = color,
   })
+  if burst then
+    burst.color2 = color2
+  end
+  return burst
 end
 
 -- Occupancy lives on grid.haze. Paint loops in drawHazeLanes each frame.
@@ -5678,7 +5758,7 @@ local SPECIAL_LAND_STYLE = {
 }
 
 local function shouldSpecialLand(p)
-  if not p or p.style == "special_impact" then
+  if not p or p.style == "special_impact" or p.noLand then
     return false
   end
   if p.specialLand then

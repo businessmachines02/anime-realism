@@ -1491,6 +1491,7 @@ function Cues.playBeamClash(session, Grid, result, ctx)
         lift = 6,
         burst = false,
     })
+    H.impactKick(session, { powerful = true, clash = true })
     return true
 end
 
