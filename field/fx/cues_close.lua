@@ -436,11 +436,14 @@ return function(Cues)
             end
         end
         battle._arCloseGapResuming = nil
-        -- Sticky FIELD diamond / FIGHT menu must not cover faint / send-out.
-        if battlerShownDown(battle.player) or battlerShownDown(battle.enemy) then
+        -- Sticky FIELD diamond must not cover a real faint. Send-out leaves
+        -- shownHP at 0; snapping to messages there freezes "X sent out Y!".
+        local playerDown = battlerShownDown(battle.player)
+        local foeKo = battlerHpDown(battle.enemy) and not battle.enemySendingOut
+        if playerDown or foeKo then
             battle._arFieldPreferMoves = nil
             battle._arFieldCommandHold = true
-            if battlerShownDown(battle.player) then
+            if playerDown then
                 if battle.phase == "moveSelect" or battle.phase == "mimicSelect" then
                     battle.phase = "menu"
                 end

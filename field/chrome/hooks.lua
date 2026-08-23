@@ -80,11 +80,84 @@ end
 -- Hide FIGHT / moves over a KO'd foe. Player faint still needs PKMN.
 -- A trainer send-out keeps the old HP at 0 until the new battler lands;
 -- holding FIGHT there parks "X sent out Y!" with nowhere to go.
+-- `enemySendingOut` often drops a frame before HP is swapped, so also
+-- key off the live narrator line.
+function Hooks.narratorText(battle)
+    return tostring(battle and battle.current and battle.current.text or "")
+end
+
+function Hooks.isSendOutText(text)
+    text = tostring(text or ""):lower():gsub("%s+", " ")
+    if text:find("sent out", 1, true) then
+        return true
+    end
+    if text:find("go!", 1, true) then
+        return true
+    end
+    return false
+end
+
+function Hooks.isFaintScriptText(text)
+    text = tostring(text or ""):lower():gsub("%s+", " ")
+    if text:find("fainted", 1, true) then
+        return true
+    end
+    if text:find("gained", 1, true) or text:find("grew to", 1, true) then
+        return true
+    end
+    if text:find("exp. point", 1, true) or text:find("exp point", 1, true) then
+        return true
+    end
+    return false
+end
+
+function Hooks.isSendOutBeat(battle)
+    if not battle then
+        return false
+    end
+    if battle.enemySendingOut or battle.sendingOut then
+        return true
+    end
+    if Hooks.isSendOutText(Hooks.narratorText(battle)) then
+        return true
+    end
+    local q = battle.queue
+    if type(q) == "table" and q[1] and Hooks.isSendOutText(q[1].text) then
+        return true
+    end
+    return false
+end
+
+-- Remount narrator only for a live faint / EXP row, never leftover "sent out".
+function Hooks.faintScriptLive(battle)
+    if not battle or Hooks.isSendOutBeat(battle) then
+        return false
+    end
+    if battle.draining or battle.animPlaying or battle.waitingUI then
+        return true
+    end
+    if (tonumber(battle.waitFrames) or 0) > 0 then
+        return true
+    end
+    if Hooks.isFaintScriptText(Hooks.narratorText(battle)) then
+        return true
+    end
+    local q = battle.queue
+    if type(q) == "table" and q[1] and Hooks.isFaintScriptText(q[1].text) then
+        return true
+    end
+    if (battle.msgWaiting or battle.msgPrompt)
+        and Hooks.isFaintScriptText(Hooks.narratorText(battle)) then
+        return true
+    end
+    return false
+end
+
 function Hooks.holdFightMenu(battle)
     if not battle or Hooks.playerMustSwitch(battle) then
         return false
     end
-    if battle.enemySendingOut then
+    if Hooks.isSendOutBeat(battle) then
         return false
     end
     return Hooks.foeIsDown(battle)

@@ -17,7 +17,8 @@ return function(mod)
         src = body
       end
     end
-    if type(src) ~= "string" and type(mod.path) == "string" then
+    if type(src) ~= "string" and type(mod.path) == "string"
+        and not (love and love.graphics) then
       local path = mod.path .. "/" .. name
       local f = io.open(path, "r")
       if f then

@@ -211,6 +211,26 @@ function tests.faint_drops_sticky_move_diamond()
     enemy = { mon = { hp = 0 } },
   }
   truthy(not Hooks.holdFightMenu(sentOut), "trainer send-out is not a FIGHT hold")
+  local staleFlag = {
+    phase = "menu",
+    current = { text = "MISTY sent\nout NINETALES!" },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(staleFlag),
+    "sent-out line is not a FIGHT hold after enemySendingOut drops")
+  truthy(not Hooks.faintScriptLive(staleFlag),
+    "sent-out leftover current is not a faint script")
+  truthy(UI.layoutState(staleFlag).showCommand,
+    "sent-out beat still reaches the command menu")
+  local goLine = {
+    phase = "menu",
+    current = { text = "Go! SQUIRTLE!" },
+    sendingOut = true,
+    player = { mon = { hp = 20 } },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(goLine), "Go! send-out is not a FIGHT hold")
+  truthy(Hooks.faintScriptLive(faintedMenu), "faint line is a live faint script")
   local playerDown = {
     phase = "menu",
     player = { mon = { hp = 0 } },
@@ -634,7 +654,7 @@ function tests.mood_portrait_sits_beside_the_sprite()
   eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
   eq(hx, px + 14, "HP sits on the face midline")
-  eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "HP sits just above the portrait")
   local stack = 12
   local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
   eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
@@ -2477,6 +2497,40 @@ function tests.charge_clashes_with_an_incoming_physical()
   truthy(styles.dash_smear, "both charges smear toward mid")
   truthy(styles.clash_burst, "body clash paints a crash boom")
   RD.clear(battle)
+end
+
+function tests.dodge_chance_rises_with_defender_health()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local attacker = { stats = { speed = 50 } }
+  local full = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 40, stats = { hp = 40, speed = 50 } },
+  }
+  local hurt = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 8, stats = { hp = 40, speed = 50 } },
+  }
+  local empty = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 0, stats = { hp = 40, speed = 50 } },
+  }
+  local unknown = { stats = { speed = 50 } }
+  eq(RD.hpRatio(full), 1, "full bar is 1")
+  eq(RD.hpRatio(hurt), 0.2, "8/40 is 0.2")
+  eq(RD.hpRatio(empty), 0, "empty bar is 0")
+  eq(RD.dodgeHealthBonus(full), RD.DODGE_HEALTH_BONUS, "full HP gets the whole bonus")
+  eq(RD.dodgeHealthBonus(hurt), RD.DODGE_HEALTH_BONUS * 0.2, "hurt HP scales the bonus")
+  eq(RD.dodgeHealthBonus(empty), 0, "empty HP adds nothing")
+  eq(RD.dodgeHealthBonus(unknown), 0, "missing HP adds nothing")
+  local fresh = RD.dodgeSuccessChance(full, attacker)
+  local wounded = RD.dodgeSuccessChance(hurt, attacker)
+  local down = RD.dodgeSuccessChance(empty, attacker)
+  local base = RD.dodgeSuccessChance(unknown, attacker)
+  truthy(fresh > wounded, "full HP dodges more often than 20%")
+  truthy(wounded > down, "20% HP still dodges more than empty")
+  eq(down, base, "empty HP matches a battler with no HP data")
+  eq(fresh, base + RD.DODGE_HEALTH_BONUS,
+    "full HP adds DODGE_HEALTH_BONUS on equal speed")
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()
@@ -8085,7 +8139,7 @@ function tests.kit_idle_override_follows_status()
   }, false), "freeze", "frozen standing uses freeze")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { confusedTurns = 3, mon = {} },
-  }, false), "confuse", "confused standing uses confuse")
+  }, false), nil, "confused standing stays on Idle, not Rotate")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "PAR" } },
   }, false), nil, "para stays idle")
@@ -8170,6 +8224,28 @@ function tests.physical_kit_prefers_specialized_strips()
     "multi-hit falls back to Kick when Multi is missing")
   eq(Cues.physicalKitAnim({ _kitSheet = true }, { moveId = "FURY_ATTACK" }, Sprites),
     "attack", "no sidecar extras stay on Attack")
+end
+
+function tests.golem_attack_kit_is_special0()
+  local path = root .. "/../assets/followers/follower_076.kit"
+  local f = io.open(path, "r")
+  truthy(f, "Golem kit sidecar is present")
+  local body = f:read("*a") or ""
+  f:close()
+  local line = body:match("physical[^\n]+")
+  eq(line, "physical 6 6 6 6 6 6", "Golem Attack is Special0, not the punch strip")
+  truthy(not body:find("\nroll ", 1, true), "Golem has no extra roll row")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _spriteSpecies = "GOLEM",
+    _kitPoseBlock = { physical = 3, confuse = 14 },
+  }, true), nil, "Golem still walks on Walk")
+  eq(Cues.physicalKitAnim({
+    _kitSheet = true,
+    _spriteSpecies = "GOLEM",
+    _kitPoseBlock = { physical = 3 },
+  }, { moveId = "TACKLE" }, Sprites), "attack",
+    "Golem's strike is the physical row")
 end
 
 function tests.pose_keeps_kit_on_the_plant()
@@ -8972,10 +9048,23 @@ function tests.emotions_chip_colors_match_mood()
 end
 
 function tests.status_chips_are_smaller_than_hud_type()
-  eq(UI.CHIP_H, 11, "chip plate is a short readable pill")
-  eq(UI.CHIP_SCALE, 0.85, "chip type sits under HUD size")
-  eq(UI.HP_LETTER_W, 8, "initial sits on a cream badge")
-  truthy(UI.HP_LETTER_SCALE < 0.7, "initial is smaller than HUD type")
+  eq(UI.CHIP_H, 13, "chip plate fits native HUD type")
+  eq(UI.CHIP_SCALE, 1, "chip type is not scaled down")
+  eq(UI.HP_LETTER_W, 11, "initial sits on a cream badge")
+  eq(UI.HP_LETTER_SCALE, 1, "initial is native HUD type")
+  truthy(UI.HP_BAR_H >= 5, "HP chip is thick enough to read")
+end
+
+function tests.react_chips_follow_the_mon()
+  local hx, hy = UI.hpAboveFace(4, 40, 28)
+  local mx, my = UI.moodChipAboveHp(hx, hy, 0)
+  eq(mx, hx, "worry pill stays on the HUD stack midline")
+  eq(my, hy - UI.CHIP_AIR - UI.CHIP_H, "worry pill sits above HP with air")
+  local rx, ry = UI.reactChipAboveMon(48, 90)
+  eq(rx, 48, "REACT pill is centered on the sprite")
+  eq(ry, 90 - UI.CHIP_H - UI.REACT_CHIP_LIFT, "REACT pill sits over the mon")
+  truthy(UI.CHIP_AIR >= 4, "emotion pill has a gap above the HP row")
+  eq(UI.HP_FACE_GAP, 0, "HP row hugs the portrait")
 end
 
 function tests.emotions_chip_ink_is_always_dark()

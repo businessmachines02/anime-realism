@@ -4,9 +4,10 @@
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
 --      One light glass plate. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
---   3. REACT / miss  — status chips on the battler after a successful
+--   3. REACT / miss  — chips over the battler sprite after a successful
 --      REACT! pick (DODGE / BRACE / COVER / HOLD) or an accuracy MISS.
---      Orders and failed reacts stay toasts.
+--      Emotion pills (worry / angry) stay on the HUD stack. Orders and
+--      failed reacts stay toasts.
 --
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
@@ -242,10 +243,12 @@ end
 local function hpBar(g, x, y, w, ratio, fill)
     ratio = clamp01(ratio)
     fill = math.floor(tonumber(fill) or 0)
+    local h = UI.HP_BAR_H or 5
+    local inner = math.max(2, h - 2)
     g.setColor(0.12, 0.09, 0.08, 1)
-    g.rectangle("fill", x, y, w, 4)
+    g.rectangle("fill", x, y, w, h)
     g.setColor(0.96, 0.92, 0.78, 1)
-    g.rectangle("fill", x + 1, y + 1, w - 2, 2)
+    g.rectangle("fill", x + 1, y + 1, w - 2, inner)
     if fill < 1 and ratio > 0 then
         fill = 1
     end
@@ -260,21 +263,23 @@ local function hpBar(g, x, y, w, ratio, fill)
         else
             g.setColor(0.20, 0.62, 0.24, 1)
         end
-        g.rectangle("fill", x + 1, y + 1, fill, 2)
+        g.rectangle("fill", x + 1, y + 1, fill, inner)
     end
 end
 
 -- Soft purple Focus meter (same shell as HP, thinner fill).
 local function focusBar(g, x, y, w, ratio)
     ratio = clamp01(ratio)
+    local h = UI.FOCUS_BAR_H or 4
+    local inner = math.max(2, h - 2)
     g.setColor(0.16, 0.10, 0.20, 1)
-    g.rectangle("fill", x, y, w, 3)
+    g.rectangle("fill", x, y, w, h)
     g.setColor(0.90, 0.84, 0.94, 1)
-    g.rectangle("fill", x + 1, y + 1, w - 2, 1)
+    g.rectangle("fill", x + 1, y + 1, w - 2, inner)
     local fill = math.floor((w - 2) * ratio + 0.5)
     if fill > 0 then
         g.setColor(0.62, 0.40, 0.82, 0.92)
-        g.rectangle("fill", x + 1, y + 1, fill, 1)
+        g.rectangle("fill", x + 1, y + 1, fill, inner)
     end
 end
 
@@ -292,19 +297,23 @@ local function easeToward(cur, target, step)
     return cur - step
 end
 
--- Letter + bar + pointer: keep the chip on the canvas when a mon is
--- near the top (or side) of the view.
-UI.HP_LETTER_W = 8
-UI.HP_BAR_W = 20
+-- World HP row: cream initial badge + HP bar (+ optional Focus above it).
+-- Keep the chip on the canvas when a mon is near the top (or side).
+UI.HP_LETTER_W = 11       -- cream badge width (holds the species initial)
+UI.HP_BAR_W = 20          -- green HP track width, right of the badge
 UI.HP_CHIP_W = UI.HP_LETTER_W + 1 + UI.HP_BAR_W
-UI.HP_CHIP_H = 7
-UI.HP_LETTER_SCALE = 0.55
-UI.FACE_SIZE = 28
+UI.HP_CHIP_H = 10         -- cream badge height
+UI.HP_LETTER_SCALE = 1    -- 1 = native HUD type size inside the badge
+UI.HP_BADGE_LIFT = 2      -- nudge the badge (not the bars) up, in pixels
+UI.HP_BAR_H = 5           -- green HP track height
+UI.FACE_SIZE = 28         -- PMD portrait square under the HP row
 UI.FACE_GAP = 28
 UI.FACE_LIFT = 10
 UI.FACE_MARGIN = 2
 UI.HUD_PAD = 4
-UI.CHIP_AIR = 6
+UI.HP_FACE_GAP = 0        -- px between HP row bottom and portrait top
+UI.CHIP_AIR = 4           -- px between the emotion pill and the HP row
+UI.REACT_CHIP_LIFT = 6    -- px the REACT pill sits above the mon sprite
 
 function UI.faceGap(ent)
     local gap = UI.FACE_GAP
@@ -475,7 +484,21 @@ function UI.hpAboveFace(fx, fy, size)
     size = tonumber(size) or UI.FACE_SIZE
     fx = tonumber(fx) or 0
     fy = tonumber(fy) or 0
-    return fx + math.floor(size / 2), fy - (UI.HP_CHIP_H or 7) - 2
+    return fx + math.floor(size / 2), fy - (UI.HP_CHIP_H or 7) - (UI.HP_FACE_GAP or 0)
+end
+
+-- Emotion / worry pill on the HUD stack, above HP (and Focus if shown).
+function UI.moodChipAboveHp(hx, hy, extraTop)
+    extraTop = math.max(0, tonumber(extraTop) or 0)
+    local gap = UI.CHIP_AIR or 4
+    return hx, hy - extraTop - gap - (UI.CHIP_H or 13)
+end
+
+-- REACT / MISS pill, centered on the battler sprite (grid, not the HUD).
+function UI.reactChipAboveMon(spriteX, spriteY)
+    spriteX = tonumber(spriteX) or 0
+    spriteY = tonumber(spriteY) or 0
+    return spriteX, spriteY - (UI.CHIP_H or 13) - (UI.REACT_CHIP_LIFT or 6)
 end
 
 -- HP / focus sit a couple px above the ink, not the hop-padded cell top.
@@ -497,7 +520,7 @@ function UI.barLift(ent)
     return math.max(10, body - 10)
 end
 UI.HP_CHIP_TOP = 2
-UI.FOCUS_BAR_H = 3
+UI.FOCUS_BAR_H = 4
 UI.FOCUS_BAR_GAP = 0 -- in pixels. this is either 1 or 0 ~ cannot have a half pixel unfortunately :)
 
 function UI.clampHpChip(x, y, canvasW, canvasH, extraTop)
@@ -577,7 +600,15 @@ end
 
 function UI.layoutState(battle)
     local phase = battle and battle.phase or ""
-    local hold = foeIsDown(battle)
+    -- Send-out keeps foe HP at 0 for a beat; hiding FIGHT there freezes
+    -- "X sent out Y!" with no menu and no advancing narrator.
+    local sending = battle and (battle.enemySendingOut or battle.sendingOut)
+    if not sending then
+        local text = tostring(battle and battle.current and battle.current.text or "")
+            :lower():gsub("%s+", " ")
+        sending = text:find("sent out", 1, true) or text:find("go!", 1, true)
+    end
+    local hold = foeIsDown(battle) and not sending
     local showCommand = phase == "menu" and not hold
     local showMoves = (phase == "moveSelect" or phase == "mimicSelect") and not hold
     return {
@@ -605,6 +636,7 @@ local function fieldEntity(battle, side)
     return nil
 end
 
+-- First A–Z of nickname / species ("Vaporeon" → "V").
 local function barInitial(battler)
     local mon = battler and battler.mon
     local name = mon and (mon.nickname or mon.name or mon.species) or "?"
@@ -616,9 +648,9 @@ local function barInitial(battler)
     return ch:upper()
 end
 
-UI.CHIP_HOLD = 90
-UI.CHIP_H = 11
-UI.CHIP_SCALE = 0.85
+UI.CHIP_HOLD = 90   -- frames a REACT / mood pill stays up
+UI.CHIP_H = 13      -- yellow (etc.) status / mood pill height
+UI.CHIP_SCALE = 1   -- pill type size vs HUD type (1 = same)
 
 -- Successful REACT! outcomes, plus accuracy MISS on the attacker.
 -- Orders and failed reacts stay toasts / notices — they must not paint a chip.
@@ -751,10 +783,10 @@ local function moodChipOf(battle, isPlayer)
 end
 
 local function drawStatusChip(g, Font, chip, x, y, canvasW)
-    local text = tostring(chip.text or ""):lower()
-    local scale = UI.CHIP_SCALE or 0.75
+    local text = tostring(chip.text or "")
+    local scale = UI.CHIP_SCALE or 1
     local tw = math.max(1, math.floor(measureText(Font, text) * scale + 0.5))
-    local w, h = tw + 5, UI.CHIP_H
+    local w, h = tw + 6, UI.CHIP_H
     local cx = math.floor(x - w / 2)
     if cx + w > canvasW - 1 then
         cx = canvasW - 1 - w
@@ -767,14 +799,18 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
     end
     local fill = chip.fill or { 1, 1, 0.94 }
     local ink = chip.ink or DARK_INK
+    local faceH = (Type and Type.SIZE) or 8
+    local textY = math.max(1, math.floor((h - faceH) / 2))
     g.push("all")
     g.setColor(fill[1], fill[2], fill[3], 1)
     g.rectangle("fill", cx, y, w, h)
-    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+    g.setColor(0.10, 0.08, 0.06, 1)
     g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
     g.push()
-    g.translate(cx + 2, y + 2)
-    g.scale(scale, scale)
+    g.translate(cx + 3, y + textY)
+    if scale ~= 1 then
+        g.scale(scale, scale)
+    end
     if Type and type(Type.draw) == "function" then
         Type.draw(g, text, 0, 0, ink, Font, { track = 0 })
     elseif Font and type(Font.draw) == "function" then
@@ -839,21 +875,26 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 end
                 extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
             end
-            local chip = statusChip(battle, item.side)
+
+            -- Emotion pill stays on the HUD. REACT / MISS follows the mon.
+            local reactChip = statusChip(battle, item.side)
             local moodSpec = select(1, moodChipOf(battle, item.side == "player"))
-            local chipCount = (chip and 1 or 0) + (moodSpec and 1 or 0)
-            local chipTop = chipCount * (UI.CHIP_H + 1)
+            local moodTop = moodSpec and ((UI.CHIP_H or 13) + (UI.CHIP_AIR or 4)) or 0
             local faceOn = type(UI.faceEnabled) == "function" and UI.faceEnabled(battle)
             local faceImg, faceA
             if faceOn and type(UI.faceFlash) == "function" then
                 faceImg, faceA = UI.faceFlash(battle, item.side == "player")
             end
+            -- Portrait square; stackH reserves room above it for mood + HP.
             local fs = UI.FACE_SIZE or 28
-            local stackH = extraTop + chipTop + UI.HP_CHIP_H + 2
+            -- +4 / badge lift: HP row sits a few px above hpAboveFace, cream higher still.
+            local stackH = extraTop + moodTop + UI.HP_CHIP_H + (UI.HP_FACE_GAP or 0)
+                + 4 + (UI.HP_BADGE_LIFT or 2)
             local fx, fy = UI.faceAnchor(item.side, nil, nil, fs, stackH, canvasW)
             if fy + fs > canvasH - 1 then
                 fy = canvasH - 1 - fs
             end
+            -- HP row origin: centered on the portrait, flush above it.
             local x, y = UI.hpAboveFace(fx, fy, fs)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
@@ -862,16 +903,28 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 ent._fieldWorldX, ent._fieldWorldY = wx, wy
                 ent._fieldScreenX, ent._fieldScreenY = spriteX, spriteY
             end
+
+            -- "V" / first letter of the nickname or species.
             local initial = barInitial(battler)
             local barW = UI.HP_BAR_W
             local letterW = UI.HP_LETTER_W
             local totalW = letterW + 1 + barW
             local left = x - math.floor(totalW / 2)
-            local badgeY = y - 1
-            UI.paintDialoguePlate(g, left, badgeY, letterW, UI.HP_CHIP_H, UI.HUD_PANEL_A)
+            -- baseY = HP/Focus bar row. badgeY = cream square, 2px above that.
+            local baseY = y - 4
+            local badgeY = baseY - (UI.HP_BADGE_LIFT or 2)
+            local badgeH = math.max(UI.HP_CHIP_H, (Type and Type.SIZE or 8) + 2)
+            -- Cream plate behind the initial.
+            UI.paintDialoguePlate(g, left, badgeY, letterW, badgeH, 1)
+            local faceH = (Type and Type.SIZE) or 8
+            local letterY = badgeY + math.max(1, math.floor((badgeH - faceH) / 2))
+            local letterX = left + 2
             g.push()
-            g.translate(left + 1, badgeY + 1)
-            g.scale(UI.HP_LETTER_SCALE or 0.55, UI.HP_LETTER_SCALE or 0.55)
+            g.translate(letterX, letterY)
+            local letterScale = UI.HP_LETTER_SCALE or 1
+            if letterScale ~= 1 then
+                g.scale(letterScale, letterScale)
+            end
             if Type and type(Type.draw) == "function" then
                 Type.draw(g, initial, 0, 0, DARK_INK, Font, { track = 0 })
             elseif Font and type(Font.draw) == "function" then
@@ -883,6 +936,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             end
             g.pop()
             resetTint(g)
+            -- Purple Focus (REACT meter) sits on the same X as HP, one row up.
+            local barH = UI.HP_BAR_H or 5
+            local barY = baseY + math.max(0, math.floor((badgeH - barH) / 2))
             if showFocus and type(UI.focusRatio) == "function" then
                 local target = tonumber(UI.focusRatio(battle, item.side == "player"))
                 if target then
@@ -893,9 +949,10 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                     end
                     local key = item.side
                     shown[key] = easeToward(shown[key], clamp01(target), 0.03)
-                    focusBar(g, left + letterW + 1, y - extraTop, barW, shown[key])
+                    focusBar(g, left + letterW + 1, barY - extraTop, barW, shown[key])
                 end
             end
+            -- Green HP track to the right of the cream badge.
             local ratio, hp, maxHP = UI.battlerHP(battler, battle)
             local fills = battle._arHpBarFill
             if type(fills) ~= "table" then
@@ -904,16 +961,18 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             end
             local target = UI.hpFillWidth(barW - 2, hp, maxHP)
             fills[item.side] = UI.easeHpFill(fills[item.side], target)
-            hpBar(g, left + letterW + 1, y, barW, ratio, fills[item.side])
-            local stackY = y - extraTop
-            if chip then
-                stackY = stackY - (UI.CHIP_H + 1)
-                drawStatusChip(g, Font, chip, x, stackY, canvasW)
-            end
+            hpBar(g, left + letterW + 1, barY, barW, ratio, fills[item.side])
+            -- Worry / ANGRY / TIRED stays on this HUD stack.
             if moodSpec then
-                stackY = stackY - (UI.CHIP_H + 1)
-                drawStatusChip(g, Font, moodSpec, x, stackY, canvasW)
+                local mx, my = UI.moodChipAboveHp(x, y, extraTop)
+                drawStatusChip(g, Font, moodSpec, mx, my, canvasW)
             end
+            -- DODGE / BRACE / COVER / HOLD / MISS sits over the battler.
+            if reactChip then
+                local rx, ry = UI.reactChipAboveMon(spriteX, spriteY)
+                drawStatusChip(g, Font, reactChip, rx, ry, canvasW)
+            end
+            -- PMD portrait under the HP row.
             if faceImg and (faceA or 1) > 0.02 and fx then
                 UI.drawFace(g, faceImg, fx, fy, fs, faceA)
             end
@@ -940,6 +999,7 @@ local function labelWidth(Font, text)
     return measureText(Font, text)
 end
 
+-- this draws out the labels on our HUD (either main menu or move selection menu)
 local function drawHudLabel(g, Font, text, x, y, scale, alignRight, ink)
     text = UI.hudText(text)
     if text == "" then

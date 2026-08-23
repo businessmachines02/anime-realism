@@ -71,15 +71,10 @@ function Hooks.installInput(FBV, mod, ctx)
                         self._arFieldCommandHold = true
                         -- FIGHT over a KO parks updateQueue. Only remount the
                         -- narrator while faint / EXP rows are actually live.
-                        -- Inventing afterQueue on an empty toast leaves
-                        -- "sent out" stuck after the next trainer mon.
-                        local q = self.queue
-                        local live = self.current ~= nil
-                            or (type(q) == "table" and q[1] ~= nil)
-                            or self.msgWaiting or self.msgPrompt
-                            or self.draining or self.animPlaying
-                            or self.waitingUI
-                            or (tonumber(self.waitFrames) or 0) > 0
+                        -- Any leftover `current` (especially "sent out") is
+                        -- not a faint script — remounting it loops messages.
+                        local live = type(Hooks.faintScriptLive) == "function"
+                            and Hooks.faintScriptLive(self)
                         if live and (self.phase == "moveSelect"
                             or self.phase == "mimicSelect"
                             or self.phase == "menu") then

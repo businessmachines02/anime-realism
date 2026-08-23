@@ -743,6 +743,11 @@ return function(env)
         end)
       end
     end
+    if Sprites and type(Sprites.bindReader) == "function" and mod and type(mod.read) == "function" then
+      pcall(Sprites.bindReader, function(rel)
+        return mod:read(rel)
+      end)
+    end
     pcall(Intercept.install, FBV, mod)
     if Sprites and type(Sprites.installKitBillboards) == "function" then
       pcall(Sprites.installKitBillboards, mod)

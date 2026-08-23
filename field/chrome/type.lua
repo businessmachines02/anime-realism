@@ -75,30 +75,27 @@ function Type.display(text)
 end
 
 local function readBytes(path)
-    if Type.read then
-        local ok, body = pcall(Type.read, path or Type.FILE)
-        if ok and type(body) == "string" and #body > 100 then
-            return body
-        end
-    end
+    -- Game zip: only mod:read / love.filesystem. io.open warns in the sandbox.
     local try = {
         path,
-        Type.root and (Type.root .. "/" .. Type.FILE) or nil,
         Type.FILE,
     }
-    for i = 1, #try do
-        local p = try[i]
-        if type(p) == "string" then
-            local f = io.open(p, "rb")
-            if f then
-                local body = f:read("*a")
-                f:close()
-                if type(body) == "string" and #body > 100 then
+    if Type.read then
+        for i = 1, #try do
+            local p = try[i]
+            if type(p) == "string" then
+                local ok, body = pcall(Type.read, p)
+                if ok and type(body) == "string" and #body > 100 then
                     return body
                 end
             end
-            local fs = love and love.filesystem
-            if fs and type(fs.read) == "function" then
+        end
+    end
+    local fs = love and love.filesystem
+    if fs and type(fs.read) == "function" then
+        for i = 1, #try do
+            local p = try[i]
+            if type(p) == "string" then
                 local ok, body = pcall(fs.read, p)
                 if ok and type(body) == "string" and #body > 100 then
                     return body
@@ -110,7 +107,11 @@ local function readBytes(path)
 end
 
 local function makeFont(g, source)
-    local ok, face = pcall(g.newFont, source, Type.SIZE, "mono", 1)
+    -- Pixel face: no hinter, 1× DPI. "mono" hinting turns 8px glyphs into bars.
+    local ok, face = pcall(g.newFont, source, Type.SIZE, "none", 1)
+    if not ok or not face then
+        ok, face = pcall(g.newFont, source, Type.SIZE, "normal", 1)
+    end
     if not ok or not face then
         ok, face = pcall(g.newFont, source, Type.SIZE)
     end
@@ -134,19 +135,8 @@ function Type.font()
     if not (g and type(g.newFont) == "function") then
         return nil
     end
-    local okP, paths = pcall(Type.paths)
-    if okP and type(paths) == "table" then
-        for i = 1, #paths do
-            local face = makeFont(g, paths[i])
-            if face then
-                cached = face
-                Type.loadedPath = paths[i]
-                return cached
-            end
-        end
-    end
-    local bytes = readBytes(Type.FILE)
     local fs = love and love.filesystem
+    local bytes = readBytes(Type.FILE)
     if bytes and fs and type(fs.newFileData) == "function" then
         local okD, data = pcall(fs.newFileData, bytes, "pokepixel-gba.ttf")
         if okD and data then
@@ -154,6 +144,17 @@ function Type.font()
             if face then
                 cached = face
                 Type.loadedPath = "bytes"
+                return cached
+            end
+        end
+    end
+    local okP, paths = pcall(Type.paths)
+    if okP and type(paths) == "table" then
+        for i = 1, #paths do
+            local face = makeFont(g, paths[i])
+            if face then
+                cached = face
+                Type.loadedPath = paths[i]
                 return cached
             end
         end

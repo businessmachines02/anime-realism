@@ -53,6 +53,8 @@ RD.DODGE_COUNTER_CHANCE = 0.30
 RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2
 RD.DODGE_FAIL_MULT = 1.10
+-- Fresh legs dodge better. +this at full HP, none when the bar is empty.
+RD.DODGE_HEALTH_BONUS = 0.18
 RD.FIRE_CAST_MULT = 1.20
 -- REACT special: no charge, so the shot itself is a bit weaker.
 RD.REACT_SPECIAL_MULT = 0.75
@@ -518,6 +520,30 @@ function RD.addFocus(battle, isPlayer, amount)
   side.focus = clamp((side.focus or 0) + (amount or 0), 0, cap)
 end
 
+function RD.hpRatio(battler)
+  local mon = monOf(battler)
+  local hp = tonumber(mon and mon.hp) or tonumber(battler and battler.hp)
+  if hp == nil then
+    hp = tonumber(battler and battler.shownHP)
+  end
+  local maxHP = tonumber(mon and mon.stats and mon.stats.hp)
+      or tonumber(battler and battler.stats and battler.stats.hp)
+      or tonumber(mon and mon.maxHP)
+  if not hp or not maxHP or maxHP <= 0 then
+    return nil
+  end
+  return clamp(hp / maxHP, 0, 1)
+end
+
+-- Linear: full HP → DODGE_HEALTH_BONUS, fainted → 0.
+function RD.dodgeHealthBonus(defender)
+  local ratio = RD.hpRatio(defender)
+  if not ratio then
+    return 0
+  end
+  return (RD.DODGE_HEALTH_BONUS or 0) * ratio
+end
+
 -- Depending on where our pokemon is fighting, some poke
 function RD.dodgeSuccessChance(defender, attacker, battle)
   local speDef = speedStat(defender)
@@ -526,6 +552,7 @@ function RD.dodgeSuccessChance(defender, attacker, battle)
   if hasCoverTypeBonus(defender) then
     chance = clamp(chance * 1.5, 0, 1)
   end
+  chance = chance + RD.dodgeHealthBonus(defender)
   if type(RD.emotionDodgeBonus) == "function" then
     chance = chance + (tonumber(RD.emotionDodgeBonus(defender, attacker, battle)) or 0)
   end
