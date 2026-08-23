@@ -280,6 +280,10 @@ return function(Cues)
             -- must not hold runDamaging or the REACT menu never appears.
             return user.isPlayer == true
         end
+        if Cues.rangedShotHoldActive(session) then
+            local user = ctx and ctx.user
+            return user ~= nil and user.isPlayer == true
+        end
         if not Cues.closeGapHoldActive(session) then
             return false
         end
@@ -297,13 +301,14 @@ return function(Cues)
         if not (session and battle) then
             return false
         end
-        if battle._arFireNow or battle._arCloseGapResuming then
+        if battle._arCheckNow or battle._arCloseGapResuming then
             return false
         end
-        if Cues.rangedCastHoldActive(session) then
-            local side = (target and target.isPlayer) and "enemy" or "player"
-            local caster = H.sideEnt(session, side)
-            return caster and caster._pendingRangedCast and true or false
+        if Cues.rangedHitHoldActive(session) then
+            return true
+        end
+        if battle._arRangedHitHold then
+            return true
         end
         if not Cues.closeGapHoldActive(session) then
             return false
@@ -360,16 +365,29 @@ return function(Cues)
         if (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) then
             return false
         end
+        if Cues.rangedHitHoldActive(session) then
+            return false
+        end
+        if battle._arRangedHitHold then
+            return false
+        end
         local runs = heldRunList(battle._arCloseGapDamage)
         local stashed = battle._arCloseGapApply
-        if not runs and (type(stashed) ~= "table" or #stashed == 0) then
+        local pendingHit = session and session._pendingCloseHit
+        if not runs and (type(stashed) ~= "table" or #stashed == 0)
+            and not pendingHit then
             return false
         end
         battle._arCloseGapDamage = nil
         battle._arCloseGapApply = nil
         -- Punch already applied this when Grid was available. If not, shove
         -- before HP replay so a second damage_dealt cannot double-push.
+        -- Specials stash the contact beat with no HP row when applyDamage
+        -- already ran; still play knockback / camera on impact.
         Cues.flushCloseHit(session, session._deps and session._deps.Grid)
+        if not runs and (type(stashed) ~= "table" or #stashed == 0) then
+            return true
+        end
         battle._arCloseGapResuming = true
         local replayedRun = runs and true or false
         H.note(session, battle, "flushHeldHit", replayedRun and "runDamaging" or "applyDamage")

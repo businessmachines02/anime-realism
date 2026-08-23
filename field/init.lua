@@ -200,6 +200,16 @@ return function(env)
       and Cues.shouldHoldEngineHit(session, opts)
   end
 
+  function FBV.shouldHoldHitCue(session, opts)
+    return Cues and type(Cues.shouldHoldHitCue) == "function"
+      and Cues.shouldHoldHitCue(session, opts)
+  end
+
+  function FBV.rangedHitHoldActive(session)
+    return Cues and type(Cues.rangedHitHoldActive) == "function"
+      and Cues.rangedHitHoldActive(session)
+  end
+
   function FBV.holdCloseHit(session, side, opts)
     if Cues and type(Cues.holdCloseHit) == "function" then
       return Cues.holdCloseHit(session, side, opts)
@@ -467,6 +477,13 @@ return function(env)
     return false
   end
 
+  function FBV.drawWindowPlayerHud(ren, metrics)
+    if UI and type(UI.drawWindowPlayerHud) == "function" then
+      return UI.drawWindowPlayerHud(ren, metrics)
+    end
+    return false
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
@@ -498,13 +515,11 @@ return function(env)
   -- must not also run battle.overlay next() (classic / gen3 / bubbles).
   function FBV.drawFrame(battle)
     -- drawClassic (FIELD wrap) and BattleState.draw both fire overlay.
-    local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
-    local gen = session and session._arPresentGen
-    if battle and gen ~= nil and battle._arHudDrawGen == gen then
+    if battle and battle._arHudDrew then
       return
     end
-    if battle and gen ~= nil then
-      battle._arHudDrawGen = gen
+    if battle then
+      battle._arHudDrew = true
     end
     FBV.drawUI(battle)
     local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"

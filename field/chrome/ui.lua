@@ -11,11 +11,10 @@
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
 --
--- Battler chrome (HP / Focus / chips / face) pins to the UI overlay corners.
--- That canvas is letterboxed to the window, so the stack scales with the
--- display without leaving the drawable overlay. Floor / cover / projectiles
--- still paint from Lifecycle.drawWorldOverlay on the world canvas when that
--- pass is visible.
+-- Battler chrome (HP / Focus / chips / face) is authored on the UI overlay
+-- corners, then docked to the window via setBattleUIAnchor (same path as
+-- Gen1BetterMenus / WideBattle EXTENDED). Move chrome stays in the letterbox.
+-- Floor / cover / projectiles still paint from Lifecycle.drawWorldOverlay.
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -53,15 +52,59 @@ end
 -- Remaining HP for the chip. Prefer live `mon.hp` over the engine drain
 -- numerator (`shownHP`): a parked queue / send-out can leave shownHP at 0
 -- while the mon is still up, which painted an empty bar on a living Pokémon.
-function UI.battlerHP(battler)
+function UI.hitPaintHeld(battle)
+    if not battle then
+        return false
+    end
+    if battle._arRangedHitHold then
+        return true
+    end
+    if type(battle._arHeldHpPaint) == "table" then
+        return true
+    end
+    local apply = battle._arCloseGapApply
+    if type(apply) == "table" and #apply > 0 then
+        return true
+    end
+    local dmg = battle._arCloseGapDamage
+    if type(dmg) == "table" and (dmg.ctx or #dmg > 0) then
+        return true
+    end
+    return false
+end
+
+function UI.heldHpSnap(battle, battler)
+    local snap = battle and battle._arHeldHpPaint
+    if type(snap) ~= "table" or not battler then
+        return nil
+    end
+    if battler == battle.player then
+        return tonumber(snap.player)
+    end
+    if battler == battle.enemy then
+        return tonumber(snap.enemy)
+    end
+    return nil
+end
+
+function UI.battlerHP(battler, battle)
     local mon = battler and battler.mon
     local maxHP = tonumber(mon and mon.stats and mon.stats.hp)
     if not maxHP or maxHP < 1 then
         maxHP = 1
     end
-    local hp = tonumber(mon and mon.hp)
-    if hp == nil then
-        hp = tonumber(battler and battler.shownHP) or 0
+    local live = tonumber(mon and mon.hp)
+    local shown = tonumber(battler and battler.shownHP)
+    local snap = UI.heldHpSnap(battle, battler)
+    local hp = live
+    -- Charge / travel shot: keep the pre-hit bar even if the engine
+    -- already resolved mon.hp. Snapshot wins; stashed shownHP is next.
+    if snap ~= nil then
+        hp = snap
+    elseif UI.hitPaintHeld(battle) and shown ~= nil then
+        hp = shown
+    elseif hp == nil then
+        hp = shown or 0
     end
     if hp < 0 then
         hp = 0
@@ -226,6 +269,139 @@ end
 
 -- Player chrome hugs top-left; foe hugs top-right of the UI overlay.
 -- `gap` is stack height above the face.
+--
+-- Widescreen docking: author the stack in native UI pixels. The foe uses
+-- the engine's setBattleUIAnchor "topright". The engine has no topleft, so
+-- the player stack is stored and blitted after endFrame (mod wrap only).
+function UI.hudAnchor(side)
+    if side == "enemy" then
+        return "topright"
+    end
+    return "window-left"
+end
+
+function UI.hudStackBox(fx, fy, size, stackH)
+    size = tonumber(size) or UI.FACE_SIZE
+    fx = tonumber(fx) or 0
+    fy = tonumber(fy) or 0
+    stackH = tonumber(stackH) or 0
+    if stackH < 0 then
+        stackH = 0
+    end
+    local barW = UI.HP_CHIP_W or 27
+    local mid = fx + math.floor(size / 2)
+    local half = math.floor(barW / 2)
+    local left = math.min(fx, mid - half)
+    local right = math.max(fx + size, mid + barW - half)
+    local top = fy - stackH
+    if top < 0 then
+        top = 0
+    end
+    local bottom = fy + size
+    return left, top, math.max(1, right - left), math.max(1, bottom - top)
+end
+
+function UI.anchorFieldHud(battle, side, x, y, w, h)
+    local ren = battle and battle.game and battle.game.renderer
+    if not ren then
+        return false
+    end
+    if side == "player" then
+        ren._arFieldHudLeft = {
+            x = tonumber(x) or 0,
+            y = tonumber(y) or 0,
+            w = tonumber(w) or 1,
+            h = tonumber(h) or 1,
+            canvas = ren.battleHUDCanvas,
+        }
+        return true
+    end
+    if type(ren.setBattleUIAnchor) ~= "function" then
+        return false
+    end
+    local ok = pcall(ren.setBattleUIAnchor, ren, x, y, w, h, UI.hudAnchor(side))
+    return ok == true
+end
+
+-- Copy the stored player stack to the real window left. Called after the
+-- engine finishes compositing so this is not clipped to the letterbox.
+function UI.drawWindowPlayerHud(ren, metrics)
+    local box = ren and ren._arFieldHudLeft
+    local canvas = box and (box.canvas or (ren and ren.battleHUDCanvas))
+    if not (box and canvas and love and love.graphics) then
+        return false
+    end
+    metrics = metrics or {}
+    local g = love.graphics
+    local ww = tonumber(metrics.width)
+    local wh = tonumber(metrics.height)
+    if not ww and type(g.getWidth) == "function" then
+        ww = g.getWidth()
+    end
+    if not wh and type(g.getHeight) == "function" then
+        wh = g.getHeight()
+    end
+    if not (ww and wh and ww > 0 and wh > 0) then
+        return false
+    end
+    local dpiX = tonumber(metrics.dpiX) or 1
+    local dpiY = tonumber(metrics.dpiY) or 1
+    if dpiX < 1 then
+        dpiX = 1
+    end
+    if dpiY < 1 then
+        dpiY = 1
+    end
+    local uiw, uih = UI.WIDTH, UI.HEIGHT
+    if ren and type(ren.uiSize) == "function" then
+        local a, b = ren:uiSize()
+        if type(a) == "number" and a > 0 then
+            uiw, uih = a, b or uih
+        end
+    end
+    local up = 1
+    if type(ren.uiScale) == "function" then
+        up = tonumber(ren:uiScale()) or 1
+    end
+    if ren.uiFill then
+        up = math.min((wh * dpiY) / uih, (ww * dpiX) / uiw)
+    end
+    if up < 1 then
+        up = 1
+    end
+    local ux, uy = up / dpiX, up / dpiY
+    local dx = (box.x or 0) * ux
+    local dy = (box.y or 0) * uy
+    local dw = (box.w or 1) * ux
+    local dh = (box.h or 1) * uy
+    dx = math.max(0, math.min(math.max(0, ww - dw), dx))
+    dy = math.max(0, math.min(math.max(0, wh - dh), dy))
+    g.push("all")
+    if type(g.origin) == "function" then
+        g.origin()
+    end
+    if type(g.setScissor) == "function" then
+        g.setScissor()
+    end
+    g.setColor(1, 1, 1, 1)
+    if type(ren.blitCanvas) == "function" then
+        local ok = pcall(ren.blitCanvas, ren, canvas, ux, uy, nil, ux, uy,
+            dx - (box.x or 0) * ux, dy - (box.y or 0) * uy,
+            dx, dy, dw, dh, dpiX, dpiY)
+        g.pop()
+        return ok == true
+    end
+    if type(g.newQuad) == "function" and canvas.getWidth then
+        local quad = g.newQuad(box.x, box.y, box.w, box.h,
+            canvas:getWidth(), canvas:getHeight())
+        g.draw(canvas, quad, dx, dy, 0, ux, uy)
+    else
+        g.draw(canvas, dx - (box.x or 0) * ux, dy - (box.y or 0) * uy, 0, ux, uy)
+    end
+    g.pop()
+    return true
+end
+
 function UI.faceAnchor(side, _bodyX, _bodyY, size, gap, canvasW)
     size = tonumber(size) or UI.FACE_SIZE
     canvasW = tonumber(canvasW) or UI.WIDTH
@@ -553,6 +729,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
     camY = camY or 0
     mode = mode or "ui"
     local ren = battle and battle.game and battle.game.renderer
+    if ren then
+        ren._arFieldHudLeft = nil
+    end
     local ow = battle and battle.game and battle.game.overworld
     if (camX == 0 and camY == 0) and ow and ow.camera then
         camX = ow.camera.x or 0
@@ -641,7 +820,7 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                     focusBar(g, left + letterW + 1, y - extraTop, barW, shown[key])
                 end
             end
-            local ratio, hp, maxHP = UI.battlerHP(battler)
+            local ratio, hp, maxHP = UI.battlerHP(battler, battle)
             local fills = battle._arHpBarFill
             if type(fills) ~= "table" then
                 fills = {}
@@ -661,6 +840,10 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             end
             if faceImg and (faceA or 1) > 0.02 and fx then
                 UI.drawFace(g, faceImg, fx, fy, fs, faceA)
+            end
+            if mode == "ui" then
+                local bx, by, bw, bh = UI.hudStackBox(fx, fy, fs, stackH)
+                UI.anchorFieldHud(battle, item.side, bx, by, bw, bh)
             end
         end
     end
@@ -970,7 +1153,24 @@ function UI.draw(battle, style)
     local Font = font()
     local state = UI.layoutState(battle)
     g.push("all")
+    -- HP / faces go on the extended HUD canvas so setBattleUIAnchor can
+    -- dock them to the window. Move / command chrome stays on the UI canvas.
+    local ren = battle and battle.game and battle.game.renderer
+    local hudPrev
+    local hudPass = ren and type(ren.beginBattleHUDPass) == "function"
+        and type(ren.endBattleHUDPass) == "function"
+    if hudPass then
+        local ok, prev = pcall(ren.beginBattleHUDPass, ren)
+        if ok then
+            hudPrev = prev
+        else
+            hudPass = false
+        end
+    end
     UI.drawWorldHP(battle, nil, nil, "ui")
+    if hudPass then
+        pcall(ren.endBattleHUDPass, ren, hudPrev)
+    end
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then

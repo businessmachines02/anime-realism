@@ -604,10 +604,110 @@ function tests.mood_portrait_sits_beside_the_sprite()
   local stack = 12
   local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
   eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
+  eq(UI.hudAnchor("player"), "window-left", "player stack uses the wide left margin")
+  eq(UI.hudAnchor("enemy"), "topright", "foe stack uses the wide right margin")
+  local bx, by, bw, bh = UI.hudStackBox(px, py, 28, 0)
+  truthy(bx <= px, "stack box includes the face left")
+  truthy(bx + bw >= px + 28, "stack box includes the face right")
+  truthy(by <= py, "stack box includes the HP row")
+  truthy(by + bh >= py + 28, "stack box includes the face bottom")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 53 }), 14,
     "tall hop-padded kits still plant HP on the ~24px body")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
     "32px kits sit a couple px above the cell top")
+end
+
+function tests.field_hud_registers_wide_anchors()
+  local anchors = {}
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80, py = 40, _fieldBarLift = 10, hidden = false,
+  }
+  local player = {
+    _arFieldBattler = true,
+    _arFieldSide = "player",
+    px = 20, py = 40, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = {
+        camera = { x = 0, y = 0 },
+        entities = { player, enemy },
+      },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+        setBattleUIAnchor = function(_, x, y, w, h, anchor)
+          anchors[#anchors + 1] = { x = x, y = y, w = w, h = h, anchor = anchor }
+        end,
+      },
+    },
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  local sawRight = false
+  for i = 1, #anchors do
+    if anchors[i].anchor == "topright" then
+      sawRight = true
+    end
+  end
+  eq(#anchors, 1, "player stack is not sent to the engine")
+  truthy(sawRight, "foe HP registers a topright window anchor")
+  truthy(battle.game.renderer._arFieldHudLeft, "player stack is kept for the window blit")
+end
+
+function tests.field_hud_window_left_blits_from_stored_stack()
+  local drawn = {}
+  local canvas = {
+    getWidth = function() return 160 end,
+    getHeight = function() return 144 end,
+  }
+  local ren = {
+    _arFieldHudLeft = { x = 4, y = 4, w = 28, h = 40, canvas = canvas },
+    uiScale = function() return 2 end,
+    uiSize = function() return 160, 144 end,
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      push = function() end,
+      pop = function() end,
+      origin = function() end,
+      setScissor = function() end,
+      setColor = function() end,
+      newQuad = function(x, y, w, h)
+        return { x = x, y = y, w = w, h = h }
+      end,
+      draw = function(src, quad, x, y, _, sx)
+        drawn[#drawn + 1] = { src = src, quad = quad, x = x, y = y, sx = sx }
+      end,
+    },
+  }
+  truthy(UI.drawWindowPlayerHud(ren, { width = 800, height = 450, dpiX = 1, dpiY = 1 }),
+    "window-left blit runs")
+  love = prevLove
+  eq(#drawn, 1, "one player stack blit")
+  eq(drawn[1].x, 8, "stack docks to window left at authored pad * scale")
+  eq(drawn[1].y, 8, "stack docks to window top at authored pad * scale")
+  eq(drawn[1].sx, 2, "stack uses the UI scale")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -869,6 +969,23 @@ function tests.hp_bar_tracks_live_hp()
   })
   eq(hp, 0, "fainted mon paints empty even if shownHP lags")
   eq(ratio, 0, "fainted ratio is 0")
+
+  ratio, hp = UI.battlerHP({
+    shownHP = 20,
+    mon = { hp = 8, stats = { hp = 20 } },
+  }, { _arCloseGapApply = { {} } })
+  eq(hp, 20, "a stashed travel hit keeps the pre-hit bar")
+
+  local snapBattle = {
+    _arRangedHitHold = true,
+    _arHeldHpPaint = { player = 20 },
+  }
+  snapBattle.player = {
+    shownHP = 20,
+    mon = { hp = 8, stats = { hp = 20 } },
+  }
+  ratio, hp = UI.battlerHP(snapBattle.player, snapBattle)
+  eq(hp, 20, "a charge snapshot keeps the pre-hit bar after live HP drops")
 
   local inner = UI.HP_BAR_W - 2
   eq(inner, 18, "compact bar is a short track")
@@ -1222,6 +1339,7 @@ function tests.fire_now_reacts_during_a_charge()
   eq(result.fireNow, true, "FIRE NOW spends this turn's action on the special")
   eq(result.forceMiss, false, "FIRE NOW does not dodge")
   truthy(result.damageMult > 1, "caught casting takes extra if the charge lands")
+  eq(RD.REACT_SPECIAL_MULT, 0.75, "a REACT special is a bit weaker (no charge)")
   RD.clear(battle)
 
   local grid = sampleGrid()
@@ -1250,11 +1368,13 @@ function tests.fire_now_reacts_during_a_charge()
   truthy(Cues.shouldHoldApplyDamage(session, battle, battle.player),
     "the incoming punch still waits")
   truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.enemy),
-    "FIRE NOW HP lands on the charger during the walk")
+    "a punch walk does not stash the charger's HP")
+  Cues.armRangedHitHold(session, battle)
   battle._arFireNow = true
-  truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.player),
-    "FIRE NOW does not stash its own damage")
+  truthy(Cues.shouldHoldApplyDamage(session, battle, battle.enemy),
+    "FIRE NOW HP waits for the bolt to land")
   battle._arFireNow = nil
+  Cues.dropRangedHitHold(session, battle)
   enemy._pendingCloseStrike = nil
   truthy(not Cues.chargeWindowOpen(session), "no charge is not a fire window")
 end
@@ -3309,6 +3429,7 @@ function tests.adjacent_special_backsteps_then_fires()
   truthy(#(session.projectiles or {}) >= 1, "water gun leaves after the charge")
   truthy(not player._pendingRangedCast, "pending backstep is cleared")
   truthy(not Cues.shouldParkEngineQueue(session), "engine resumes after the shot")
+  truthy(Cues.rangedShotHoldActive(session), "HP waits for the water gun to land")
 end
 
 function tests.spaced_special_charges_before_the_shot()
@@ -3348,18 +3469,73 @@ function tests.spaced_special_charges_before_the_shot()
     "charge pose starts immediately")
   eq(#(session.projectiles or {}), 0, "shot waits out the wind-up")
   truthy(not Cues.shouldParkEngineQueue(session),
-    "REACT can open during the 1.5s charge")
+    "REACT can open during the 0.7s charge")
   truthy(Cues.shouldHoldEngineHit(session, { user = { isPlayer = true } }),
     "the player's own HP tick still waits for the beam")
   truthy(not Cues.shouldHoldEngineHit(session, { user = { isPlayer = false } }),
     "an incoming special reaches runDamaging so REACT can open")
-  session._now = 40.75
+  truthy(Cues.shouldHoldApplyDamage(session, session._battle, { isPlayer = false }),
+    "foe HP stays up during the charge")
+  session._now = 40.35
   Cues.tickReturns(session, Grid)
-  eq(#(session.projectiles or {}), 0, "half a second is still charging")
+  eq(#(session.projectiles or {}), 0, "mid-charge is still charging")
   session._now = 40 + (Cues.RANGED_CHARGE or 1.5)
   Cues.tickReturns(session, Grid)
-  truthy(#(session.projectiles or {}) >= 1, "thunderbolt leaves after 1.5s")
+  truthy(#(session.projectiles or {}) >= 1, "thunderbolt leaves after 0.7s")
   truthy(not player._pendingRangedCast, "wind-up clears after the shot")
+  truthy(Cues.rangedShotHoldActive(session), "HP still waits while the bolt travels")
+  truthy(Cues.shouldHoldApplyDamage(session, session._battle, { isPlayer = false }),
+    "foe HP stays up until impact")
+  session._battle._arCloseGapApply = { { "foe", 5 } }
+  truthy(not Cues.flushHeldHit(session, session._battle),
+    "a present tick does not apply HP mid-flight")
+  truthy(session._battle._arCloseGapApply, "stashed HP stays put while the bolt is up")
+  Projectiles.tick(session, 2)
+  truthy(not Cues.rangedShotHoldActive(session), "impact releases the HP hold")
+  eq(session._battle._arCloseGapApply, nil, "impact consumes the stashed HP")
+end
+
+function tests.special_hit_waits_until_the_bolt_lands()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 42,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+  }
+  Projectiles.clear(session)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+  }), "spaced special cue")
+  truthy(Cues.shouldHoldHitCue(session, { user = { isPlayer = true } }),
+    "knockback waits out the charge")
+  truthy(Cues.holdCloseHit(session, "enemy", {
+    category = "special", moveId = "THUNDERBOLT",
+  }), "damage_dealt during the charge is stashed")
+  eq(enemy.lastAnim, nil, "no contact beat during the wind-up")
+  session._now = 42 + (Cues.RANGED_CHARGE or 0.7)
+  Cues.tickReturns(session, Grid)
+  eq(enemy.lastAnim, nil, "no contact beat when the bolt leaves")
+  truthy(Cues.shouldHoldHitCue(session, { user = { isPlayer = true } }),
+    "knockback still waits while the bolt travels")
+  Projectiles.tick(session, 2)
+  truthy(enemy.lastAnim == "hit" or enemy.lastAnim == "tumble",
+    "contact beat plays when the bolt lands")
 end
 
 function tests.fire_now_does_not_backstep()
@@ -3397,6 +3573,7 @@ function tests.fire_now_does_not_backstep()
   eq(player.padV, stayV, "FIRE NOW keeps the same pad V")
   truthy(not player._pendingRangedCast, "FIRE NOW does not arm a backstep")
   truthy(#(session.projectiles or {}) >= 1, "the shot leaves immediately")
+  truthy(Cues.rangedShotHoldActive(session), "FIRE NOW still holds HP until impact")
 
   -- Occupancy already adjacent because the charger jumped the close-gap cell.
   Grid.setPad(grid, enemy, pHome.u + 1, pHome.v)
@@ -3459,6 +3636,41 @@ function tests.special_trajectories_track_mons()
     category = "special", jump = true, moveType = "FIRE",
   })
   truthy(hop.arc > orb.arc, "specials arc higher over blockers")
+end
+
+function tests.special_shot_paints_land_impact()
+  local grid = sampleGrid()
+  local player = {
+    id = "player", padU = grid.home.player.u, padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy", padU = grid.home.enemy.u, padV = grid.home.enemy.v,
+    px = 96, py = 40,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { kind = "wild" },
+  }
+  Projectiles.clear(session)
+  local bolt = Projectiles.move(session, "player", {
+    category = "special", moveType = "ELECTRIC", moveId = "THUNDERBOLT",
+  })
+  truthy(bolt, "special shot spawned")
+  Projectiles.tick(session, (bolt.duration or 0.3) + 0.02)
+  local burst
+  for i = 1, #(session.projectiles or {}) do
+    local p = session.projectiles[i]
+    if p.style == "special_impact" then
+      burst = p
+    end
+  end
+  truthy(burst, "landing a special paints an impact burst")
+  eq(burst.sx, bolt.ex, "burst sits on the target")
+  eq(burst.sy, bolt.ey, "burst uses the landing height")
 end
 
 function tests.cues_and_dedupe()
@@ -3937,6 +4149,38 @@ function tests.dodge_and_brace_wait_for_the_charge()
   enemy.basePx = 8
   Cues.tickHeldReact(session, Grid)
   eq(player.lastAnim, "brace", "brace plays once they are in your face")
+end
+
+function tests.react_pose_waits_for_the_special_shot()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingRangedCast = { category = "special", moveId = "THUNDERBOLT" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 91,
+    _battle = {},
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, session._battle),
+    "dodge pick is accepted while they charge")
+  eq(player.lastAnim, nil, "dodge pose waits for the bolt")
+  truthy(session._heldReact, "REACT pose is stashed until the shot")
+  enemy._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(player.lastAnim, "dodge", "dodge plays once the special leaves")
 end
 
 function tests.react_hold_slows_then_speeds_up_on_shot()
@@ -4724,11 +4968,16 @@ function tests.attack_overlap_fires_foe_dodge()
     queue = {},
   }
   truthy(Cues.pumpCurrent(session, battle, Grid, nil), "attack + dodge pump")
-  eq(player.lastAnim, "cast", "surf casts in place")
-  eq(enemy.lastAnim, "dodge", "foe dodges on the same beat")
+  truthy(player.lastAnim == "cast" or player.lastAnim == "charge",
+    "surf charges in place")
+  eq(enemy.lastAnim, nil, "foe dodge waits for the surf")
+  truthy(session._heldReact, "dodge is stashed until the bolt leaves")
   truthy(session._trainerCallouts and session._trainerCallouts.foe
       and session._trainerCallouts.foe[1], "Move! overlay is up")
   eq(session._trainerCallouts.foe[1].text, "BROCK:\nOnix, dodge!", "overlay text")
+  player._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(enemy.lastAnim, "dodge", "foe dodges once the surf leaves")
 
   -- Foe move order is pinned to the attack cue, not say()-time.
   session._now = 31
@@ -4789,13 +5038,18 @@ function tests.attack_overlap_fires_foe_dodge()
     queue = { queued },
   }
   truthy(Cues.pumpCurrent(session, battle, Grid, nil), "lookahead dodge pumps")
-  eq(enemy.lastAnim, "dodge", "queued dodge plays with the attack")
+  eq(enemy.lastAnim, nil, "queued dodge waits for the hydro pump")
   eq(queued._arOverlapShown, true, "queued toast is consumed")
   eq(queued._arFieldCueDone, true, "queued cue will not replay")
+  player._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(enemy.lastAnim, "dodge", "queued dodge plays once the shot leaves")
 
   -- Late attach after the attack cue already fired (choose-lead / flush).
   session._now = 34
   enemy.lastAnim = nil
+  player._pendingRangedCast = nil
+  session._heldReact = nil
   session._trainerCallouts = nil
   battle.current._arFieldCueDone = true
   battle.current.arOverlapReact = {
@@ -5083,7 +5337,9 @@ function tests.world_space_projectiles()
   truthy(move.px > move.sx and move.px < move.ex, "projectile travels between mons")
   eq(move.cellX, math.floor(move.px / 16), "projectile keeps world cell synchronized")
   Projectiles.tick(session, 0.30)
-  eq(#session.projectiles, 0, "move projectile cleans itself up")
+  eq(move._removed, true, "move projectile cleans itself up")
+  eq(#session.projectiles, 1, "land leaves the impact burst")
+  eq(session.projectiles[1].style, "special_impact", "burst is the special land FX")
 
   local beam = Projectiles.move(session, "player", { moveType = "ELECTRIC" })
   eq(beam.style, "beam", "energy type uses top-down beam")

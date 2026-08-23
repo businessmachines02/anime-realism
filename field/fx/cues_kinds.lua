@@ -7,7 +7,8 @@
 --   dodge / cover / hide / brace   REACT! movement and pose
 --   cast                           overlapping FIRE pose (Charge hold; shot is the attack cue)
 --   attack                         physicals walk in; specials backstep if
---                                  adjacent, then charge 1.5s and Shoot
+--                                  adjacent, then charge 0.7s and Shoot
+--                                  (REACT / FIRE NOW skip the charge)
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
@@ -67,6 +68,7 @@ return function(Cues)
         end
         ent._pendingRangedCast = pendingRangedPayload(opts, category)
         ent._rangedChargeAt = nil
+        Cues.armRangedHitHold(session, battle or session._battle)
         H.note(session, battle or session._battle, "cue path", side,
             opts.moveId or "-", "backstep", tostring(tiles), H.padSnap(ent))
         return true
@@ -76,9 +78,10 @@ return function(Cues)
         if skipRangedWindup(opts, ent, battle) then
             return false
         end
-        local wait = Cues.RANGED_CHARGE or 1.5
+        local wait = Cues.RANGED_CHARGE or 0.7
         ent._pendingRangedCast = pendingRangedPayload(opts, category)
         ent._rangedChargeAt = H.now(session) + wait
+        Cues.armRangedHitHold(session, battle or session._battle)
         H.faceToward(ent, foe)
         H.playChargeHold(session, ent)
         H.note(session, battle or session._battle, "cue path", side,
@@ -110,7 +113,7 @@ return function(Cues)
             if slow then
                 session._fireShotSlow = true
             end
-            Projectiles.move(session, side, {
+            local p = Projectiles.move(session, side, {
                 category = category or "special",
                 jump = jump,
                 moveType = opts.moveType,
@@ -118,6 +121,17 @@ return function(Cues)
                 slowShot = slow,
             })
             session._fireShotSlow = nil
+            -- FIRE NOW skips the charge, not the land. HP stays up until impact.
+            if p then
+                p.holdHit = true
+                p.onImpact = function()
+                    Cues.releaseRangedShotHold(session, battle or session._battle)
+                end
+                Cues.armRangedShotHold(session, battle or session._battle)
+            else
+                Cues.armRangedHitHold(session, battle or session._battle)
+                session._rangedHoldUntil = H.now(session) + (Cues.RANGED_HOLD_FALLBACK or 0.40)
+            end
         end
         H.playAnim(ent, "cast")
     end
@@ -389,7 +403,7 @@ return function(Cues)
             nudgeCamera(battle, foeSide, 0.45)
         end
         -- Physical: close distance on the pad, then return home.
-        -- Special: hop back if adjacent, charge 1.5s, then Shoot.
+        -- Special: hop back if adjacent, charge 0.7s, then Shoot.
         -- Travel FX (beams, Night Shade, …) fly even when the Gen1 type split
         -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
         -- when that split marks them special.
@@ -622,6 +636,12 @@ return function(Cues)
             H.clearCloseStrike(ent)
             H.restoreStepSpeed(ent)
             ent._withdrawAfterStrike = true
+        end
+        if ent._pendingRangedCast then
+            H.clearRangedCast(ent)
+        end
+        if type(Cues.dropRangedHitHold) == "function" then
+            Cues.dropRangedHitHold(session, battle)
         end
         if battle then
             battle._arAccuracyMissSide = nil

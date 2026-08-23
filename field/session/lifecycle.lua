@@ -2078,6 +2078,10 @@ function Lifecycle.onTurnStarted(battle)
             return true
         end
         local Cues = session._deps and session._deps.Cues
+        if Cues and type(Cues.rangedHitHoldActive) == "function"
+            and Cues.rangedHitHoldActive(session) then
+            return true
+        end
         return Cues and type(Cues.pendingMultiHitFollowUp) == "function"
             and Cues.pendingMultiHitFollowUp(session, battle, side)
     end
@@ -2102,6 +2106,10 @@ function Lifecycle.onTurnStarted(battle)
         battle._arCloseGapDamage = nil
         battle._arCloseGapApply = nil
         battle._arCloseGapResuming = nil
+        battle._arRangedHitHold = nil
+        battle._arHeldHpPaint = nil
+        session._rangedShotHold = nil
+        session._rangedHoldUntil = nil
         battle._arAwaitingReact = nil
         battle._arAwaitAgain = nil
         battle._arAwaitAgainSide = nil

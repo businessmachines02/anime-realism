@@ -3097,6 +3097,38 @@ local function drawLightHit(g, p, x, y, t)
   drawContact(g, p, x, y, math.min(1, t * 1.15))
 end
 
+-- Extra beat when a special travel shot arrives: rings, shards, typed flash.
+local function drawSpecialImpact(g, p, x, y, t)
+  local c = p.color or { 0.85, 0.75, 1.00 }
+  local fade = 1 - t
+  local flash = math.max(0, 1 - t * 2.2)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.40 * flash)
+    g.circle("fill", x, y, 6 + t * 11)
+    g.setColor(1, 1, 1, 0.58 * flash)
+    g.circle("fill", x, y, 2.6)
+  end)
+  g.setLineWidth(2.2)
+  g.setColor(c[1], c[2], c[3], 0.75 * fade)
+  g.circle("line", x, y, 3.5 + t * 15)
+  g.setLineWidth(1.2)
+  g.setColor(1, 1, 1, 0.50 * fade)
+  g.circle("line", x, y, 2 + t * 9)
+  for i = 1, 8 do
+    local a = i * (math.pi / 4) + t * 0.9
+    local d0 = 3 + t * 12
+    local d1 = d0 + 5 + (i % 2) * 2
+    g.setColor(c[1], c[2], c[3], 0.88 * fade)
+    g.setLineWidth(1.9)
+    g.line(x + math.cos(a) * d0, y + math.sin(a) * d0 * 0.7,
+      x + math.cos(a) * d1, y + math.sin(a) * d1 * 0.7)
+  end
+  if g.ellipse then
+    g.setColor(c[1], c[2], c[3], 0.30 * fade)
+    g.ellipse("fill", x, y + 4, 8 + t * 5, 2.4)
+  end
+end
+
 local function polyUnpack(pts)
   local unpackFn = table.unpack or unpack
   return unpackFn(pts)
@@ -3876,6 +3908,9 @@ Projectiles.registerStyle("contact", function(g, p, x, y, ox, oy, t, c, glitz)
 end)
 Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
+end)
+Projectiles.registerStyle("special_impact", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawSpecialImpact(g, p, x, y, t)
 end)
 Projectiles.registerStyle("crit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawCritBurst(g, p, x, y, t)
@@ -5608,6 +5643,53 @@ function Projectiles.hazeCut(session, cells)
   end
 end
 
+local SPECIAL_LAND_STYLE = {
+  beam = true, bolt = true, stream = true, ember = true, shadow = true,
+  surf = true, razor = true, swift = true, blast = true, gust = true,
+  drain = true, rock = true, slide = true, spiral = true, multi = true,
+  area = true, wave = true, aura = true, sand = true,
+}
+
+local function shouldSpecialLand(p)
+  if not p or p.style == "special_impact" then
+    return false
+  end
+  if p.specialLand then
+    return true
+  end
+  if p.kind == "move" then
+    return true
+  end
+  return SPECIAL_LAND_STYLE[p.style] == true
+end
+
+function Projectiles.specialImpact(session, spec)
+  spec = spec or {}
+  local x, y = spec.x, spec.y
+  if (not x or not y) and spec.followSide then
+    local ent = (spec.followSide == "player") and session.playerMon or session.enemyMon
+    x, y = center(session, ent)
+  end
+  if not x then
+    return nil
+  end
+  local moveType = tostring(spec.moveType or "NORMAL"):upper()
+  if moveType == "" then
+    moveType = "NORMAL"
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "special_impact",
+    glitz = spec.glitz or moveType,
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.40,
+    arc = 0,
+    color = spec.color or TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
+    pinTip = spec.followSide ~= nil,
+    followSide = spec.followSide,
+  })
+end
+
 function Projectiles.powerHit(session, side, opts)
   opts = opts or {}
   local target = (side == "player") and session.playerMon or session.enemyMon
@@ -5860,6 +5942,22 @@ function Projectiles.tick(session, dt)
     else
       p.px = p.sx + (p.ex - p.sx) * t
       p.py = p.sy + (p.ey - p.sy) * t - math.sin(t * math.pi) * (p.arc or 0)
+    end
+    if t >= 1 and shouldSpecialLand(p) and not p._landFx then
+      p._landFx = true
+      Projectiles.specialImpact(session, {
+        x = p.px or p.ex,
+        y = p.py or p.ey,
+        color = p.color,
+        moveType = p.moveType,
+        followSide = p.followSide,
+      })
+    end
+    if t >= 1 and p.holdHit and not p._hitFlushed then
+      p._hitFlushed = true
+      if type(p.onImpact) == "function" then
+        pcall(p.onImpact)
+      end
     end
     if t >= 1 and p.kind == "ball" and p.hold > 0 then
       local holdAge = p.age - p.duration

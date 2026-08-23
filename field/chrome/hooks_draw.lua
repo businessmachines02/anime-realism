@@ -276,6 +276,29 @@ function Hooks.installDraw(FBV, mod, ctx)
         return nil
     end
 
+    -- Engine topright docks the foe. It has no topleft, and we do not
+    -- patch Renderer.lua. After the frame composites, blit the stored
+    -- player stack in window space with the scissor cleared.
+    do
+        local okR, Renderer = pcall(require, "src.render.Renderer")
+        if okR and type(Renderer) == "table" and type(Renderer.endFrame) == "function"
+            and not Renderer._arFbvLeftHud then
+            local origEnd = Renderer.endFrame
+            function Renderer:endFrame(...)
+                local result = origEnd(self, ...)
+                if FBV.enabled(mod) and type(FBV.liveBattle) == "function" then
+                    local battle = select(1, FBV.liveBattle(gameSingleton()))
+                    if battle and isFieldBattle(battle)
+                        and type(FBV.drawWindowPlayerHud) == "function" then
+                        pcall(FBV.drawWindowPlayerHud, self, result)
+                    end
+                end
+                return result
+            end
+            Renderer._arFbvLeftHud = true
+        end
+    end
+
     -- ---- Present clock (keep bob alive under menus) ----
     -- PR #58 split this across input.step (×2), letterbox (×2), overlay (×2),
     -- and drawWorld. A slow later-battle frame passes the 8ms debounce and
@@ -287,6 +310,12 @@ function Hooks.installDraw(FBV, mod, ctx)
         if not presentOpened then
             presentGen = presentGen + 1
             presentOpened = true
+            if type(FBV.liveBattle) == "function" then
+                local battle = select(1, FBV.liveBattle(gameSingleton()))
+                if battle then
+                    battle._arHudDrew = nil
+                end
+            end
         end
     end
     local function presentTick(game, dt)

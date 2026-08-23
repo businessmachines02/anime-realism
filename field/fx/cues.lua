@@ -142,7 +142,43 @@ end
 
 Cues.RANGED_CLOSE = 1
 -- Wind-up before a special / travel shot. Long enough to pick REACT.
-Cues.RANGED_CHARGE = 1.5
+Cues.RANGED_CHARGE = 0.7
+-- If a travel FX never spawned, drop the HP hold after this.
+Cues.RANGED_HOLD_FALLBACK = 0.40
+
+local function snapBattlerHp(b)
+    if not b then
+        return nil
+    end
+    local live = tonumber(b.mon and b.mon.hp)
+    local shown = tonumber(b.shownHP)
+    if live and shown then
+        return math.max(live, shown)
+    end
+    return live or shown
+end
+
+local function writeHitPaint(battle, session)
+    battle = battle or (session and session._battle)
+    if not battle then
+        return
+    end
+    battle._arRangedHitHold = true
+    if type(battle._arHeldHpPaint) ~= "table" then
+        battle._arHeldHpPaint = {
+            player = snapBattlerHp(battle.player),
+            enemy = snapBattlerHp(battle.enemy),
+        }
+    end
+end
+
+local function clearHitPaint(battle)
+    if not battle then
+        return
+    end
+    battle._arRangedHitHold = nil
+    battle._arHeldHpPaint = nil
+end
 
 function Cues.rangedCastHoldActive(session)
     if not (session and session.live) then
@@ -150,6 +186,105 @@ function Cues.rangedCastHoldActive(session)
     end
     local p, e = session.playerMon, session.enemyMon
     return (p and p._pendingRangedCast) or (e and e._pendingRangedCast) or false
+end
+
+function Cues.rangedShotHoldActive(session)
+    if session and (session._rangedShotHold or 0) > 0 then
+        return true
+    end
+    local battle = session and session._battle
+    return battle ~= nil and battle._arRangedHitHold == true
+end
+
+--- Charge or a travel shot still in the air: HP must not flush on a tick.
+function Cues.rangedHitHoldActive(session)
+    if Cues.rangedCastHoldActive(session) or Cues.rangedShotHoldActive(session) then
+        return true
+    end
+    local battle = session and session._battle
+    return battle ~= nil and battle._arRangedHitHold == true
+end
+
+--- Knockback / camera wait for the fist or the bolt, not the engine tick.
+function Cues.shouldHoldHitCue(session, ctx)
+    if Cues.rangedHitHoldActive(session) then
+        return true
+    end
+    return type(Cues.shouldHoldEngineHit) == "function"
+        and Cues.shouldHoldEngineHit(session, ctx) and true or false
+end
+
+local function bindBattle(session, battle)
+    battle = battle or (session and session._battle)
+    if session and battle and session._battle == nil then
+        session._battle = battle
+    end
+    return battle
+end
+
+function Cues.armRangedShotHold(session, battle)
+    if not session then
+        return 0
+    end
+    session._rangedShotHold = (session._rangedShotHold or 0) + 1
+    writeHitPaint(bindBattle(session, battle), session)
+    return session._rangedShotHold
+end
+
+--- Latch the HP bar at the pre-hit total. Idempotent: later arms keep the first snap.
+function Cues.armRangedHitHold(session, battle)
+    if not session then
+        return false
+    end
+    writeHitPaint(bindBattle(session, battle), session)
+    return true
+end
+
+--- Drop the latch without applying stashed HP (miss / cancel).
+function Cues.dropRangedHitHold(session, battle)
+    if session then
+        session._rangedShotHold = 0
+        session._rangedHoldUntil = nil
+        session._pendingCloseHit = nil
+    end
+    clearHitPaint(bindBattle(session, battle))
+    return true
+end
+
+function Cues.releaseRangedShotHold(session, battle)
+    if not session then
+        return false
+    end
+    local n = session._rangedShotHold or 0
+    if n > 0 then
+        session._rangedShotHold = n - 1
+    end
+    battle = bindBattle(session, battle)
+    if (session._rangedShotHold or 0) <= 0 then
+        session._rangedHoldUntil = nil
+        clearHitPaint(battle)
+    end
+    if Cues.rangedHitHoldActive(session) then
+        return false
+    end
+    if type(Cues.flushHeldHit) == "function" then
+        return Cues.flushHeldHit(session, battle) and true or false
+    end
+    return false
+end
+
+function Cues.rangedHoldHasProjectile(session)
+    local list = session and session.projectiles
+    if type(list) ~= "table" then
+        return false
+    end
+    for i = 1, #list do
+        local p = list[i]
+        if p and p.holdHit and not p._hitFlushed and not p._removed then
+            return true
+        end
+    end
+    return false
 end
 
 --- True only while a special caster is still hopping back. In-place charge
@@ -1351,9 +1486,10 @@ function Cues.beginReactHold(session, battle)
     session._reactReleaseT = nil
     session._reactReleaseDur = nil
     local incoming = "enemy"
-    if session.playerMon and session.playerMon._pendingCloseStrike then
+    local p, e = session.playerMon, session.enemyMon
+    if p and (p._pendingCloseStrike or p._pendingRangedCast) then
         incoming = "player"
-    elseif session.enemyMon and session.enemyMon._pendingCloseStrike then
+    elseif e and (e._pendingCloseStrike or e._pendingRangedCast) then
         incoming = "enemy"
     end
     H.punchIn(session, incoming, {
@@ -1501,8 +1637,9 @@ function Cues.inMeleeReach(ent, foe)
     return false
 end
 
---- Dodge/brace wait for the charger to arrive. Occupancy can already be
---- adjacent while feet are still two tiles out.
+--- Dodge/brace wait for the incoming beat. Physicals wait until they are
+--- in your face. Specials wait until the shot leaves so the pose plays
+--- against the bolt, not the charge.
 function Cues.shouldHoldReactPose(session, side, kind, opts)
     kind = tostring(kind or "")
     if kind ~= "dodge" and kind ~= "brace" then
@@ -1514,17 +1651,20 @@ function Cues.shouldHoldReactPose(session, side, kind, opts)
     end
     local defender = H.sideEnt(session, side)
     local charger = H.foeOf(session, side)
-    if not (defender and charger and charger._pendingCloseStrike) then
+    if not (defender and charger) then
         return false
     end
-    return not Cues.inMeleeReach(charger, defender)
+    if charger._pendingCloseStrike then
+        return not Cues.inMeleeReach(charger, defender)
+    end
+    return charger._pendingRangedCast and true or false
 end
 
 function Cues.heldReactPending(session)
     return session and session._heldReact ~= nil
 end
 
---- Play a stashed dodge/brace once the charger is in melee.
+--- Play a stashed dodge/brace once the incoming beat is on them.
 function Cues.tickHeldReact(session, Grid)
     local held = session and session._heldReact
     if not held then
@@ -1532,7 +1672,11 @@ function Cues.tickHeldReact(session, Grid)
     end
     local defender = H.sideEnt(session, held.side)
     local charger = H.foeOf(session, held.side)
-    if not Cues.inMeleeReach(charger, defender) then
+    if charger and charger._pendingCloseStrike then
+        if not Cues.inMeleeReach(charger, defender) then
+            return false
+        end
+    elseif charger and charger._pendingRangedCast then
         return false
     end
     session._heldReact = nil

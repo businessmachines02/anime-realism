@@ -153,8 +153,8 @@ return function(Cues)
             if ent and ent._pendingRangedCast then
                 if Cues.stillWalkingToPad(ent) then
                     -- Backing up; charge starts once the feet land.
-                elseif not ent._rangedChargeAt then
-                    ent._rangedChargeAt = t + (Cues.RANGED_CHARGE or 1.5)
+                    elseif not ent._rangedChargeAt then
+                    ent._rangedChargeAt = t + (Cues.RANGED_CHARGE or 0.7)
                     local foe = H.foeOf(session, side)
                     H.faceToward(ent, foe)
                     H.playChargeHold(session, ent)
@@ -170,9 +170,6 @@ return function(Cues)
                         rangedReady = true,
                         via = "rangedBackstep",
                     })
-                    if type(Cues.flushHeldHit) == "function" then
-                        Cues.flushHeldHit(session, battle or session._battle)
-                    end
                 end
             end
             if ent and ent._releaseAt and t >= ent._releaseAt then
@@ -193,6 +190,13 @@ return function(Cues)
                     })
                 end
             end
+        end
+        local holdUntil = session._rangedHoldUntil
+        if holdUntil and t >= holdUntil
+            and not Cues.rangedCastHoldActive(session)
+            and not Cues.rangedHoldHasProjectile(session) then
+            session._rangedHoldUntil = nil
+            Cues.releaseRangedShotHold(session, battle)
         end
     end
 

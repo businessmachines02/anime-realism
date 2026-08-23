@@ -1482,7 +1482,14 @@ return function(mod)
             local shotMult = battle and tonumber(battle._arFireShotMult)
             if shotMult and shotMult > 0 and shotMult ~= 1 and type(dmg) == "number" and dmg > 0 then
                 battle._arFireShotMult = nil
+                battle._arReactSpecialMult = nil
                 dmg = math.max(1, math.floor(dmg * shotMult + 0.5))
+            end
+            local reactMult = battle and tonumber(battle._arReactSpecialMult)
+            if reactMult and reactMult > 0 and reactMult ~= 1
+                and type(dmg) == "number" and dmg > 0 then
+                battle._arReactSpecialMult = nil
+                dmg = math.max(1, math.floor(dmg * reactMult + 0.5))
             end
             if battle and battle._arCheckNow and type(dmg) == "number" and dmg > 0 then
                 dmg = math.max(1, math.floor(dmg * 0.35 + 0.5))
@@ -3224,6 +3231,13 @@ return function(mod)
             battle._arFireNowHit = nil
             battle._arFireCarryThrough = nil
             battle._arFireNowCharger = isPlayer and "enemy" or "player"
+            if not battle._arCheckNow and not battle._arFireShotMult
+                and ReactiveDefense then
+                local mult = tonumber(ReactiveDefense.REACT_SPECIAL_MULT)
+                if mult and mult > 0 and mult ~= 1 then
+                    battle._arReactSpecialMult = mult
+                end
+            end
             local ok, err = pcall(battle.performMove, battle, user, target, action)
             battle._arFireNow = nil
             battle._arCheckNow = nil

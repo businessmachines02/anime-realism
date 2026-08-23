@@ -53,6 +53,8 @@ RD.DODGE_COUNTER_POWER = 0.50
 RD.DODGE_COUNTER_CD = 2
 RD.DODGE_FAIL_MULT = 1.10
 RD.FIRE_CAST_MULT = 1.20
+-- REACT special: no charge, so the shot itself is a bit weaker.
+RD.REACT_SPECIAL_MULT = 0.75
 -- Beam clash: ratio to shove the other shot aside. Below this is a deadlock.
 RD.CLASH_PUSH = 1.35
 RD.CLASH_LOSE_MULT = 0.55
