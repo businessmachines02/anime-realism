@@ -539,7 +539,7 @@ Do not “fix” these by rewriting:
 | Speech bubbles / trainer cameo | `battle/chrome/bubbles.lua` + `battle/strings.lua` (`Dialogue.bind`) |
 | Callout rewrite / banter enqueue | `battle/rules/dialogue.lua` |
 | Focus react animation | `battle/fx.lua` (`Fx.play` + classic picFx enqueue) |
-| Battle mood / faces | `battle/rules/emotions.lua` + `battle/chrome/portraits.lua` |
+| Battle mood / faces / heat | `battle/rules/emotions.lua` + `battle/chrome/portraits.lua` (hooks in `main.lua`) |
 | FIELD intercept / no wipe | `field/session/intercept.lua` |
 | Pad steps / Dig-Fly | `field/fx/cues.lua` (`Cues.register`) + `field/pad/grid.lua` |
 | Move VFX | `field/fx/fx_catalog.lua` then `Projectiles.registerStyle` |

@@ -1,8 +1,7 @@
--- Battle systems — per-side mood (issue #74 v1).
+-- Battle systems — per-side mood + heat (issue #74).
 --
--- Pure logic: derive a readable face from HP and fight events.
--- chrome/portraits.lua paints the PMD portrait. modifiers() is identity
--- until heat v2 (Angry power/accuracy, Determined accuracy, …).
+-- Derive a readable face from HP and fight events. chrome/portraits.lua
+-- paints the PMD portrait. modifiers() feeds damage / accuracy / dodge.
 
 local Emotions = {}
 
@@ -25,14 +24,14 @@ Emotions.FILE = {
     sigh = "Sigh",
 }
 
-Emotions.PORTRAIT_HOLD = 1.85
+-- Face stays up while the mood is not normal, then fades out.
 Emotions.PORTRAIT_FADE = 0.45
 
 -- Short chip labels + fills. Ink is dark on bright chips, light on deep ones.
 Emotions.CHIP = {
     angry = { text = "ANGRY", fill = { 0.82, 0.22, 0.16 }, ink = { 1.00, 0.96, 0.94 } },
     pain = { text = "TIRED", fill = { 0.56, 0.34, 0.40 }, ink = { 1.00, 0.94, 0.94 } },
-    determined = { text = "FIRM", fill = { 0.90, 0.70, 0.16 }, ink = { 0.16, 0.10, 0.04 } },
+    determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = { 0.16, 0.10, 0.04 } },
     worried = { text = "WARY", fill = { 0.86, 0.78, 0.30 }, ink = { 0.18, 0.14, 0.04 } },
     stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = { 0.12, 0.10, 0.22 } },
     sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = { 0.10, 0.12, 0.16 } },
@@ -61,6 +60,7 @@ local function freshSide()
         lastShown = nil,
         portraitAt = nil,
         portraitMood = nil,
+        fadeAt = nil,
         hp = nil,
         maxHp = nil,
     }
@@ -183,8 +183,109 @@ function Emotions.color(mood)
     return chip and chip.fill or nil
 end
 
-function Emotions.modifiers(_battle, _isPlayer)
-    return {}
+-- Additive / small multiplicative heat. Caps keep this under the growth-layer
+-- +15% ceiling in OVERVIEW.md.
+Emotions.HEAT = {
+    angry = { powerMul = 1.12, takenMul = 1.08, accuracy = -0.08, dodge = -0.05 },
+    pain = { powerMul = 0.94, takenMul = 1.06, accuracy = -0.06, dodge = -0.08 },
+    determined = { powerMul = 1.06, takenMul = 1.00, accuracy = 0.08, dodge = 0.04 },
+    worried = { powerMul = 0.96, takenMul = 1.00, accuracy = 0.00, dodge = 0.08 },
+    stunned = { powerMul = 0.92, takenMul = 1.10, accuracy = -0.10, dodge = -0.10 },
+    sigh = { powerMul = 1.00, takenMul = 1.00, accuracy = -0.04, dodge = 0.00 },
+    surprised = { powerMul = 1.00, takenMul = 1.06, accuracy = 0.00, dodge = -0.04 },
+}
+
+local function emptyMods()
+    return { powerMul = 1, takenMul = 1, accuracy = 0, dodge = 0 }
+end
+
+local function heatOn()
+    local fn = host.facesOn
+    if type(fn) == "function" then
+        return fn() ~= false
+    end
+    return true
+end
+
+function Emotions.modifiers(battle, isPlayer)
+    if not heatOn() then
+        return emptyMods()
+    end
+    local mood = Emotions.mood(battle, isPlayer)
+    local spec = Emotions.HEAT[tostring(mood or "")]
+    if not spec then
+        return emptyMods()
+    end
+    return {
+        powerMul = spec.powerMul or 1,
+        takenMul = spec.takenMul or 1,
+        accuracy = spec.accuracy or 0,
+        dodge = spec.dodge or 0,
+    }
+end
+
+function Emotions.applyDamage(battle, user, target, dmg)
+    if type(dmg) ~= "number" or dmg <= 0 then
+        return dmg
+    end
+    local out = 1
+    local taken = 1
+    if user then
+        local m = Emotions.modifiers(battle, user.isPlayer == true)
+        out = tonumber(m.powerMul) or 1
+    end
+    if target then
+        local m = Emotions.modifiers(battle, target.isPlayer == true)
+        taken = tonumber(m.takenMul) or 1
+    end
+    local mul = out * taken
+    if mul > 1.25 then
+        mul = 1.25
+    elseif mul < 0.80 then
+        mul = 0.80
+    end
+    if mul == 1 then
+        return dmg
+    end
+    return math.max(1, math.floor(dmg * mul + 0.5))
+end
+
+function Emotions.nudgeHit(battle, user, hit)
+    if not user then
+        return hit
+    end
+    local m = Emotions.modifiers(battle, user.isPlayer == true)
+    local acc = tonumber(m.accuracy) or 0
+    if acc == 0 then
+        return hit
+    end
+    local roll
+    if love and love.math and type(love.math.random) == "function" then
+        roll = love.math.random()
+    else
+        roll = math.random()
+    end
+    if hit and acc < 0 and roll < -acc then
+        return false
+    end
+    if (not hit) and acc > 0 and roll < acc then
+        return true
+    end
+    return hit
+end
+
+function Emotions.attachDefense(RD)
+    if type(RD) ~= "table" then
+        return Emotions
+    end
+    function RD.emotionDodgeBonus(defender, _attacker, battle)
+        if not battle then
+            return 0
+        end
+        local m = Emotions.modifiers(battle, defender and defender.isPlayer == true)
+        return tonumber(m.dodge) or 0
+    end
+    return Emotions
 end
 
 local function derive(side, selfRatio, foeRatio)
@@ -339,12 +440,15 @@ function Emotions.consumeChange(battle, isPlayer)
     if shown == side.lastShown then
         return nil
     end
+    local prev = side.lastShown
     side.lastShown = shown
     if shown == "normal" then
-        side.portraitAt = nil
-        side.portraitMood = nil
+        if prev and prev ~= "normal" and not side.fadeAt then
+            side.fadeAt = now()
+        end
         return nil
     end
+    side.fadeAt = nil
     side.portraitAt = now()
     side.portraitMood = shown
     return shown
@@ -356,29 +460,47 @@ end
 
 function Emotions.portraitAlpha(battle, isPlayer)
     local side = Emotions.side(battle, isPlayer)
-    if not side or not side.portraitAt then
+    if not side then
         return 0
     end
-    local age = now() - side.portraitAt
-    if age < 0 then
-        return 0
-    end
-    if age < Emotions.PORTRAIT_HOLD then
+    local shown = Emotions.mood(battle, isPlayer)
+    if shown and shown ~= "normal" then
+        side.fadeAt = nil
+        side.portraitMood = shown
         return 1
     end
-    local fade = (age - Emotions.PORTRAIT_HOLD) / Emotions.PORTRAIT_FADE
+    if not side.fadeAt then
+        if side.portraitMood then
+            side.fadeAt = now()
+        else
+            return 0
+        end
+    end
+    local fade = (now() - side.fadeAt) / (Emotions.PORTRAIT_FADE or 0.45)
     if fade >= 1 then
+        side.fadeAt = nil
+        side.portraitMood = nil
         return 0
+    end
+    if fade < 0 then
+        return 1
     end
     return 1 - fade
 end
 
 function Emotions.portraitMood(battle, isPlayer)
+    local shown = Emotions.mood(battle, isPlayer)
+    if shown and shown ~= "normal" then
+        return shown
+    end
+    local side = Emotions.side(battle, isPlayer)
+    if not side then
+        return nil
+    end
     if Emotions.portraitAlpha(battle, isPlayer) <= 0 then
         return nil
     end
-    local side = Emotions.side(battle, isPlayer)
-    return side and side.portraitMood or nil
+    return side.portraitMood
 end
 
 function Emotions.announce(battle)

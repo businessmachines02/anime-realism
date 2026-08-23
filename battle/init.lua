@@ -51,6 +51,9 @@ return function(env)
     if Portraits and Emotions and type(Portraits.bind) == "function" then
         Portraits.bind({ Emotions = Emotions })
     end
+    if Emotions and ReactiveDefense and type(Emotions.attachDefense) == "function" then
+        Emotions.attachDefense(ReactiveDefense)
+    end
     local React = loadMod("rules/react.lua")
     local Fx = loadMod("fx.lua")
     local Strings = loadMod("strings.lua")

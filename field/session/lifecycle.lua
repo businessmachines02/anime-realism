@@ -416,6 +416,10 @@ function Lifecycle.drawWorldOverlay(battle)
             return
         end
         local lift = ent._fieldBarLift or 10
+        local UI = deps and deps.UI
+        if UI and type(UI.barLift) == "function" then
+            lift = UI.barLift(ent)
+        end
         local worldX = (ent.px or 0) - cameraX + 8
         local worldY = (ent.py or 0) - cameraY - lift
         ent._fieldWorldX, ent._fieldWorldY = worldX, worldY

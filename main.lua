@@ -1261,6 +1261,11 @@ return function(mod)
                 -- Ranged specials from 5+ tiles pick up a light extra miss.
                 hit = FieldBattleViewer.applyFarShotAccuracy(battle, ctx, hit)
             end
+            if not guaranteed
+                and Battle and Battle.Emotions
+                and type(Battle.Emotions.nudgeHit) == "function" then
+                hit = Battle.Emotions.nudgeHit(battle, user, hit)
+            end
             if battle and battle._arFireNow then
                 battle._arFireNowHit = hit and true or false
                 if not hit then
@@ -1399,6 +1404,10 @@ return function(mod)
         -- Reactive Defense damage modifiers + legacy counter +25%.
         mod.hooks:wrap("battle.damage", function(next, ctx)
             local dmg, info = next(ctx)
+            if ctx and Battle and Battle.Emotions
+                and type(Battle.Emotions.applyDamage) == "function" then
+                dmg = Battle.Emotions.applyDamage(ctx.battle, ctx.user, ctx.target, dmg)
+            end
             if not opt("momentum_counter") or not ctx then
                 return dmg, info
             end
@@ -2107,7 +2116,7 @@ return function(mod)
                 local chance = 0.65
                 if ReactiveDefense and type(ReactiveDefense.dodgeSuccessChance) == "function" then
                     chance = ReactiveDefense.dodgeSuccessChance(
-                        battle.enemy, battle.player)
+                        battle.enemy, battle.player, battle)
                 end
                 local r = (love and love.math and love.math.random) or math.random
                 if r() > chance then

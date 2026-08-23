@@ -591,14 +591,20 @@ function tests.status_chip_abbreviations()
 end
 
 function tests.mood_portrait_sits_beside_the_sprite()
-  local px, py = UI.faceAnchor("player", 40, 80, 28, 12)
-  eq(px, 0, "player face is left of the body")
-  eq(py, 66, "face is vertically centered on the body")
-  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, 12)
-  eq(ex, 132, "foe face is right of the body")
-  eq(ey, 66, "foe face shares the body midline")
-  truthy(px + 28 <= 40, "player face does not overlap body x")
-  truthy(ex >= 120, "foe face does not overlap body x")
+  local lift = UI.FACE_LIFT
+  local px, py = UI.faceAnchor("player", 40, 80, 28, nil, 160)
+  eq(px, UI.FACE_MARGIN, "player face hugs the left edge")
+  eq(py, 80 - 14 - lift, "face tracks the body Y")
+  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, nil, 160)
+  eq(ex, 160 - UI.FACE_MARGIN - 28, "foe face hugs the right edge")
+  eq(ey, 80 - 14 - lift, "foe face shares the body Y")
+  local hx, hy = UI.hpAboveFace(px, py, 28)
+  eq(hx, px + 14, "HP sits on the face midline")
+  eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 53 }), 14,
+    "tall hop-padded kits still plant HP on the ~24px body")
+  eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
+    "32px kits sit a couple px above the cell top")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -7994,7 +8000,10 @@ function tests.emotions_two_misses_make_angry()
   eq(E.mood(battle, true), "angry", "two misses become angry")
   local mods = E.modifiers(battle, true)
   eq(type(mods), "table", "modifiers is a table")
-  eq(next(mods), nil, "v1 modifiers stay empty")
+  eq(mods.powerMul, 1.12, "angry hits harder")
+  eq(mods.accuracy, -0.08, "angry swings wilder")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 112,
+    "angry power applies to outgoing damage")
   E.clear(battle)
 end
 
@@ -8044,11 +8053,11 @@ function tests.emotions_chip_colors_match_mood()
   eq(angry.text, "ANGRY", "angry chip label")
   truthy(angry.fill and angry.fill[1] > 0.6, "angry fill is red")
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
-  eq(E.chip("determined").text, "FIRM", "determined chip is FIRM")
+  eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
   eq(E.chip("normal"), nil, "normal has no chip")
 end
 
-function tests.emotions_portrait_flashes_then_goes()
+function tests.emotions_portrait_holds_until_normal()
   local E = loadEmotions()
   local battle = moodBattle(80, 100, 80, 100)
   E.note(battle, { kind = "miss", side = "player" })
@@ -8056,11 +8065,55 @@ function tests.emotions_portrait_flashes_then_goes()
   E.note(battle, { kind = "turn" })
   eq(E.mood(battle, true), "angry", "setup angry")
   eq(E.consumeChange(battle, true), "angry", "first change arms a portrait")
-  eq(E.consumeChange(battle, true), nil, "same mood does not re-flash")
-  truthy(E.portraitAlpha(battle, true) > 0.9, "portrait is up right after the change")
+  eq(E.consumeChange(battle, true), nil, "same mood does not re-fire")
+  eq(E.portraitAlpha(battle, true), 1, "portrait stays while angry")
   local side = E.side(battle, true)
   side.portraitAt = (os.clock()) - 8
-  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after a couple seconds")
+  eq(E.portraitAlpha(battle, true), 1, "elapsed time does not hide an active mood")
+  eq(E.portraitMood(battle, true), "angry", "face matches the live mood")
+  side.mood = "normal"
+  side.flash = nil
+  side.fadeAt = (os.clock()) - 2
+  side.portraitMood = "angry"
+  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after fading back to normal")
+  E.clear(battle)
+end
+
+function tests.emotions_heat_follows_shown_mood()
+  local E = loadEmotions()
+  local battle = moodBattle(90, 100, 40, 100)
+  E.note(battle, { kind = "hit", user = "player", target = "enemy", damage = 10, maxHp = 100 })
+  eq(E.mood(battle, true), "determined", "setup determined")
+  eq(E.mood(battle, false), "worried", "setup worried")
+  local det = E.modifiers(battle, true)
+  local wary = E.modifiers(battle, false)
+  eq(det.accuracy, 0.08, "determined is more accurate")
+  eq(wary.dodge, 0.08, "worried ducks better")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 106,
+    "determined power, worried takes normal")
+  E.note(battle, { kind = "crit", side = "player" })
+  eq(E.mood(battle, true), "stunned", "crit flash overrides determined")
+  eq(E.modifiers(battle, true).takenMul, 1.10, "stunned takes more this turn")
+  E.clear(battle)
+end
+
+function tests.emotions_heat_off_when_faces_off()
+  local E = loadEmotions()
+  E.bind({
+    facesOn = function()
+      return false
+    end,
+  })
+  local battle = moodBattle(80, 100, 80, 100)
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "miss", side = "player" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "angry", "mood still derives with faces off")
+  local mods = E.modifiers(battle, true)
+  eq(mods.powerMul, 1, "heat is identity when faces are off")
+  eq(mods.accuracy, 0, "no accuracy nudge when faces are off")
+  eq(E.applyDamage(battle, battle.player, battle.enemy, 100), 100,
+    "damage is unchanged when faces are off")
   E.clear(battle)
 end
 

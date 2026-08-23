@@ -253,7 +253,7 @@ function Portraits.drawChip(g, img, x, y, size, alpha)
     g.draw(img, math.floor(x + 0.5), math.floor(y + 0.5), 0, scale, scale)
 end
 
--- Classic overlay: a brief bigger face, then gone. Player bottom-left,
+-- Classic overlay: face stays while the mood is up. Player bottom-left,
 -- foe top-right.
 function Portraits.draw(battle)
     if not facesOn() or type(battle) ~= "table" then
