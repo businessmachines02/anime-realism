@@ -108,7 +108,7 @@ HEIGHT_M = [
 # Idle then Faint sit LAST so combat rows stay at the same Y. Extra
 # poses APPEND after Faint so an 8-block kit still maps 0–7.
 POSES = [
-    ("walk", ("Walk", "Idle")),
+    ("walk", ("Walk", "Move", "Idle")),
     ("dodge", ("Hop", "Rotate", "LeapForth", "Walk")),
     ("brace", ("Cringe", "LostBalance", "Hurt")),
     ("physical", ("Attack", "Kick", "Punch", "MultiStrike", "MultiScratch",
@@ -141,6 +141,9 @@ EXTRA_POSES = [
 
 # Dex → pose → PMD names. Golem's Attack is Special0 (the roll).
 POSE_NAMES_BY_DEX: dict[int, dict[str, tuple[str, ...]]] = {
+    50: {
+        "physical": ("Move", "Attack", "Strike", "Swing"),
+    },
     76: {
         "physical": ("Special0", "Attack", "Kick", "Punch", "Strike", "Swing"),
     },
@@ -787,6 +790,15 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
             ticks_by_pose[pose] = ticks
             pose_ticks.append((pose, ticks))
             used += 1
+    try:
+        from inject_dig import append_dig_to_bake
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from inject_dig import append_dig_to_bake
+    append_dig_to_bake(
+        blocks, pose_ticks, cell, faces, by_pose, ticks_by_pose,
+        walk_override=by_pose.get("walk") if dex == 50 else None)
+    used = len(blocks)
     max_cols = max((max(1, b.width // cell) for b in blocks), default=COLS)
     kit = Image.new("RGBA", (cell * max_cols, cell * faces * used), (0, 0, 0, 0))
     for i, block in enumerate(blocks):

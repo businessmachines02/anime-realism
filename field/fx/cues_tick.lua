@@ -229,6 +229,7 @@ return function(Cues)
                 local battler = ent._battleBattler
                 local flavor = H.battlerChargingVanish(battler)
                 if flavor then
+                    ent._sawVanishInvuln = true
                     ent._vanishKind = flavor
                     local anim = ent.anim or ""
                     if not ent._fieldVanished
@@ -251,9 +252,11 @@ return function(Cues)
                             end
                         end
                     end
-                elseif ent._fieldVanished and not ent._emerging
+                elseif ent._fieldVanished and ent._sawVanishInvuln
+                    and not ent._emerging
                     and not ent._pendingReleaseAttack and not ent._releaseAt then
                     -- Invulnerability ended without a queued release strike (miss/cancel).
+                    ent._sawVanishInvuln = nil
                     Cues.apply(session, side, "emerge", Grid, nil, session._battle, {
                         vanish = ent._vanishKind or "dig",
                     })

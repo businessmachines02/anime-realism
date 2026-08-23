@@ -374,27 +374,27 @@ return function(Cues)
         local g = session.grid
         local category = H.normCategory(opts.category)
 
-        -- Dig / Fly charge turn: disappear instead of striking.
+        -- Dig / Fly: first use buries (engine arms `charging` after
+        -- move_used). Already underground / aloft → pop out and hit.
         if not opts.releaseStrike then
-            local charging, flavor = H.isChargeTurn(ent, opts.moveId)
-            if charging then
+            local flavor = Cues.vanishKind(opts.moveId)
+            if flavor then
+                if ent._fieldVanished or ent.hidden then
+                    ent._pendingReleaseAttack = {
+                        category = category,
+                        moveType = opts.moveType,
+                        moveId = opts.moveId,
+                    }
+                    ent._releaseAt = H.now(session) + 0.28
+                    return Cues.apply(session, side, "emerge", Grid, nudgeCamera, battle, {
+                        vanish = ent._vanishKind or flavor,
+                        moveId = opts.moveId,
+                    })
+                end
                 return Cues.apply(session, side, "vanish", Grid, nudgeCamera, battle, {
                     vanish = flavor,
                     moveId = opts.moveId,
                     moveType = opts.moveType,
-                })
-            end
-            -- Release strike while still hidden: emerge, then strike shortly after.
-            if (ent._fieldVanished or ent.hidden) and Cues.vanishKind(opts.moveId) then
-                ent._pendingReleaseAttack = {
-                    category = category,
-                    moveType = opts.moveType,
-                    moveId = opts.moveId,
-                }
-                ent._releaseAt = H.now(session) + 0.28
-                return Cues.apply(session, side, "emerge", Grid, nudgeCamera, battle, {
-                    vanish = ent._vanishKind or Cues.vanishKind(opts.moveId),
-                    moveId = opts.moveId,
                 })
             end
         end

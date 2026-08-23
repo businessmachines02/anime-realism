@@ -245,11 +245,23 @@ return function(Hooks)
                 if not move then
                     return
                 end
-                -- Dig/Fly emit move_used before the charge flag is set, so an
-                -- immediate react would wrongly lunge on the hide turn. Queue
-                -- arFieldCue (and charge-text tags) drive vanish / emerge instead.
-                if type(FBV.vanishKind) == "function" and FBV.vanishKind(move.id) then
-                    return
+                -- Dig/Fly emit move_used before the charge flag is set.
+                -- Hide turn: vanish now (do not lunge). Strike turn: fall
+                -- through so attack can emerge and hit.
+                if type(FBV.vanishKind) == "function" then
+                    local vanish = FBV.vanishKind(move.id)
+                    if vanish then
+                        local charging = ev.user.charging or ev.user.invulnerable
+                        if not charging then
+                            pcall(FBV.react, battle, side, "vanish", {
+                                vanish = vanish,
+                                moveId = move.id,
+                                moveType = move.type,
+                                via = "move_used",
+                            })
+                            return
+                        end
+                    end
                 end
                 local status = isStatusMove(move)
                 local kind = status and "status" or "attack"

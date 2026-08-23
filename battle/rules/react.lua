@@ -394,6 +394,14 @@ local function shouldOfferCalloutPick(battle, move)
     if (move.power or 0) <= 0 or move.category == "status" then
         return false
     end
+    -- Dig/Fly hide turn (or you are already buried): skip REACT until the
+    -- strike, or the HUD would offer FIRE / CHARGE at a hole.
+    if RD() then
+        if RD().isVanishHideTurn(battle.enemy, move)
+            or RD().isVanished(battle.player) then
+            return false
+        end
+    end
     -- Frozen / asleep: can't dodge, brace, or take orders.
     if hostCall("playerStatusLocked", battle) then
         return false
@@ -1754,6 +1762,9 @@ local function shouldAutoCounter(battle, ctx)
     if not move or (move.power or 0) <= 0 or move.category == "status" then
         return false
     end
+    if RD() and RD().isVanishHideTurn(user, move) then
+        return false
+    end
     -- Frozen / asleep: can't take a counter order.
     if hostCall("playerStatusLocked", battle) then
         return false
@@ -1957,6 +1968,14 @@ function EffectRegistry.runDamaging(battle, ctx, record)
             finishCalloutPick(battle, me, moveName, "entrench_hold", nil)
             return
         end
+    end
+    if RD() and ctx and (
+        RD().isVanishHideTurn(ctx.user, ctx.move)
+        or RD().isVanished(ctx.target)
+    ) then
+        hostCall("armFieldChip", battle,
+            (ctx.target and ctx.target.isPlayer) and "player" or "enemy",
+            "PASS")
     end
     if shouldDeferForCalloutPick(battle, ctx) then
         local state = momentumState(battle)

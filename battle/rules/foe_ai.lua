@@ -149,6 +149,10 @@ function FoeAi.pickFoeReact(battle, move, isSpecial, opts)
     or RD.isUnreactable(move) then
     return "commit"
   end
+  if RD.isVanishHideTurn(battle.player, move)
+      or RD.isVanished(battle.enemy) then
+    return "commit"
+  end
   if isSpecial == nil then
     isSpecial = RD.isSpecialClashIncoming(move)
   end

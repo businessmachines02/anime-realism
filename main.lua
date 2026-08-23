@@ -2194,6 +2194,15 @@ return function(mod)
             if (moveDef.power or 0) <= 0 or moveDef.category == "status" then
                 return nil
             end
+            if ReactiveDefense
+                and (ReactiveDefense.isVanishHideTurn(battle.player, moveDef)
+                    or ReactiveDefense.isVanished(battle.enemy)) then
+                if FieldBattleViewer
+                    and type(FieldBattleViewer.armStatusChip) == "function" then
+                    pcall(FieldBattleViewer.armStatusChip, battle, "enemy", "PASS")
+                end
+                return nil
+            end
             -- Frozen / asleep foes can't take dodge/brace/FIRE orders.
             if enemyStatusLocked(battle) then
                 return nil

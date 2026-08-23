@@ -1,15 +1,7 @@
-# PIKACHU vs GOLEM
-P|attack|THUNDERBOLT|special|ELECTRIC|95
+# BEEDRILL vs MACHAMP
+P|attack|SLUDGE|special|POISON|65
 E|hit
-E|attack|EXPLOSION|physical|NORMAL|170
-P|hit
-P|attack|THUNDERSHOCK|special|ELECTRIC|40
-E|hit
-E|attack|TACKLE|physical|NORMAL|35
-P|brace
-P|attack|THUNDERBOLT|special|ELECTRIC|95
-E|hit
-E|attack|EXPLOSION|physical|NORMAL|170
-P|hit
-P|attack|THUNDERSHOCK|special|ELECTRIC|40
-E|dodge
+E|attack|BODY_SLAM|physical|NORMAL|85
+P|charge
+P|attack|SLUDGE|special|POISON|65
+E|fire
