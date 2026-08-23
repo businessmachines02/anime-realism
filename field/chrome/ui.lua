@@ -570,6 +570,8 @@ local CHIP_PHRASE = {
     { "NARROWLY AVOIDED", "DODGE" },
     { "EVADED SKILLFULLY", "DODGE" },
     { "DODGED ASIDE", "DODGE" },
+    { "CRASHED THROUGH", "CHARGE" },
+    { "THEY CRASHED", "CHARGE" },
 }
 
 local function chipFlat(text)

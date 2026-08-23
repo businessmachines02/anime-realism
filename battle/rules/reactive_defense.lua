@@ -27,6 +27,7 @@ RD.COST = {
   commit = 0, -- just take it the usual way
   dodge = 25,
   fire = 15,
+  charge = 15,
   cover = 20,
   cover_exit = 10,
   brace = 15,
@@ -59,6 +60,8 @@ RD.REACT_SPECIAL_MULT = 0.75
 RD.CLASH_PUSH = 1.35
 RD.CLASH_LOSE_MULT = 0.55
 RD.CLASH_WIN_SHOT_MULT = 0.75
+-- Physical CHARGE: both hits land; a coin flip boosts one side.
+RD.CHARGE_BOOST = 1.15
 
 RD.BRACE_WRONG_MULT = 1.18
 RD.BRACE_COUNTER_CHANCE = 0.35
@@ -339,6 +342,29 @@ function RD.isSpecialClashIncoming(move)
     return false
   end
   return moveIsSpecial(move)
+end
+
+function RD.isPhysicalClashIncoming(move)
+  if not move or (move.power or 0) <= 0 then
+    return false
+  end
+  if tostring(move.category or ""):lower() == "status" then
+    return false
+  end
+  return not moveIsSpecial(move)
+end
+
+--- Coin flip. `opts.roll` is 0..1 for tests. Win = reply gets the boost.
+function RD.contestPhysicalClash(_battle, _incoming, _reply, opts)
+  opts = opts or {}
+  local roll = tonumber(opts.roll)
+  if roll == nil then
+    roll = rng()
+  end
+  if roll < 0.5 then
+    return "win", roll
+  end
+  return "lose", roll
 end
 
 local function moveCategory(move)
@@ -695,6 +721,33 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     return result
   end
 
+  if action == "charge" then
+    local ok, cost = RD.spend(battle, true, "charge")
+    if not ok then
+      result.action = "commit"
+      result.lines[#result.lines + 1] = "Not enough\nFocus!"
+      return RD.resolveIncoming(battle, "commit", nil, ctx)
+    end
+    result.focusSpent = cost
+    side.reactedThisTurn = true
+    result.chargeNow = true
+    local incoming = ctx and ctx.move
+    local reply = ctx and ctx.replyMove
+    local verdict = RD.contestPhysicalClash(battle, incoming, reply, ctx)
+    result.chargeClash = verdict
+    result.chip = "CHARGE"
+    if verdict == "win" then
+      result.damageMult = 1
+      result.chargeShotMult = RD.CHARGE_BOOST
+      result.lines[#result.lines + 1] = "Crashed through!"
+    else
+      result.damageMult = RD.CHARGE_BOOST
+      result.chargeShotMult = 1
+      result.lines[#result.lines + 1] = "They crashed\nthrough!"
+    end
+    return result
+  end
+
   if action == "dodge" then
     local ok, cost = RD.spend(battle, true, "dodge")
     if not ok then
@@ -959,13 +1012,16 @@ function RD.menuActions(battle, move, opts)
   if opts.canFireNow then
     add("fire", "FIRE", opts.fireHint or "Strike now", "fire")
   end
+  if opts.canChargeNow then
+    add("charge", "CHARGE", opts.chargeHint or "Crash the charge", "charge")
+  end
   add("cover", side.cover and "STAY COVER" or "TAKE COVER",
     side.cover and "Hold position" or "Durability pool", "cover")
   if not unreactable then
     add("brace", "BRACE", "Match the hit", "brace")
   end
-  -- FIRE takes the diamond's fourth slot; entrenching mid-lunge is the odd one out.
-  if not opts.canFireNow then
+  -- FIRE / CHARGE take the diamond's fourth slot; entrenching mid-lunge is out.
+  if not opts.canFireNow and not opts.canChargeNow then
     add("entrench", "ENTRENCH", "Lock in 2-3 turns", "entrench")
   end
   add("commit", "COMMIT", "Take the hit", "commit")

@@ -52,17 +52,32 @@ return function(Cues)
         end
         Cues.tickHeldReact(session, Grid)
         Cues.tickTossLand(session, Grid)
-        local waiting = Cues.heldReactPending(session)
+        if session._reactLeadUntil and t >= session._reactLeadUntil then
+            session._reactLeadUntil = nil
+        end
+        local waiting = Cues.reactOutcomePending(session)
         -- FIRE / clash shot was latched on the HUD click; run it here so
         -- performMove cannot mutate sprites after this frame's pose.
-        -- Dodge/brace vs a charge waits until they are in your face.
+        -- Failed dodge/brace waits until they are in your face, then a
+        -- short lead so the pose is not the same frame as the hit.
         do
             local resume = battle and battle._arResumeReactPick
-            if type(resume) == "function" and not waiting then
-                battle._arResumeReactPick = nil
-                local okR, errR = pcall(resume)
-                if not okR then
-                    H.noteErr(session, battle, "resumeReactPick", errR)
+            if type(resume) == "function" then
+                battle._arResumeArmedAt = battle._arResumeArmedAt or t
+                local stuck = (t - battle._arResumeArmedAt)
+                    >= (Cues.REACT_RESUME_MAX or 1.25)
+                if not waiting or stuck then
+                    battle._arResumeReactPick = nil
+                    battle._arResumeArmedAt = nil
+                    if stuck then
+                        session._heldReact = nil
+                        session._reactLeadUntil = nil
+                        waiting = false
+                    end
+                    local okR, errR = pcall(resume)
+                    if not okR then
+                        H.noteErr(session, battle, "resumeReactPick", errR)
+                    end
                 end
             end
         end

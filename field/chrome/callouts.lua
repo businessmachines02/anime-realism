@@ -114,6 +114,11 @@ function Callouts.shouldHold(battle)
   if not battle then
     return false
   end
+  -- REACT HUD sits on the stack as a translucent menu. Wiping the incoming
+  -- order there is the flicker: Brock shouts, menu opens, box vanishes.
+  if battle._arAwaitingReact then
+    return false
+  end
   local phase = battle.phase
   if type(phase) == "string" and phase ~= "" and phase ~= "messages" then
     return true

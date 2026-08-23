@@ -368,6 +368,13 @@ return function(env)
     end
   end
 
+  function FBV.playChargeClash(battle, result, ctx)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.playChargeClash) == "function" then
+      return Cues.playChargeClash(session, Grid, result, ctx)
+    end
+  end
+
   function FBV.isRangedCounter(opts)
     if Cues and type(Cues.isRangedCounter) == "function" then
       return Cues.isRangedCounter(opts, Projectiles)

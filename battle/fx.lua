@@ -97,14 +97,15 @@ function Fx.play(battle, action, result)
         local kind = tostring(action or "")
         if kind == "dodge" or kind == "cover" or kind == "brace"
             or kind == "entrench" or kind == "entrench_hold" then
-            local opts
+            local opts = {}
             if kind == "dodge" and result and result.counter
                 and not result.counter.deferToCall then
-                opts = {
-                    counterMoveId = result.counter.moveId,
-                    counterMoveType = result.counter.moveType,
-                    counterCategory = result.counter.category,
-                }
+                opts.counterMoveId = result.counter.moveId
+                opts.counterMoveType = result.counter.moveType
+                opts.counterCategory = result.counter.category
+            end
+            if result and result.forceMiss == true then
+                opts.forceMiss = true
             end
             hostCall("fieldReact", battle, "player",
                 (kind == "entrench_hold" and "brace") or kind, opts)

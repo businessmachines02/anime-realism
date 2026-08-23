@@ -5723,6 +5723,77 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
   return burst
 end
 
+--- Two physicals crash in the middle. Dashes meet, then a dust-and-shock boom.
+function Projectiles.bodyClash(session, playerOpts, enemyOpts)
+  playerOpts = playerOpts or {}
+  enemyOpts = enemyOpts or {}
+  local atk = session and session.playerMon
+  local def = session and session.enemyMon
+  local ax, ay = center(session, atk)
+  local bx, by = center(session, def)
+  if not (ax and bx) then
+    return nil
+  end
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5 - 1
+  local meet = 0.30
+  local function dash(sx, sy, opts)
+    local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
+    local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
+    local shot = spawn(session, {
+      kind = "effect",
+      style = "dash_smear",
+      glitz = "dash",
+      sx = sx, sy = sy, ex = mx, ey = my,
+      duration = meet,
+      arc = 0,
+      color = color,
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+    })
+    if shot then
+      shot.noLand = true
+    end
+    return shot
+  end
+  dash(ax, ay, playerOpts)
+  dash(bx, by, enemyOpts)
+  local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local eType = tostring(enemyOpts.moveType or enemyOpts.type or "NORMAL"):upper()
+  local color = TYPE_COLORS[pType] or { 0.86, 0.78, 0.58 }
+  local color2 = TYPE_COLORS[eType] or { 0.62, 0.52, 0.40 }
+  spawn(session, {
+    kind = "effect",
+    style = "ground_kick",
+    sx = mx, sy = my + 4, ex = mx, ey = my + 2,
+    duration = 0.56,
+    delay = meet * 0.85,
+    arc = 3,
+    color = { 0.72, 0.62, 0.44 },
+  })
+  spawn(session, {
+    kind = "effect",
+    style = "clash_glow",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.72,
+    delay = meet * 0.85,
+    arc = 0,
+    color = color,
+  })
+  local burst = spawn(session, {
+    kind = "effect",
+    style = "clash_burst",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.84,
+    delay = meet * 0.90,
+    arc = 0,
+    color = color,
+  })
+  if burst then
+    burst.color2 = color2
+  end
+  return burst
+end
+
 -- Occupancy lives on grid.haze. Paint loops in drawHazeLanes each frame.
 function Projectiles.hazeLinger(_session, _placed)
 end

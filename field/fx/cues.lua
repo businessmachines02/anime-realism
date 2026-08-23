@@ -1495,6 +1495,52 @@ function Cues.playBeamClash(session, Grid, result, ctx)
     return true
 end
 
+--- Two physicals crash between the mons.
+function Cues.playChargeClash(session, Grid, result, ctx)
+    if not session then
+        return false
+    end
+    result = result or {}
+    ctx = ctx or {}
+    local incoming = ctx.move or {}
+    local reply = ctx.replyMove or {}
+    local replySide = ctx.replySide or "player"
+    local playerShot, enemyShot
+    if replySide == "enemy" then
+        playerShot, enemyShot = incoming, reply
+    else
+        playerShot, enemyShot = reply, incoming
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.bodyClash) == "function" then
+        Projectiles.bodyClash(session, {
+            moveId = playerShot.id or playerShot.moveId,
+            moveType = playerShot.type or playerShot.moveType,
+        }, {
+            moveId = enemyShot.id or enemyShot.moveId,
+            moveType = enemyShot.type or enemyShot.moveType,
+        })
+    end
+    local player = H.sideEnt(session, "player")
+    local enemy = H.sideEnt(session, "enemy")
+    if player then
+        H.playAnim(player, "attack")
+    end
+    if enemy then
+        H.playAnim(enemy, "attack")
+    end
+    H.punchIn(session, "player", {
+        mode = "clash",
+        focus = "mid",
+        hold = 0.82,
+        slow = 0.70,
+        lift = 5,
+        burst = false,
+    })
+    H.impactKick(session, { powerful = true, clash = true })
+    return true
+end
+
 --- Hold slow-mo + camera on the charger while REACT is open.
 function Cues.beginReactHold(session, battle)
     if not session then
@@ -1658,16 +1704,23 @@ function Cues.inMeleeReach(ent, foe)
     return false
 end
 
---- Dodge/brace wait for the incoming beat. Physicals wait until they are
---- in your face. Specials wait until the shot leaves so the pose plays
---- against the bolt, not the charge.
+-- Failed dodge/brace: wait until contact, then this beat before the hit.
+Cues.REACT_LEAD = 0.22
+-- If the charger never arrives, play anyway so the queue cannot freeze.
+Cues.REACT_HOLD_MAX = 0.95
+-- Resume (HP / cancel) must not sit behind a dead hold forever.
+Cues.REACT_RESUME_MAX = 1.25
+
+--- Dodge/brace wait for the incoming beat. A clean dodge (forceMiss) plays
+--- on the pick so it is not waiting behind the hit. Failed reacts wait:
+--- physicals until they are in your face, specials until the shot leaves.
 function Cues.shouldHoldReactPose(session, side, kind, opts)
     kind = tostring(kind or "")
     if kind ~= "dodge" and kind ~= "brace" then
         return false
     end
     opts = opts or {}
-    if opts.via == "held-react" or H.cueForce(opts) then
+    if opts.forceMiss or opts.via == "held-react" or H.cueForce(opts) then
         return false
     end
     local defender = H.sideEnt(session, side)
@@ -1685,6 +1738,19 @@ function Cues.heldReactPending(session)
     return session and session._heldReact ~= nil
 end
 
+function Cues.reactLeadPending(session)
+    if not (session and session._reactLeadUntil) then
+        return false
+    end
+    return H.now(session) < session._reactLeadUntil
+end
+
+--- True while a failed dodge/brace is still waiting to play, or the hit
+--- is giving that pose a beat to read.
+function Cues.reactOutcomePending(session)
+    return Cues.heldReactPending(session) or Cues.reactLeadPending(session)
+end
+
 --- Play a stashed dodge/brace once the incoming beat is on them.
 function Cues.tickHeldReact(session, Grid)
     local held = session and session._heldReact
@@ -1693,15 +1759,31 @@ function Cues.tickHeldReact(session, Grid)
     end
     local defender = H.sideEnt(session, held.side)
     local charger = H.foeOf(session, held.side)
+    local t = H.now(session)
+    local armed = tonumber(held.armedAt) or t
+    held.armedAt = armed
+    local timedOut = (t - armed) >= (Cues.REACT_HOLD_MAX or 0.95)
+    -- Too late: they already swung. Drop the pose so it cannot play after
+    -- the hit (the freeze / "dodge after I got hit" read).
+    if charger and H.hasStruckThisTurn(charger) then
+        session._heldReact = nil
+        return false
+    end
     if charger and charger._pendingCloseStrike then
-        if not Cues.inMeleeReach(charger, defender) then
+        if not Cues.inMeleeReach(charger, defender) and not timedOut then
             return false
         end
     elseif charger and charger._pendingRangedCast then
-        return false
+        if not timedOut then
+            return false
+        end
     end
     session._heldReact = nil
     local opts = held.opts or {}
+    -- Failed react: let the sidestep read before HP / the hit pose land.
+    if not opts.forceMiss then
+        session._reactLeadUntil = t + (Cues.REACT_LEAD or 0.22)
+    end
     opts.via = "held-react"
     return Cues.apply(session, held.side, held.kind, Grid or held.Grid,
         held.nudgeCamera, held.battle or session._battle, opts) == true
@@ -1921,6 +2003,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
             Grid = Grid,
             nudgeCamera = nudgeCamera,
             battle = battle,
+            armedAt = H.now(session),
         }
         H.note(session, battle, "cue hold", side, kind, "until charger is near")
         return true

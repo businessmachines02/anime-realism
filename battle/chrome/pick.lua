@@ -56,6 +56,9 @@ local function shortReactLabel(choice)
     if name == "FIRE" then
         return "FIRE"
     end
+    if name == "CHARGE" then
+        return "CHARGE"
+    end
     return name
 end
 
@@ -458,7 +461,7 @@ function Pick.newModal(game, opts)
                 byId[id] = choices[i]
             end
         end
-        if byId.dodge or byId.commit or byId.entrench or byId.fire then
+        if byId.dodge or byId.commit or byId.entrench or byId.fire or byId.charge then
             if byId.dodge then
                 byId.dodge.dir = "up"
             end
@@ -467,10 +470,14 @@ function Pick.newModal(game, opts)
             end
             if byId.fire then
                 byId.fire.dir = "right"
+            elseif byId.charge then
+                byId.charge.dir = "right"
             elseif byId.brace then
                 byId.brace.dir = "right"
             end
-            if byId.fire and byId.brace then
+            if byId.fire and byId.charge then
+                byId.charge.dir = "down"
+            elseif (byId.fire or byId.charge) and byId.brace then
                 byId.brace.dir = "down"
             elseif byId.entrench then
                 byId.entrench.dir = "down"
