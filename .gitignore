@@ -12,6 +12,10 @@ tag.sh
 # `follower_005_normal.png`, or a hand-drawn `CHARMELEON.png` at this folder.
 !assets/followers/follower_*.png
 !assets/followers/*.png
+# Gen 1 battle faces at the dex root. Form / shiny folders and later gens stay local.
+!assets/portrait/00[0-9][0-9]/*.png
+!assets/portrait/01[0-4][0-9]/*.png
+!assets/portrait/015[01]/*.png
 
 # Baker
 __pycache__/

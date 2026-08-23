@@ -118,8 +118,18 @@ jobs:
           if any(n.startswith("field/tests/") for n in names):
               print("ERROR: field tests included in ZIP", file=sys.stderr)
               sys.exit(1)
+          faces = [n for n in names
+                   if n.startswith("assets/portrait/") and n.endswith(".png")]
+          if len(faces) < 1000:
+              print(
+                  f"ERROR: ZIP has {len(faces)} portrait PNGs "
+                  "(Gen 1 roots must be tracked; see .gitignore)",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
           print("ZIP root check: ok")
           print(f"  files: {len(names)}")
+          print(f"  portraits: {len(faces)}")
           PY
 
       - name: Prepare SHA256SUMS for release notes
