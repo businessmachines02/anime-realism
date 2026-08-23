@@ -3,8 +3,11 @@
 -- The engine always plays PlayApplyingAttackSound ("Damage" / SE / NVE) from
 -- BattleState.applyHitFx after the move anim. FIELD already owns that beat
 -- from Cues, so applyHitFx.sfx is stripped while a session is live. Intentional
--- FIELD samples call the stashed Sound.playMove — they must not drop the
+-- FIELD samples start their own overlapping voices — they must not drop the
 -- suppress flag or the engine thud can leak on the same tick.
+--
+-- Sound.playMove is one SFX bus (stop or drop the previous row). FIELD clones
+-- each sample and ducks whatever is still playing so rapid moves stack.
 
 local Audio = {}
 
@@ -38,6 +41,7 @@ function Audio.leaveField()
   if Sound then
     Sound._arFieldSuppress = math.max(0, (Sound._arFieldSuppress or 0) - 1)
   end
+  Audio.clearVoices()
 end
 
 function Audio.suppressingEngine()
@@ -54,24 +58,194 @@ local HIT_SFX = {
   Not_Very_Effective = true,
 }
 
-local function fieldPlayMove(data, anim)
+-- Engine Sound.playMove is one Game Boy SFX bus: a new row either drops or
+-- stops the last source. FIELD stacks voices and ducks whatever is still up.
+Audio.DUCK = 0.55
+Audio.MAX_VOICES = 8
+Audio.VOICE_VOL = 0.80
+
+local live = {}
+local protoCache = {}
+
+local function isPlaying(src)
+  if not src then
+    return false
+  end
+  local ok, playing = pcall(src.isPlaying, src)
+  return ok and playing == true
+end
+
+function Audio.pruneVoices()
+  local kept = {}
+  for i = 1, #live do
+    local v = live[i]
+    if v and isPlaying(v.src) then
+      kept[#kept + 1] = v
+    end
+  end
+  live = kept
+  return #live
+end
+
+function Audio.voiceCount()
+  return Audio.pruneVoices()
+end
+
+function Audio.clearVoices()
+  for i = 1, #live do
+    local src = live[i] and live[i].src
+    if src and type(src.stop) == "function" then
+      pcall(src.stop, src)
+    end
+  end
+  live = {}
+end
+
+function Audio.duckVoices(factor)
+  factor = tonumber(factor) or Audio.DUCK
+  if factor > 1 then
+    factor = 1
+  elseif factor < 0 then
+    factor = 0
+  end
+  Audio.pruneVoices()
+  for i = 1, #live do
+    local v = live[i]
+    v.vol = (tonumber(v.vol) or Audio.VOICE_VOL) * factor
+    if v.src and type(v.src.setVolume) == "function" then
+      pcall(v.src.setVolume, v.src, v.vol)
+    end
+  end
+  return #live
+end
+
+function Audio.pushVoice(src, vol)
+  if not src then
+    return false
+  end
+  Audio.duckVoices(Audio.DUCK)
+  live[#live + 1] = { src = src, vol = tonumber(vol) or Audio.VOICE_VOL }
+  while #live > Audio.MAX_VOICES do
+    local old = table.remove(live, 1)
+    if old and old.src and type(old.src.stop) == "function" then
+      pcall(old.src.stop, old.src)
+    end
+  end
+  return true
+end
+
+local function cloneVoice(src)
+  if not src then
+    return nil
+  end
+  if type(src.clone) == "function" then
+    local ok, voice = pcall(src.clone, src)
+    if ok and voice then
+      if type(src.stop) == "function" then
+        pcall(src.stop, src)
+      end
+      if type(voice.setVolume) == "function" then
+        pcall(voice.setVolume, voice, Audio.VOICE_VOL)
+      end
+      if type(voice.play) == "function" then
+        pcall(voice.play, voice)
+      end
+      return voice
+    end
+  end
+  return src
+end
+
+local function startChipVoice(data, name, pitch, tempo, def)
+  local ChipAudio = tryRequire("src.core.ChipAudio")
+  if not (ChipAudio and type(ChipAudio.newSfx) == "function") then
+    return nil
+  end
+  if type(def) ~= "table" or not (def.chip or def.address) then
+    return nil
+  end
+  local key = ("%s@%02x%02x"):format(name, pitch or 0, tempo or 0x80)
+  local proto = protoCache[key]
+  if proto == false then
+    return nil
+  end
+  if not proto then
+    local ok, src = pcall(ChipAudio.newSfx, data, name, pitch, tempo, def)
+    if not (ok and src) then
+      protoCache[key] = false
+      return nil
+    end
+    protoCache[key] = src
+    proto = src
+  end
+  if type(proto.clone) == "function" then
+    local ok, voice = pcall(proto.clone, proto)
+    if ok and voice then
+      if type(voice.setVolume) == "function" then
+        pcall(voice.setVolume, voice, Audio.VOICE_VOL)
+      end
+      if type(voice.play) == "function" then
+        pcall(voice.play, voice)
+      end
+      return voice
+    end
+  end
+  if type(proto.play) == "function" then
+    pcall(proto.play, proto)
+  end
+  return proto
+end
+
+local function startStereoVoice(data, anim)
+  local Sound = tryRequire("src.core.Sound")
+  local playStereo = Sound and Sound.playStereo
+  if type(playStereo) ~= "function" or not (anim and anim.sound) then
+    return nil
+  end
+  local name = anim.sound
+  local pitch = anim.pitch or 0
+  local tempo = anim.tempo or 0x80
+  local sfx = data and data.audio and data.audio.sfx
+  local variant = ("%s@%02x%02x"):format(name, pitch, tempo)
+  local key = (sfx and sfx[variant]) and variant or name
+  local src = playStereo(data, key)
+  return cloneVoice(src)
+end
+
+local function startVoice(data, anim)
+  if not (anim and anim.sound) then
+    return nil
+  end
+  local name = anim.sound
+  local pitch = anim.pitch or 0
+  local tempo = anim.tempo or 0x80
+  local sfx = data and data.audio and data.audio.sfx
+  local def = sfx and sfx[name]
+  local src = startChipVoice(data, name, pitch, tempo, def)
+  if src then
+    return src
+  end
+  src = startStereoVoice(data, anim)
+  if src then
+    return src
+  end
   local Sound = tryRequire("src.core.Sound")
   local fn = Audio._origPlayMove
       or (Sound and Sound._arFieldOrigPlayMove)
-  if type(fn) ~= "function" then
-    fn = Sound and Sound.playMove
-  end
+      or (Sound and Sound.playMove)
   if type(fn) == "function" then
-    return fn(data, anim)
+    pcall(fn, data, anim)
   end
-  local play = Audio._origPlay
-  if type(play) ~= "function" then
-    local Sound = tryRequire("src.core.Sound")
-    play = Sound and Sound.play
+  return nil
+end
+
+local function fieldPlayMove(data, anim)
+  local src = startVoice(data, anim)
+  if src then
+    return Audio.pushVoice(src, Audio.VOICE_VOL)
   end
-  if type(play) == "function" and anim and anim.sound then
-    return play(data, anim.sound)
-  end
+  -- Headless / missing assets: still report the attempt so cues keep going.
+  return false
 end
 
 --- Install once: mute engine move / applying-attack SFX while FIELD owns presentation.
@@ -159,9 +333,15 @@ function Audio.playMove(battle, moveId, attackerIsPlayer)
     local species = side and side.mon and side.mon.species
     if species and type(Sound.playMoveCry) == "function" then
       local tempo = def.anim and def.anim.tempo
-      pcall(Sound.playMoveCry, battle.data, species, tempo)
-      Audio._lastMovePlayed = true
-      return true
+      local ok, src = pcall(Sound.playMoveCry, battle.data, species, tempo)
+      if ok then
+        src = cloneVoice(src) or src
+        if src then
+          Audio.pushVoice(src, Audio.VOICE_VOL)
+        end
+        Audio._lastMovePlayed = true
+        return true
+      end
     end
   end
   local anim = def.anim

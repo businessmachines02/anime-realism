@@ -30,6 +30,7 @@ local Cues = load("fx/cues.lua")
 Cues.attach(load)
 local Callouts = load("chrome/callouts.lua")
 local Projectiles = load("fx/projectiles.lua")
+local Audio = load("fx/audio.lua")
 local UI = load("chrome/ui.lua")
 local Lifecycle = load("session/lifecycle.lua")
 local Compat = load("session/compat.lua")
@@ -591,20 +592,123 @@ function tests.status_chip_abbreviations()
 end
 
 function tests.mood_portrait_sits_beside_the_sprite()
-  local lift = UI.FACE_LIFT
-  local px, py = UI.faceAnchor("player", 40, 80, 28, nil, 160)
-  eq(px, UI.FACE_MARGIN, "player face hugs the left edge")
-  eq(py, 80 - 14 - lift, "face tracks the body Y")
-  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, nil, 160)
-  eq(ex, 160 - UI.FACE_MARGIN - 28, "foe face hugs the right edge")
-  eq(ey, 80 - 14 - lift, "foe face shares the body Y")
+  local pad = UI.HUD_PAD
+  local px, py = UI.faceAnchor("player", 40, 80, 28, 0, 160)
+  eq(px, pad, "player face hugs the left edge")
+  eq(py, pad, "player face sits at the top")
+  local ex, ey = UI.faceAnchor("enemy", 120, 80, 28, 0, 160)
+  eq(ex, 160 - pad - 28, "foe face hugs the right edge")
+  eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
   eq(hx, px + 14, "HP sits on the face midline")
   eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  local stack = 12
+  local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
+  eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
+  eq(UI.hudAnchor("player"), "window-left", "player stack uses the wide left margin")
+  eq(UI.hudAnchor("enemy"), "topright", "foe stack uses the wide right margin")
+  local bx, by, bw, bh = UI.hudStackBox(px, py, 28, 0)
+  truthy(bx <= px, "stack box includes the face left")
+  truthy(bx + bw >= px + 28, "stack box includes the face right")
+  truthy(by <= py, "stack box includes the HP row")
+  truthy(by + bh >= py + 28, "stack box includes the face bottom")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 53 }), 14,
     "tall hop-padded kits still plant HP on the ~24px body")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
     "32px kits sit a couple px above the cell top")
+end
+
+function tests.field_hud_registers_wide_anchors()
+  local anchors = {}
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80, py = 40, _fieldBarLift = 10, hidden = false,
+  }
+  local player = {
+    _arFieldBattler = true,
+    _arFieldSide = "player",
+    px = 20, py = 40, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = {
+        camera = { x = 0, y = 0 },
+        entities = { player, enemy },
+      },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+        setBattleUIAnchor = function(_, x, y, w, h, anchor)
+          anchors[#anchors + 1] = { x = x, y = y, w = w, h = h, anchor = anchor }
+        end,
+      },
+    },
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  local sawRight = false
+  for i = 1, #anchors do
+    if anchors[i].anchor == "topright" then
+      sawRight = true
+    end
+  end
+  eq(#anchors, 1, "player stack is not sent to the engine")
+  truthy(sawRight, "foe HP registers a topright window anchor")
+  truthy(battle.game.renderer._arFieldHudLeft, "player stack is kept for the window blit")
+end
+
+function tests.field_hud_window_left_blits_from_stored_stack()
+  local drawn = {}
+  local canvas = {
+    getWidth = function() return 160 end,
+    getHeight = function() return 144 end,
+  }
+  local ren = {
+    _arFieldHudLeft = { x = 4, y = 4, w = 28, h = 40, canvas = canvas },
+    uiScale = function() return 2 end,
+    uiSize = function() return 160, 144 end,
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      push = function() end,
+      pop = function() end,
+      origin = function() end,
+      setScissor = function() end,
+      setColor = function() end,
+      newQuad = function(x, y, w, h)
+        return { x = x, y = y, w = w, h = h }
+      end,
+      draw = function(src, quad, x, y, _, sx)
+        drawn[#drawn + 1] = { src = src, quad = quad, x = x, y = y, sx = sx }
+      end,
+    },
+  }
+  truthy(UI.drawWindowPlayerHud(ren, { width = 800, height = 450, dpiX = 1, dpiY = 1 }),
+    "window-left blit runs")
+  love = prevLove
+  eq(#drawn, 1, "one player stack blit")
+  eq(drawn[1].x, 8, "stack docks to window left at authored pad * scale")
+  eq(drawn[1].y, 8, "stack docks to window top at authored pad * scale")
+  eq(drawn[1].sx, 2, "stack uses the UI scale")
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -634,15 +738,16 @@ function tests.move_hud_shows_b_pause_hint()
     moveIndex = 1,
     player = {
       curMoves = {
-        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+        { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 },
+        { id = "TAIL_WHIP", pp = 30 }, { id = "SCRATCH", pp = 0 },
       },
     },
     data = {
       moves = {
-        TACKLE = { name = "TACKLE", type = "NORMAL" },
-        GROWL = { name = "GROWL", type = "NORMAL" },
-        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL" },
-        SCRATCH = { name = "SCRATCH", type = "NORMAL" },
+        TACKLE = { name = "TACKLE", type = "NORMAL", pp = 35 },
+        GROWL = { name = "GROWL", type = "NORMAL", pp = 40 },
+        TAIL_WHIP = { name = "TAIL WHIP", type = "NORMAL", pp = 30 },
+        SCRATCH = { name = "SCRATCH", type = "NORMAL", pp = 35 },
       },
     },
     game = {
@@ -659,6 +764,7 @@ function tests.move_hud_shows_b_pause_hint()
   package.loaded["src.render.Font"] = nil
   local hinted = false
   local listed = false
+  local sawHeaderPP = false
   local up, right, left, down = false, false, false, false
   for i = 1, #drawn do
     if drawn[i] == "B PAUSE" then
@@ -667,6 +773,9 @@ function tests.move_hud_shows_b_pause_hint()
     if drawn[i] == "TACKLE" then
       listed = true
     end
+    if drawn[i] == "PP 35/35" then
+      sawHeaderPP = true
+    end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
     if drawn[i] == "L" then left = true end
@@ -674,6 +783,7 @@ function tests.move_hud_shows_b_pause_hint()
   end
   truthy(hinted, "classic MOVE HUD tells the player to pause with B")
   truthy(listed, "classic MOVE HUD lists move names")
+  truthy(sawHeaderPP, "classic MOVE HUD shows selected PP on the B PAUSE row")
   truthy(up and right and left and down,
     "classic MOVE HUD labels slots U/R/L/D")
 end
@@ -695,6 +805,8 @@ function tests.diamond_move_hud_uses_compass()
       rectangle = function() end,
       push = function() end,
       pop = function() end,
+      translate = function() end,
+      scale = function() end,
     },
   }
   local battle = {
@@ -703,15 +815,16 @@ function tests.diamond_move_hud_uses_compass()
     moveIndex = 1,
     player = {
       curMoves = {
-        { id = "TACKLE" }, { id = "GROWL" }, { id = "TAIL_WHIP" }, { id = "SCRATCH" },
+        { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 },
+        { id = "TAIL_WHIP", pp = 30 }, { id = "SCRATCH", pp = 35 },
       },
     },
     data = {
       moves = {
-        TACKLE = { name = "TACKLE" },
-        GROWL = { name = "GROWL" },
-        TAIL_WHIP = { name = "TAIL WHIP" },
-        SCRATCH = { name = "SCRATCH" },
+        TACKLE = { name = "TACKLE", pp = 35 },
+        GROWL = { name = "GROWL", pp = 40 },
+        TAIL_WHIP = { name = "TAIL WHIP", pp = 30 },
+        SCRATCH = { name = "SCRATCH", pp = 35 },
       },
     },
     game = {
@@ -726,14 +839,46 @@ function tests.diamond_move_hud_uses_compass()
   UI.draw(battle, "DIAMOND")
   love = prevLove
   package.loaded["src.render.Font"] = nil
-  local hinted, up, right = false, false, false
+  local hinted, up, right, sawHeaderPP = false, false, false, false
   for i = 1, #drawn do
     if drawn[i] == "B PAUSE" then hinted = true end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
+    if drawn[i] == "PP 35/35" then sawHeaderPP = true end
   end
   truthy(hinted, "diamond MOVE HUD keeps the B pause hint")
   truthy(up and right, "diamond MOVE HUD paints the U/R compass labels")
+  truthy(sawHeaderPP, "diamond MOVE HUD shows selected PP on the B PAUSE row")
+end
+
+function tests.move_hud_pp_label()
+  eq(UI.movePPLabel(nil, nil), nil, "missing move has no PP")
+  eq(UI.movePPLabel({}, { id = "TACKLE" }), nil, "unset PP is omitted")
+  eq(UI.movePPLabel({}, { id = "TACKLE", pp = 12 }), "12", "remaining PP")
+  eq(UI.movePPLabel({
+    data = { moves = { TACKLE = { pp = 35 } } },
+  }, { id = "TACKLE", pp = 12 }, true), "12/35", "remaining over max")
+  eq(UI.movePPLabel({}, { struggle = true, pp = 1 }), nil, "struggle has no PP")
+end
+
+function tests.hud_plate_is_one_glass_alpha()
+  eq(UI.hudPanelAlpha(), UI.HUD_PANEL_A, "HUD plate alpha is constant")
+  eq(UI.hudPanelAlpha({ _arFieldSession = { coverScene = "cave" } }),
+    UI.HUD_PANEL_A, "caves use the same plate")
+  eq(UI.hudPanelAlpha({ _arFieldSession = { coverScene = "route" } }),
+    UI.HUD_PANEL_A, "routes use the same plate")
+end
+
+function tests.dialogue_plate_is_one_light_glass()
+  local fill = UI.DIALOGUE_FILL
+  truthy(fill and fill[1] > 0.9 and fill[2] > 0.9 and fill[3] > 0.8,
+    "plain dialogue is a light plate")
+  truthy(UI.DIALOGUE_A > 0.5 and UI.DIALOGUE_A < 1,
+    "plain dialogue is translucent")
+  local x, y, w, h = UI.dialogueRect()
+  eq(x, 4, "dialogue stays in the bottom slot")
+  eq(y, 119, "dialogue sits on the vanilla row")
+  eq(w, 152, "dialogue keeps the full-width slot")
 end
 
 function tests.move_hud_style_defaults_to_classic()
@@ -837,6 +982,23 @@ function tests.hp_bar_tracks_live_hp()
   })
   eq(hp, 0, "fainted mon paints empty even if shownHP lags")
   eq(ratio, 0, "fainted ratio is 0")
+
+  ratio, hp = UI.battlerHP({
+    shownHP = 20,
+    mon = { hp = 8, stats = { hp = 20 } },
+  }, { _arCloseGapApply = { {} } })
+  eq(hp, 20, "a stashed travel hit keeps the pre-hit bar")
+
+  local snapBattle = {
+    _arRangedHitHold = true,
+    _arHeldHpPaint = { player = 20 },
+  }
+  snapBattle.player = {
+    shownHP = 20,
+    mon = { hp = 8, stats = { hp = 20 } },
+  }
+  ratio, hp = UI.battlerHP(snapBattle.player, snapBattle)
+  eq(hp, 20, "a charge snapshot keeps the pre-hit bar after live HP drops")
 
   local inner = UI.HP_BAR_W - 2
   eq(inner, 18, "compact bar is a short track")
@@ -962,12 +1124,13 @@ function tests.focus_bar_gap_flush_vs_one_pixel()
     UI.drawWorldHP(battle, 0, 0, "ui")
     love = prevLove
     table.sort(ys)
-    return ys[1]
+    return ys[1], ys[#ys]
   end
-  local flushY = paintY(0)
-  local gappedY = paintY(1)
+  local flushTop, flushBot = paintY(0)
+  local gappedTop, gappedBot = paintY(1)
   UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
-  truthy(gappedY < flushY, "1PX gap lifts the focus bar one pixel above flush")
+  eq(flushTop, gappedTop, "focus bar stays pinned to the top pad")
+  truthy(gappedBot > flushBot, "1PX gap drops the HP bar one pixel")
 end
 
 function tests.compact_arena_keeps_cast_lanes_clear()
@@ -1189,6 +1352,7 @@ function tests.fire_now_reacts_during_a_charge()
   eq(result.fireNow, true, "FIRE NOW spends this turn's action on the special")
   eq(result.forceMiss, false, "FIRE NOW does not dodge")
   truthy(result.damageMult > 1, "caught casting takes extra if the charge lands")
+  eq(RD.REACT_SPECIAL_MULT, 0.75, "a REACT special is a bit weaker (no charge)")
   RD.clear(battle)
 
   local grid = sampleGrid()
@@ -1217,11 +1381,13 @@ function tests.fire_now_reacts_during_a_charge()
   truthy(Cues.shouldHoldApplyDamage(session, battle, battle.player),
     "the incoming punch still waits")
   truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.enemy),
-    "FIRE NOW HP lands on the charger during the walk")
+    "a punch walk does not stash the charger's HP")
+  Cues.armRangedHitHold(session, battle)
   battle._arFireNow = true
-  truthy(not Cues.shouldHoldApplyDamage(session, battle, battle.player),
-    "FIRE NOW does not stash its own damage")
+  truthy(Cues.shouldHoldApplyDamage(session, battle, battle.enemy),
+    "FIRE NOW HP waits for the bolt to land")
   battle._arFireNow = nil
+  Cues.dropRangedHitHold(session, battle)
   enemy._pendingCloseStrike = nil
   truthy(not Cues.chargeWindowOpen(session), "no charge is not a fire window")
 end
@@ -1748,6 +1914,8 @@ function tests.slower_side_holds_the_call_until_after_incoming()
   truthy(React.spendsQueuedAction("entrench"), "ENTRENCH spends the slower call")
   truthy(React.spendsQueuedAction("fire", { fireNow = true }),
     "FIRE spends the slower call")
+  truthy(React.spendsQueuedAction("charge", { chargeNow = true }),
+    "CHARGE spends the slower call")
   truthy(not React.spendsQueuedAction("dodge"), "DODGE still gets the delayed call")
   truthy(not React.spendsQueuedAction("brace"), "BRACE still gets the delayed call")
   truthy(not React.spendsQueuedAction("commit"), "COMMIT still gets the delayed call")
@@ -1840,6 +2008,80 @@ function tests.counter_proc_does_not_play_a_player_miss()
     "leftover miss is consumed")
   eq(player.lastAnim, "cast", "counter pose is not replaced by a miss")
   eq(enemy.lastAnim, nil, "the foe does not sidestep the proc")
+end
+
+function tests.charge_does_not_proc_a_counter()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  local player = { isPlayer = true }
+  local enemy = { isPlayer = false }
+  local battle = { _arChargeNow = true }
+  React.state(battle)
+  local st = React.peek(battle)
+  st.mode = "counter"
+  truthy(not React.isGuaranteedCounterHit(battle, player, enemy),
+    "CHARGE is not a counter hit")
+  battle._arChargeNow = nil
+  battle._arNoCounterThisTurn = true
+  truthy(not React.isGuaranteedCounterHit(battle, player, enemy),
+    "CHARGE spends the counter for the turn")
+  battle._arNoCounterThisTurn = nil
+  truthy(React.isGuaranteedCounterHit(battle, player, enemy),
+    "without CHARGE an armed opening still counters")
+end
+
+function tests.finish_calls_drop_after_a_faint()
+  local Dialogue = assert(loadfile(root .. "/../battle/rules/dialogue.lua"))()
+  truthy(Dialogue.isFinishCallText("OK, PIKACHU!\nFinish it!"),
+    "ok finish-it is a finish shout")
+  truthy(Dialogue.isFaintText("Enemy RATTATA\nfainted!"), "faint line")
+  local battle = {
+    nextInsert = 2,
+    current = { text = "PIKACHU! Finish it!" },
+    queue = {
+      { text = "Enemy RATTATA\nfainted!" },
+      { text = "Finish it! PIKACHU! TACKLE!" },
+    },
+  }
+  Dialogue.scrubFinishCalls(battle)
+  eq(battle.current, nil, "live finish shout is dropped")
+  eq(#battle.queue, 1, "queued finish shout is dropped")
+  eq(battle.queue[1].text, "Enemy RATTATA\nfainted!", "faint line stays")
+end
+
+function tests.fire_locks_the_react_hud()
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  React.bind({
+    opt = function(key)
+      return key == "momentum_counter"
+    end,
+    pickMode = function()
+      return "ALWAYS"
+    end,
+    playerStatusLocked = function()
+      return false
+    end,
+    foeMoveIsSpecial = function()
+      return false
+    end,
+  })
+  local tackle = { id = "TACKLE", power = 40, category = "physical", type = "NORMAL" }
+  local battle = {
+    player = { mon = { level = 20 } },
+    enemy = { mon = { level = 20 } },
+  }
+  React.state(battle)
+  truthy(React.shouldOffer(battle, tackle), "incoming still opens REACT")
+  battle._arFireNow = true
+  truthy(not React.shouldOffer(battle, tackle),
+    "a FIRE shot does not open REACT")
+  battle._arFireNow = nil
+  React.lockHud(battle)
+  truthy(React.isLocked(battle), "FIRE latches the HUD closed")
+  truthy(not React.shouldOffer(battle, tackle),
+    "after FIRE the HUD stays closed")
+  React.reset(battle)
+  truthy(not React.isLocked(battle), "the lock clears on the next turn")
+  truthy(React.shouldOffer(battle, tackle), "next turn can REACT again")
 end
 
 function tests.empty_focus_skips_react_hud()
@@ -2044,7 +2286,150 @@ function tests.fire_clashes_with_an_incoming_special()
   for i = 1, #(session.projectiles or {}) do
     styles[session.projectiles[i].style] = true
   end
-  truthy(styles.clash_glow, "clash burst at mid")
+  truthy(styles.clash_glow, "clash glow at mid")
+  truthy(styles.clash_burst, "beam clash paints a smoke-screen boom")
+  local burst
+  for i = 1, #(session.projectiles or {}) do
+    if session.projectiles[i].style == "clash_burst" then
+      burst = session.projectiles[i]
+    end
+  end
+  truthy(burst and (burst.age or 0) < 0, "boom waits until the shots meet")
+  truthy(burst and burst.color2, "boom tints both specials")
+end
+
+function tests.charge_clashes_with_an_incoming_physical()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  local scratch = { id = "SCRATCH", power = 40, category = "physical", type = "NORMAL" }
+  truthy(RD.isPhysicalClashIncoming(tackle), "Tackle is a physical crash")
+  truthy(not RD.isPhysicalClashIncoming({
+    id = "EMBER", power = 40, category = "special", type = "FIRE",
+  }), "Ember is not a physical crash")
+  truthy(not RD.isPhysicalClashIncoming({
+    id = "SWIFT", power = 60, category = "physical", type = "NORMAL",
+  }), "Swift still flies, so it is not a body crash")
+
+  local battle = {
+    player = { stats = { attack = 80, speed = 50 } },
+    enemy = { stats = { attack = 80, speed = 80 } },
+  }
+  RD.state(battle)
+  eq(RD.contestPhysicalClash(battle, tackle, scratch, { roll = 0.2 }), "win",
+    "low roll is a charge win")
+  eq(RD.contestPhysicalClash(battle, tackle, scratch, { roll = 0.8 }), "lose",
+    "high roll is a charge lose")
+  local result = RD.resolveIncoming(battle, "charge", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = tackle,
+    replyMove = scratch,
+    roll = 0.2,
+  })
+  eq(result.chargeNow, true, "CHARGE spends this turn's action")
+  eq(result.chargeClash, "win", "CHARGE win boosts your crash")
+  eq(result.forceMiss, false, "both physicals still land")
+  eq(result.damageMult, 1, "incoming stays honest on a win")
+  eq(result.chargeShotMult, RD.CHARGE_BOOST, "your crash is +15%")
+  eq(result.chip, "CHARGE", "CHARGE chip on a body contest")
+
+  battle = {
+    player = { stats = { attack = 40, speed = 50 } },
+    enemy = { stats = { attack = 120, speed = 80 } },
+  }
+  RD.state(battle)
+  result = RD.resolveIncoming(battle, "charge", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = tackle,
+    replyMove = scratch,
+    roll = 0.8,
+  })
+  eq(result.chargeClash, "lose", "CHARGE lose boosts theirs")
+  eq(result.damageMult, RD.CHARGE_BOOST, "incoming is +15% on a lose")
+  eq(result.chargeShotMult, 1, "your crash stays honest")
+
+  local actions = RD.menuActions(battle, tackle, {
+    canChargeNow = true,
+    chargeHint = "SCRATCH",
+  })
+  local ids = {}
+  for i = 1, #actions do
+    ids[actions[i].id] = actions[i]
+  end
+  truthy(ids.charge, "CHARGE is on the REACT menu during a physical")
+  eq(ids.charge.hint, "SCRATCH", "CHARGE names the locked physical")
+  truthy(not ids.entrench, "entrench yields the diamond slot to CHARGE")
+  truthy(ids.fire == nil, "FIRE stays off unless the special window is open")
+
+  actions = RD.menuActions(battle, tackle, {
+    canFireNow = true,
+    canChargeNow = true,
+  })
+  ids = {}
+  for i = 1, #actions do
+    ids[actions[i].id] = true
+  end
+  truthy(ids.fire and ids.charge, "FIRE and CHARGE can sit together")
+
+  local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
+  React.bind({
+    isFieldBattle = function() return true end,
+    playerStatusLocked = function() return false end,
+    listFireNowMoves = function() return {} end,
+    listCheckNowMoves = function()
+      return { { moveId = "SCRATCH", name = "SCRATCH",
+        moveInst = { id = "SCRATCH" } } }
+    end,
+    isRangedCounter = function(_, opts)
+      return tostring(opts and opts.category or ""):lower() == "special"
+    end,
+    isMeleeAttack = function(_, opts)
+      return tostring(opts and opts.category or ""):lower() == "physical"
+    end,
+    chargeWindowOpen = function() return true end,
+    fireRangeOpen = function() return true end,
+  })
+  local field = { player = { isPlayer = true }, enemy = {} }
+  React.state(field)
+  truthy(React.canChargeNow(field, tackle), "CHARGE opens vs an incoming physical")
+  truthy(not React.canChargeNow(field, {
+    id = "EMBER", power = 40, category = "special", type = "FIRE",
+  }), "CHARGE stays off vs a special")
+  truthy(not React.canFireNow(field, tackle),
+    "FIRE stays off when the pool has no projectile special")
+
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = { id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end }
+  local enemy = { id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  truthy(Cues.playChargeClash(session, Grid, { chargeClash = "win" }, {
+    move = tackle,
+    replyMove = scratch,
+  }), "body clash paints")
+  eq(player.lastAnim, "attack", "player lunges into the crash")
+  eq(enemy.lastAnim, "attack", "foe lunges into the crash")
+  truthy(session._clashPunch, "camera holds the midpoint")
+  local styles = {}
+  for i = 1, #(session.projectiles or {}) do
+    styles[session.projectiles[i].style] = true
+  end
+  truthy(styles.dash_smear, "both charges smear toward mid")
+  truthy(styles.clash_burst, "body clash paints a crash boom")
+  RD.clear(battle)
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()
@@ -2615,6 +3000,13 @@ function tests.occupancy_and_movement()
   truthy(Grid.setPad(grid, p, eHome.u - 1, eHome.v), "stand next to the foe")
   truthy(Grid.setPad(grid, e, eHome.u, eHome.v), "foe on home")
   truthy(not Grid.closeGap(grid, p, e), "already-adjacent close-gap is a no-op")
+  local closeU, closeV = p.padU, p.padV
+  local hopped = Grid.openGap(grid, p, e)
+  truthy(hopped and hopped >= 1, "adjacent caster hops away")
+  truthy(Grid.padDistance(grid, p, e) > 1, "open-gap leaves melee")
+  truthy(Grid.padDistance(grid, p, e) <= 3, "open-gap stays on the pad")
+  truthy(p.padU ~= closeU or p.padV ~= closeV, "occupancy actually moved")
+  eq(Grid.openGap(grid, p, e), false, "already spaced: open-gap is a no-op")
 
   Grid.clear(grid)
   eq(next(grid.occ), nil, "clear occupancy")
@@ -2709,12 +3101,44 @@ function tests.powerful_moves_push_and_impact()
   truthy(not weakStyles.power_hit, "weak hit does not use the heavy burst")
   truthy((session._hitStopT or 0) > 0, "contact freezes a few frames")
   truthy((session._camShakeT or 0) > 0, "contact bumps the camera")
+  truthy((session._clashSlowT or 0) > 0 and (session._clashSlowT or 0) < 0.45,
+    "regular hit gets a short punch-in, not a clash hold")
+  truthy(session.cameraNudgeX ~= nil and session.cameraNudgeY ~= nil,
+    "regular hit punches the camera in")
 
   Projectiles.clear(session)
   enemy.padU = 4
   Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
   enemy._heavyHit = nil
   enemy.lastAnim = nil
+  session._clashSlowT = nil
+  session._clashPunch = nil
+  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
+    moveId = "EMBER",
+    movePower = 40,
+    moveType = "FIRE",
+    category = "special",
+    push = false,
+  }), "regular special hit cue")
+  eq(enemy.lastAnim, "hit", "special still plays a flinch")
+  local specialStyles = {}
+  for i = 1, #(session.projectiles or {}) do
+    specialStyles[session.projectiles[i].style] = true
+  end
+  truthy(specialStyles.light_hit, "special hit still sparks on the target")
+  truthy(specialStyles.special_impact, "special hit paints a land burst")
+  truthy(specialStyles.ground_kick, "special hit still kicks the tile")
+  truthy(not specialStyles.power_hit, "regular special is not the heavy burst")
+  truthy((session._clashSlowT or 0) >= 0.20 and (session._clashSlowT or 0) < 0.45,
+    "special punch-in is longer than a physical, shorter than a clash")
+
+  Projectiles.clear(session)
+  enemy.padU = 4
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  enemy._heavyHit = nil
+  enemy.lastAnim = nil
+  session._clashSlowT = nil
+  session._clashPunch = nil
   truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
     moveId = "TACKLE",
     movePower = 35,
@@ -2786,52 +3210,18 @@ function tests.finishing_blow_plays_the_clash()
     { isPlayer = true },
     { isPlayer = false, mon = { hp = 12 } }
   ), "a living foe is not a finisher")
-  truthy(Cues.isFinishingBlow(
+  truthy(not Cues.isFinishingBlow(
     { isPlayer = true },
     { isPlayer = false, mon = { hp = 0 } }
-  ), "KO from the player is a finisher")
+  ), "a fainted foe does not play the finish clash")
   truthy(not Cues.isFinishingBlow(
     { isPlayer = false },
     { isPlayer = true, mon = { hp = 0 } }
   ), "the foe KOing you is not your finisher")
-
-  local plan = Layout.plan(0, 0, 8, 0)
-  local grid = Grid.build({
-    pad = Coords.layoutPad({ minX = 0, maxX = 8, minY = -1, maxY = 1 }, 1, 0),
-  }, plan)
-  local player = {
-    id = "player", padU = 2, padV = 0,
-    play = function(self, kind) self.lastAnim = kind end,
-  }
-  local enemy = {
-    id = "enemy", padU = 4, padV = 0,
-    play = function(self, kind) self.lastAnim = kind end,
-  }
-  Grid.setPad(grid, player, player.padU, player.padV)
-  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
-  local session = {
-    live = true,
-    grid = grid,
-    playerMon = player,
-    enemyMon = enemy,
-    _now = 50,
-    _battle = { kind = "wild" },
-    _deps = { Projectiles = Projectiles },
-  }
-  truthy(Cues.apply(session, "enemy", "hit", Grid, nil, nil, {
-    category = "physical", moveId = "TACKLE", finishing = true,
-  }), "finishing hit cue")
-  eq(player.lastAnim, "counter", "attacker plays the counter pose")
-  eq(enemy.lastAnim, "tumble", "foe takes the KO")
-  truthy(session._clashPunch, "camera punch-in is armed")
-  truthy((session._clashSlowT or 0) >= 0.7, "slow-mo holds the beat")
-  truthy(enemy._heavyHit, "KO knock is heavy")
-  local styles = {}
-  for i = 1, #(session.projectiles or {}) do
-    styles[session.projectiles[i].style] = true
-  end
-  truthy(styles.clash_glow, "finisher rims the mons with glow")
-  truthy(styles.clash_trail, "finisher paints hair trails")
+  truthy(not Cues.isFinishingBlow(
+    { isPlayer = true },
+    { isPlayer = false, mon = { hp = 0 }, _fainting = true }
+  ), "an in-progress faint is not a finisher")
 end
 
 function tests.brace_counter_waits_for_the_incoming_hit()
@@ -3223,6 +3613,212 @@ function tests.bite_closes_gap_when_typed_special()
   eq(player.lastAnim, nil, "cast anim does not play on a contact bite")
 end
 
+function tests.adjacent_special_backsteps_then_fires()
+  local grid = sampleGrid()
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = eHome.u - 1, padV = eHome.v,
+    facing = "right",
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startDist = Grid.padDistance(grid, player, enemy)
+  eq(startDist, 1, "setup: caster is in the foe's face")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 20,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "WATER_GUN", moveType = "WATER",
+  }), "adjacent special cue")
+  truthy(player._pendingRangedCast, "backstep is armed")
+  truthy(Grid.padDistance(grid, player, enemy) > 1, "caster stepped away")
+  eq(#(session.projectiles or {}), 0, "shot waits for the charge")
+  truthy(Cues.shouldParkEngineQueue(session), "engine waits for the backstep")
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  Cues.tickReturns(session, Grid)
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "caster turns and charges")
+  eq(#(session.projectiles or {}), 0, "charge hold is not the shot")
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "in-place charge leaves the queue free for REACT")
+  session._now = 20 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "cast", "then the shot pose plays")
+  truthy(#(session.projectiles or {}) >= 1, "water gun leaves after the charge")
+  truthy(not player._pendingRangedCast, "pending backstep is cleared")
+  truthy(not Cues.shouldParkEngineQueue(session), "engine resumes after the shot")
+  truthy(Cues.rangedShotHoldActive(session), "HP waits for the water gun to land")
+end
+
+function tests.spaced_special_charges_before_the_shot()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local startDist = Grid.padDistance(grid, player, enemy)
+  truthy(startDist > 1, "setup: caster already has room")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 40,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  local stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+  }), "spaced special cue")
+  eq(player.padU, stayU, "already-spaced caster does not hop")
+  eq(player.padV, stayV, "already-spaced caster keeps V")
+  truthy(player._pendingRangedCast, "in-place wind-up is armed")
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "charge pose starts immediately")
+  eq(#(session.projectiles or {}), 0, "shot waits out the wind-up")
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "REACT can open during the 0.7s charge")
+  truthy(Cues.shouldHoldEngineHit(session, { user = { isPlayer = true } }),
+    "the player's own HP tick still waits for the beam")
+  truthy(not Cues.shouldHoldEngineHit(session, { user = { isPlayer = false } }),
+    "an incoming special reaches runDamaging so REACT can open")
+  truthy(Cues.shouldHoldApplyDamage(session, session._battle, { isPlayer = false }),
+    "foe HP stays up during the charge")
+  session._now = 40.35
+  Cues.tickReturns(session, Grid)
+  eq(#(session.projectiles or {}), 0, "mid-charge is still charging")
+  session._now = 40 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
+  truthy(#(session.projectiles or {}) >= 1, "thunderbolt leaves after 0.7s")
+  truthy(not player._pendingRangedCast, "wind-up clears after the shot")
+  truthy(Cues.rangedShotHoldActive(session), "HP still waits while the bolt travels")
+  truthy(Cues.shouldHoldApplyDamage(session, session._battle, { isPlayer = false }),
+    "foe HP stays up until impact")
+  session._battle._arCloseGapApply = { { "foe", 5 } }
+  truthy(not Cues.flushHeldHit(session, session._battle),
+    "a present tick does not apply HP mid-flight")
+  truthy(session._battle._arCloseGapApply, "stashed HP stays put while the bolt is up")
+  Projectiles.tick(session, 2)
+  truthy(not Cues.rangedShotHoldActive(session), "impact releases the HP hold")
+  eq(session._battle._arCloseGapApply, nil, "impact consumes the stashed HP")
+end
+
+function tests.special_hit_waits_until_the_bolt_lands()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 42,
+    _battle = { kind = "wild" },
+    _deps = { Projectiles = Projectiles, Grid = Grid },
+  }
+  Projectiles.clear(session)
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+  }), "spaced special cue")
+  truthy(Cues.shouldHoldHitCue(session, { user = { isPlayer = true } }),
+    "knockback waits out the charge")
+  truthy(Cues.holdCloseHit(session, "enemy", {
+    category = "special", moveId = "THUNDERBOLT",
+  }), "damage_dealt during the charge is stashed")
+  eq(enemy.lastAnim, nil, "no contact beat during the wind-up")
+  session._now = 42 + (Cues.RANGED_CHARGE or 0.7)
+  Cues.tickReturns(session, Grid)
+  eq(enemy.lastAnim, nil, "no contact beat when the bolt leaves")
+  truthy(Cues.shouldHoldHitCue(session, { user = { isPlayer = true } }),
+    "knockback still waits while the bolt travels")
+  Projectiles.tick(session, 2)
+  truthy(enemy.lastAnim == "hit" or enemy.lastAnim == "tumble",
+    "contact beat plays when the bolt lands")
+end
+
+function tests.fire_now_does_not_backstep()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  eq(Grid.padDistance(grid, player, enemy), 2, "FIRE window is two tiles")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 30,
+    _battle = { kind = "wild", _arFireNow = true },
+    _deps = { Projectiles = Projectiles },
+  }
+  Projectiles.clear(session)
+  local stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+    fireNow = true,
+  }), "FIRE NOW cue")
+  eq(player.padU, stayU, "FIRE NOW does not hop off the ring")
+  eq(player.padV, stayV, "FIRE NOW keeps the same pad V")
+  truthy(not player._pendingRangedCast, "FIRE NOW does not arm a backstep")
+  truthy(#(session.projectiles or {}) >= 1, "the shot leaves immediately")
+  truthy(Cues.rangedShotHoldActive(session), "FIRE NOW still holds HP until impact")
+
+  -- Occupancy already adjacent because the charger jumped the close-gap cell.
+  Grid.setPad(grid, enemy, pHome.u + 1, pHome.v)
+  eq(Grid.padDistance(grid, player, enemy), 1, "charger occupancy is in the face")
+  Projectiles.clear(session)
+  stayU, stayV = player.padU, player.padV
+  truthy(Cues.apply(session, "player", "attack", Grid, nil, session._battle, {
+    category = "special", moveId = "THUNDERBOLT", moveType = "ELECTRIC",
+    fireNow = true,
+  }), "FIRE NOW while occupancy is melee")
+  eq(player.padU, stayU, "still no hop when the charger is on the next cell")
+  eq(player.padV, stayV, "still no hop V")
+  truthy(not player._pendingRangedCast, "charge occupancy does not force a backstep")
+end
+
 function tests.special_trajectories_track_mons()
   local grid = sampleGrid()
   local player = {
@@ -3272,6 +3868,41 @@ function tests.special_trajectories_track_mons()
   truthy(hop.arc > orb.arc, "specials arc higher over blockers")
 end
 
+function tests.special_shot_paints_land_impact()
+  local grid = sampleGrid()
+  local player = {
+    id = "player", padU = grid.home.player.u, padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy", padU = grid.home.enemy.u, padV = grid.home.enemy.v,
+    px = 96, py = 40,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { kind = "wild" },
+  }
+  Projectiles.clear(session)
+  local bolt = Projectiles.move(session, "player", {
+    category = "special", moveType = "ELECTRIC", moveId = "THUNDERBOLT",
+  })
+  truthy(bolt, "special shot spawned")
+  Projectiles.tick(session, (bolt.duration or 0.3) + 0.02)
+  local burst
+  for i = 1, #(session.projectiles or {}) do
+    local p = session.projectiles[i]
+    if p.style == "special_impact" then
+      burst = p
+    end
+  end
+  truthy(burst, "landing a special paints an impact burst")
+  eq(burst.sx, bolt.ex, "burst sits on the target")
+  eq(burst.sy, bolt.ey, "burst uses the landing height")
+end
+
 function tests.cues_and_dedupe()
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -3319,29 +3950,42 @@ function tests.cues_and_dedupe()
   player.lastAnim = nil
   Projectiles.clear(session)
   Grid.setPad(grid, player, pHome.u, pHome.v)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
+  player._pendingRangedCast = nil
+  player._rangedChargeAt = nil
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "physical",
     moveType = "GHOST",
     moveId = "NIGHT_SHADE",
   }), "night shade attack cue")
-  eq(player.lastAnim, "cast", "night shade casts in place")
+  truthy(player.lastAnim == "charge" or player.lastAnim == "cast",
+    "night shade charges in place")
   truthy(not player._attackStepped, "night shade does not lunge")
+  eq(#(session.projectiles or {}), 0, "night shade waits out the wind-up")
+  session._now = 12.5 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
   eq(#(session.projectiles or {}), 1, "night shade spawns shadow projectile")
   eq(session.projectiles[1].style, "shadow", "night shade shadow style from cue")
 
-  session._now = 14
+  session._now = (session._lastCueAt or session._now) + 1.26
   truthy(not Cues.shouldSkipEvent(session, "player", "attack"), "dedupe expires")
   -- Same named special stays locked past the toast window (issue #3).
   session._now = 16
   session._lastCueAt = nil
   player.lastAnim = nil
+  player._pendingRangedCast = nil
+  player._rangedChargeAt = nil
   Projectiles.clear(session)
   Grid.setPad(grid, player, pHome.u, pHome.v)
+  player.basePx, player.basePy = player.targetPx, player.targetPy
   truthy(Cues.apply(session, "player", "attack", Grid, nil, nil, {
     category = "special",
     moveType = "PSYCHIC",
     moveId = "PSYCHIC",
   }), "psychic attack cue")
+  eq(#(session.projectiles or {}), 0, "psychic waits out the wind-up")
+  session._now = 16 + (Cues.RANGED_CHARGE or 1.5)
+  Cues.tickReturns(session, Grid)
   eq(#(session.projectiles or {}), 1, "psychic spawns once")
   session._now = 20
   truthy(Cues.shouldSkipEvent(session, "player", "attack", { moveId = "PSYCHIC" }),
@@ -3735,6 +4379,149 @@ function tests.dodge_and_brace_wait_for_the_charge()
   enemy.basePx = 8
   Cues.tickHeldReact(session, Grid)
   eq(player.lastAnim, "brace", "brace plays once they are in your face")
+end
+
+function tests.successful_dodge_plays_on_the_pick()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 0, basePy = 0,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 64, basePy = 0,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 92,
+    _battle = {},
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, session._battle, {
+    forceMiss = true,
+  }), "clean dodge is accepted while they close")
+  eq(player.lastAnim, "dodge", "a clean dodge plays on the pick")
+  truthy(not session._heldReact, "success is not stashed behind the hit")
+end
+
+function tests.failed_dodge_leads_the_hit()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 0, basePy = 0,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 64, basePy = 0,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local battle = {}
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 93,
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, battle),
+    "failed dodge is accepted while they close")
+  eq(player.lastAnim, nil, "failed dodge still waits for melee")
+  local fired = 0
+  battle._arResumeReactPick = function()
+    fired = fired + 1
+  end
+  Cues.tickReturns(session, Grid)
+  eq(fired, 0, "HP does not apply while they are still far")
+  enemy.basePx = 8
+  Cues.tickReturns(session, Grid)
+  eq(player.lastAnim, "dodge", "sidestep plays once they are in reach")
+  eq(fired, 0, "hit waits for the dodge to read")
+  truthy(Cues.reactLeadPending(session), "lead is armed after the pose")
+  session._now = 93.25
+  Cues.tickReturns(session, Grid)
+  eq(fired, 1, "hit lands after the dodge lead")
+end
+
+function tests.held_react_times_out_if_they_never_arrive()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 0, basePy = 0,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    basePx = 64, basePy = 0,
+    _pendingCloseStrike = { moveId = "TACKLE" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 94,
+    _battle = {},
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, session._battle),
+    "dodge is stashed while they are far")
+  truthy(session._heldReact, "hold is live")
+  session._now = 94 + (Cues.REACT_HOLD_MAX or 0.95) + 0.01
+  Cues.tickHeldReact(session, Grid)
+  eq(player.lastAnim, "dodge", "timeout plays the pose so the queue cannot freeze")
+  truthy(not session._heldReact, "hold is cleared")
+end
+
+function tests.react_pose_waits_for_the_special_shot()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+    _pendingRangedCast = { category = "special", moveId = "THUNDERBOLT" },
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 91,
+    _battle = {},
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, session._battle),
+    "dodge pick is accepted while they charge")
+  eq(player.lastAnim, nil, "dodge pose waits for the bolt")
+  truthy(session._heldReact, "REACT pose is stashed until the shot")
+  enemy._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(player.lastAnim, "dodge", "dodge plays once the special leaves")
 end
 
 function tests.react_hold_slows_then_speeds_up_on_shot()
@@ -4522,11 +5309,16 @@ function tests.attack_overlap_fires_foe_dodge()
     queue = {},
   }
   truthy(Cues.pumpCurrent(session, battle, Grid, nil), "attack + dodge pump")
-  eq(player.lastAnim, "cast", "surf casts in place")
-  eq(enemy.lastAnim, "dodge", "foe dodges on the same beat")
+  truthy(player.lastAnim == "cast" or player.lastAnim == "charge",
+    "surf charges in place")
+  eq(enemy.lastAnim, nil, "foe dodge waits for the surf")
+  truthy(session._heldReact, "dodge is stashed until the bolt leaves")
   truthy(session._trainerCallouts and session._trainerCallouts.foe
       and session._trainerCallouts.foe[1], "Move! overlay is up")
   eq(session._trainerCallouts.foe[1].text, "BROCK:\nOnix, dodge!", "overlay text")
+  player._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(enemy.lastAnim, "dodge", "foe dodges once the surf leaves")
 
   -- Foe move order is pinned to the attack cue, not say()-time.
   session._now = 31
@@ -4587,13 +5379,18 @@ function tests.attack_overlap_fires_foe_dodge()
     queue = { queued },
   }
   truthy(Cues.pumpCurrent(session, battle, Grid, nil), "lookahead dodge pumps")
-  eq(enemy.lastAnim, "dodge", "queued dodge plays with the attack")
+  eq(enemy.lastAnim, nil, "queued dodge waits for the hydro pump")
   eq(queued._arOverlapShown, true, "queued toast is consumed")
   eq(queued._arFieldCueDone, true, "queued cue will not replay")
+  player._pendingRangedCast = nil
+  Cues.tickHeldReact(session, Grid)
+  eq(enemy.lastAnim, "dodge", "queued dodge plays once the shot leaves")
 
   -- Late attach after the attack cue already fired (choose-lead / flush).
   session._now = 34
   enemy.lastAnim = nil
+  player._pendingRangedCast = nil
+  session._heldReact = nil
   session._trainerCallouts = nil
   battle.current._arFieldCueDone = true
   battle.current.arOverlapReact = {
@@ -4751,6 +5548,46 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   truthy(not Callouts.shouldHold(held), "yield ends when battle is top again")
 end
 
+function tests.react_menu_keeps_the_incoming_order()
+  local session = {}
+  truthy(Callouts.push(session, "foe", "BROCK:\nOnix, use Surf!", { kind = "order" }),
+    "incoming order is live")
+  local reactBattle = {
+    phase = "messages",
+    _arAwaitingReact = true,
+    game = {
+      stack = {
+        top = function()
+          return { isOpaque = false }
+        end,
+      },
+    },
+  }
+  truthy(not Callouts.shouldHold(reactBattle),
+    "REACT HUD does not dismiss the incoming order")
+  Callouts.tick(session, 0.2, reactBattle)
+  truthy(session._trainerCallouts and session._trainerCallouts.foe
+      and session._trainerCallouts.foe[1],
+    "Brock's order stays up while you pick")
+end
+
+function tests.move_call_rewrite_stays_put()
+  local Dialogue = assert(loadfile(root .. "/../battle/rules/dialogue.lua"))()
+  local S = { PLAYER_MOVE_CALLS = { "FIRST!\n%s %s" } }
+  Dialogue.bind({
+    opt = function(key)
+      return key == "anime_move_calls"
+    end,
+    S = S,
+  })
+  local battle = {}
+  local first = Dialogue.rewriteMoveCallText(battle, "SQUIRTLE\nused TACKLE!")
+  S.PLAYER_MOVE_CALLS = { "SECOND!\n%s %s" }
+  local again = Dialogue.rewriteMoveCallText(battle, "SQUIRTLE\nused TACKLE!")
+  eq(first, again, "the same announce is not rewritten again")
+  truthy(tostring(first):find("FIRST", 1, true), "cached line is the first roll")
+end
+
 function tests.dig_fly_vanish_and_emerge()
   eq(Cues.vanishKind("DIG"), "dig", "DIG is a dig vanish")
   eq(Cues.vanishKind("FLY"), "fly", "FLY is a fly vanish")
@@ -4881,7 +5718,9 @@ function tests.world_space_projectiles()
   truthy(move.px > move.sx and move.px < move.ex, "projectile travels between mons")
   eq(move.cellX, math.floor(move.px / 16), "projectile keeps world cell synchronized")
   Projectiles.tick(session, 0.30)
-  eq(#session.projectiles, 0, "move projectile cleans itself up")
+  eq(move._removed, true, "move projectile cleans itself up")
+  eq(#session.projectiles, 1, "land leaves the impact burst")
+  eq(session.projectiles[1].style, "special_impact", "burst is the special land FX")
 
   local beam = Projectiles.move(session, "player", { moveType = "ELECTRIC" })
   eq(beam.style, "beam", "energy type uses top-down beam")
@@ -8026,6 +8865,33 @@ function tests.emotions_hp_lead_and_hit_is_determined()
   E.clear(battle)
 end
 
+function tests.emotions_player_ko_flashes_happy()
+  local E = loadEmotions()
+  local battle = moodBattle(80, 100, 0, 100)
+  E.note(battle, { kind = "faint", side = "enemy" })
+  eq(E.mood(battle, true), "happy", "KO flashes happy on our mon")
+  eq(E.fileName("happy"), "Happy", "happy uses the Happy portrait")
+  eq(E.chip("happy").text, "HAPPY", "happy chip label")
+  eq(E.portraitMood(battle, true), "happy", "KO face is happy")
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "happy", "happy holds after the flash turn")
+  E.note(battle, { kind = "turn" })
+  E.note(battle, { kind = "turn" })
+  eq(E.mood(battle, true), "happy", "happy is not a timed burst")
+  E.note(battle, { kind = "miss", side = "player" })
+  eq(E.mood(battle, true), "sigh", "the next mood event replaces happy")
+  E.clear(battle)
+end
+
+function tests.emotions_player_faint_is_not_a_party()
+  local E = loadEmotions()
+  local battle = moodBattle(0, 100, 80, 100)
+  E.note(battle, { kind = "faint", side = "player" })
+  eq(E.mood(battle, true) ~= "happy", true, "our faint is not a celebration")
+  eq(E.mood(battle, false) ~= "happy", true, "the foe does not celebrate")
+  E.clear(battle)
+end
+
 function tests.emotions_switch_clears_mood()
   local E = loadEmotions()
   local battle = moodBattle(80, 100, 80, 100)
@@ -8041,6 +8907,7 @@ end
 function tests.portraits_resolve_gen1_root_path()
   local P = loadPortraits()
   eq(P.relPath(4, "angry"), "assets/portrait/0004/Angry.png", "dex 4 angry")
+  eq(P.relPath(4, "happy"), "assets/portrait/0004/Happy.png", "dex 4 happy")
   eq(P.relPath(1, "normal"), "assets/portrait/0001/Normal.png", "dex 1 normal")
   eq(P.emotionFile("pain"), "Pain", "pain file")
   local battle = moodBattle(80, 100, 80, 100)
@@ -8055,6 +8922,16 @@ function tests.emotions_chip_colors_match_mood()
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
   eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
   eq(E.chip("normal"), nil, "normal has no chip")
+end
+
+function tests.emotions_chip_ink_is_always_dark()
+  local E = loadEmotions()
+  for mood, spec in pairs(E.CHIP) do
+    local ink = spec.ink
+    truthy(ink, mood .. " has ink")
+    local luma = (ink[1] or 0) * 0.3 + (ink[2] or 0) * 0.59 + (ink[3] or 0) * 0.11
+    truthy(luma < 0.35, mood .. " ink stays dark so Font color cannot bleach the overlay")
+  end
 end
 
 function tests.emotions_portrait_holds_until_normal()
@@ -8169,6 +9046,40 @@ function tests.mood_aura_paints_when_angry()
   eq(rects, 0, "normal mood has no body aura")
   Projectiles.moodOf = nil
   love = prevLove
+end
+
+function tests.field_sfx_overlap_ducks_the_prior_voice()
+  Audio.clearVoices()
+  local function voice(playing)
+    local vol = Audio.VOICE_VOL
+    local on = playing ~= false
+    return {
+      isPlaying = function()
+        return on
+      end,
+      setVolume = function(_, value)
+        vol = value
+      end,
+      getVolume = function()
+        return vol
+      end,
+      stop = function()
+        on = false
+      end,
+    }
+  end
+  local first = voice()
+  local second = voice()
+  truthy(Audio.pushVoice(first, Audio.VOICE_VOL), "first voice lands")
+  eq(Audio.voiceCount(), 1, "one live voice")
+  truthy(Audio.pushVoice(second, Audio.VOICE_VOL), "second voice stacks")
+  eq(Audio.voiceCount(), 2, "both voices stay up")
+  truthy(first:getVolume() < Audio.VOICE_VOL, "the earlier sample is ducked")
+  eq(second:getVolume(), Audio.VOICE_VOL, "the new sample stays full")
+  first.stop()
+  eq(Audio.voiceCount(), 1, "finished voices drop off")
+  Audio.clearVoices()
+  eq(Audio.voiceCount(), 0, "clear stops the stack")
 end
 
 local count = 0

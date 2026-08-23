@@ -111,6 +111,194 @@ end
 
 --- FIRE NOW overlapping pose: hold Charge while the shot is on the pad.
 --- Non-kit battlers keep the old short `cast` pulse.
+--- Face the foe so a backstep caster turns before the shot.
+function H.faceToward(ent, foe)
+    if not (ent and foe) then
+        return
+    end
+    local dx = (foe.targetPx or foe.px or 0) - (ent.targetPx or ent.px or 0)
+    local dy = (foe.targetPy or foe.py or 0) - (ent.targetPy or ent.py or 0)
+    if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then
+        dx = (foe.padU or 0) - (ent.padU or 0)
+        dy = (foe.padV or 0) - (ent.padV or 0)
+    end
+    if math.abs(dx) < 0.01 and math.abs(dy) < 0.01 then
+        return
+    end
+    if math.abs(dx) >= math.abs(dy) then
+        ent.facing = dx >= 0 and "right" or "left"
+    else
+        ent.facing = dy >= 0 and "down" or "up"
+    end
+end
+
+function H.clearRangedCast(ent)
+    if not ent then
+        return
+    end
+    ent._pendingRangedCast = nil
+    ent._rangedChargeAt = nil
+end
+
+Cues.RANGED_CLOSE = 1
+-- Wind-up before a special / travel shot. Long enough to pick REACT.
+Cues.RANGED_CHARGE = 0.7
+-- If a travel FX never spawned, drop the HP hold after this.
+Cues.RANGED_HOLD_FALLBACK = 0.40
+
+local function snapBattlerHp(b)
+    if not b then
+        return nil
+    end
+    local live = tonumber(b.mon and b.mon.hp)
+    local shown = tonumber(b.shownHP)
+    if live and shown then
+        return math.max(live, shown)
+    end
+    return live or shown
+end
+
+local function writeHitPaint(battle, session)
+    battle = battle or (session and session._battle)
+    if not battle then
+        return
+    end
+    battle._arRangedHitHold = true
+    if type(battle._arHeldHpPaint) ~= "table" then
+        battle._arHeldHpPaint = {
+            player = snapBattlerHp(battle.player),
+            enemy = snapBattlerHp(battle.enemy),
+        }
+    end
+end
+
+local function clearHitPaint(battle)
+    if not battle then
+        return
+    end
+    battle._arRangedHitHold = nil
+    battle._arHeldHpPaint = nil
+end
+
+function Cues.rangedCastHoldActive(session)
+    if not (session and session.live) then
+        return false
+    end
+    local p, e = session.playerMon, session.enemyMon
+    return (p and p._pendingRangedCast) or (e and e._pendingRangedCast) or false
+end
+
+function Cues.rangedShotHoldActive(session)
+    if session and (session._rangedShotHold or 0) > 0 then
+        return true
+    end
+    local battle = session and session._battle
+    return battle ~= nil and battle._arRangedHitHold == true
+end
+
+--- Charge or a travel shot still in the air: HP must not flush on a tick.
+function Cues.rangedHitHoldActive(session)
+    if Cues.rangedCastHoldActive(session) or Cues.rangedShotHoldActive(session) then
+        return true
+    end
+    local battle = session and session._battle
+    return battle ~= nil and battle._arRangedHitHold == true
+end
+
+--- Knockback / camera wait for the fist or the bolt, not the engine tick.
+function Cues.shouldHoldHitCue(session, ctx)
+    if Cues.rangedHitHoldActive(session) then
+        return true
+    end
+    return type(Cues.shouldHoldEngineHit) == "function"
+        and Cues.shouldHoldEngineHit(session, ctx) and true or false
+end
+
+local function bindBattle(session, battle)
+    battle = battle or (session and session._battle)
+    if session and battle and session._battle == nil then
+        session._battle = battle
+    end
+    return battle
+end
+
+function Cues.armRangedShotHold(session, battle)
+    if not session then
+        return 0
+    end
+    session._rangedShotHold = (session._rangedShotHold or 0) + 1
+    writeHitPaint(bindBattle(session, battle), session)
+    return session._rangedShotHold
+end
+
+--- Latch the HP bar at the pre-hit total. Idempotent: later arms keep the first snap.
+function Cues.armRangedHitHold(session, battle)
+    if not session then
+        return false
+    end
+    writeHitPaint(bindBattle(session, battle), session)
+    return true
+end
+
+--- Drop the latch without applying stashed HP (miss / cancel).
+function Cues.dropRangedHitHold(session, battle)
+    if session then
+        session._rangedShotHold = 0
+        session._rangedHoldUntil = nil
+        session._pendingCloseHit = nil
+    end
+    clearHitPaint(bindBattle(session, battle))
+    return true
+end
+
+function Cues.releaseRangedShotHold(session, battle)
+    if not session then
+        return false
+    end
+    local n = session._rangedShotHold or 0
+    if n > 0 then
+        session._rangedShotHold = n - 1
+    end
+    battle = bindBattle(session, battle)
+    if (session._rangedShotHold or 0) <= 0 then
+        session._rangedHoldUntil = nil
+        clearHitPaint(battle)
+    end
+    if Cues.rangedHitHoldActive(session) then
+        return false
+    end
+    if type(Cues.flushHeldHit) == "function" then
+        return Cues.flushHeldHit(session, battle) and true or false
+    end
+    return false
+end
+
+function Cues.rangedHoldHasProjectile(session)
+    local list = session and session.projectiles
+    if type(list) ~= "table" then
+        return false
+    end
+    for i = 1, #list do
+        local p = list[i]
+        if p and p.holdHit and not p._hitFlushed and not p._removed then
+            return true
+        end
+    end
+    return false
+end
+
+--- True only while a special caster is still hopping back. In-place charge
+--- must not park the engine: runDamaging has to reach REACT during the wind-up.
+function Cues.rangedCastWalking(session)
+    if not (session and session.live) then
+        return false
+    end
+    local function walking(ent)
+        return ent and ent._pendingRangedCast and Cues.stillWalkingToPad(ent)
+    end
+    return walking(session.playerMon) or walking(session.enemyMon) or false
+end
+
 function H.playChargeHold(session, ent)
     local Sprites = session and session._deps and session._deps.Sprites
     if Sprites and type(Sprites.usesKitPose) == "function"
@@ -254,12 +442,26 @@ function H.finishingFocus(session, atkSide, opts)
 end
 
 --- Player hit that just dropped the foe to 0 HP.
+--- A faint already owns the exit beat — do not pile a clash / "Finish it!"
+--- on a mon that is down or already playing faint.
 function Cues.isFinishingBlow(user, target)
     if not (user and user.isPlayer and target and not target.isPlayer) then
         return false
     end
+    if target._fainting or target._faintDone or target._removed
+        or target._recallDone then
+        return false
+    end
+    local battler = target._battleBattler
+    if battler and (battler._fainting or battler._faintDone) then
+        return false
+    end
     local hp = target.mon and target.mon.hp
-    return type(hp) == "number" and hp <= 0
+    if type(hp) ~= "number" or hp > 0 then
+        return false
+    end
+    -- Already KO'd: the faint cue / HP bar owns this. No extra finisher.
+    return false
 end
 
 --- Contact juice without a fake zoom: freeze a few frames and bump the camera.
@@ -270,13 +472,33 @@ function H.impactKick(session, spec)
         return false
     end
     local heavy = spec.powerful == true or spec.clash == true
-    if spec.noStop ~= true and spec.clash ~= true and (session._clashSlowT or 0) <= 0 then
-        session._hitStopT = heavy and 0.08 or 0.045
+    -- Clash already owns the clock. A short contact punch-in still wants a freeze.
+    local clashHold = session._clashPunch == true
+        or spec.clash == true
+        or (session._clashSlowDur or 0) >= 0.55
+    if spec.noStop ~= true and not clashHold then
+        session._hitStopT = heavy and 0.12 or 0.07
     end
-    session._camShakeDur = heavy and 0.16 or 0.10
+    session._camShakeDur = heavy and 0.24 or 0.16
     session._camShakeT = session._camShakeDur
-    session._camShakeAmp = heavy and 2.8 or 1.6
+    session._camShakeAmp = heavy and 3.8 or 2.6
     return true
+end
+
+--- Short punch-in + slow-mo on a connecting hit. Clash / finishing stay bigger.
+function H.contactFocus(session, side, spec)
+    spec = spec or {}
+    if not session or session._clashPunch then
+        return false
+    end
+    return H.punchIn(session, side, {
+        mode = "hit",
+        focus = spec.focus or "user",
+        hold = spec.hold or 0.44,
+        slow = spec.slow or 0.22,
+        lift = spec.lift or 5,
+        opts = spec.opts,
+    })
 end
 
 function H.cueMoveId(opts)
@@ -472,8 +694,8 @@ function H.isChargeTurn(ent, moveId)
 end
 
 -- Walk-in / close-the-gap: contact FX and physicals. Travel FX and
--- non-contact specials cast in place. Bite / Fire Punch stay melee even
--- when Damage.isSpecial(type) is true.
+-- non-contact specials backstep when adjacent, then Shoot. Bite / Fire
+-- Punch stay melee even when Damage.isSpecial(type) is true.
 function Cues.isMeleeAttack(opts, Projectiles)
     opts = opts or {}
     if Projectiles and type(Projectiles.isProjectileSpecial) == "function"
@@ -1283,6 +1505,53 @@ function Cues.playBeamClash(session, Grid, result, ctx)
         lift = 6,
         burst = false,
     })
+    H.impactKick(session, { powerful = true, clash = true })
+    return true
+end
+
+--- Two physicals crash between the mons.
+function Cues.playChargeClash(session, Grid, result, ctx)
+    if not session then
+        return false
+    end
+    result = result or {}
+    ctx = ctx or {}
+    local incoming = ctx.move or {}
+    local reply = ctx.replyMove or {}
+    local replySide = ctx.replySide or "player"
+    local playerShot, enemyShot
+    if replySide == "enemy" then
+        playerShot, enemyShot = incoming, reply
+    else
+        playerShot, enemyShot = reply, incoming
+    end
+    local Projectiles = session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.bodyClash) == "function" then
+        Projectiles.bodyClash(session, {
+            moveId = playerShot.id or playerShot.moveId,
+            moveType = playerShot.type or playerShot.moveType,
+        }, {
+            moveId = enemyShot.id or enemyShot.moveId,
+            moveType = enemyShot.type or enemyShot.moveType,
+        })
+    end
+    local player = H.sideEnt(session, "player")
+    local enemy = H.sideEnt(session, "enemy")
+    if player then
+        H.playAnim(player, "attack")
+    end
+    if enemy then
+        H.playAnim(enemy, "attack")
+    end
+    H.punchIn(session, "player", {
+        mode = "clash",
+        focus = "mid",
+        hold = 0.82,
+        slow = 0.70,
+        lift = 5,
+        burst = false,
+    })
+    H.impactKick(session, { powerful = true, clash = true })
     return true
 end
 
@@ -1298,9 +1567,10 @@ function Cues.beginReactHold(session, battle)
     session._reactReleaseT = nil
     session._reactReleaseDur = nil
     local incoming = "enemy"
-    if session.playerMon and session.playerMon._pendingCloseStrike then
+    local p, e = session.playerMon, session.enemyMon
+    if p and (p._pendingCloseStrike or p._pendingRangedCast) then
         incoming = "player"
-    elseif session.enemyMon and session.enemyMon._pendingCloseStrike then
+    elseif e and (e._pendingCloseStrike or e._pendingRangedCast) then
         incoming = "enemy"
     end
     H.punchIn(session, incoming, {
@@ -1448,30 +1718,54 @@ function Cues.inMeleeReach(ent, foe)
     return false
 end
 
---- Dodge/brace wait for the charger to arrive. Occupancy can already be
---- adjacent while feet are still two tiles out.
+-- Failed dodge/brace: wait until contact, then this beat before the hit.
+Cues.REACT_LEAD = 0.22
+-- If the charger never arrives, play anyway so the queue cannot freeze.
+Cues.REACT_HOLD_MAX = 0.95
+-- Resume (HP / cancel) must not sit behind a dead hold forever.
+Cues.REACT_RESUME_MAX = 1.25
+
+--- Dodge/brace wait for the incoming beat. A clean dodge (forceMiss) plays
+--- on the pick so it is not waiting behind the hit. Failed reacts wait:
+--- physicals until they are in your face, specials until the shot leaves.
 function Cues.shouldHoldReactPose(session, side, kind, opts)
     kind = tostring(kind or "")
     if kind ~= "dodge" and kind ~= "brace" then
         return false
     end
     opts = opts or {}
-    if opts.via == "held-react" or H.cueForce(opts) then
+    if opts.forceMiss or opts.via == "held-react" or H.cueForce(opts) then
         return false
     end
     local defender = H.sideEnt(session, side)
     local charger = H.foeOf(session, side)
-    if not (defender and charger and charger._pendingCloseStrike) then
+    if not (defender and charger) then
         return false
     end
-    return not Cues.inMeleeReach(charger, defender)
+    if charger._pendingCloseStrike then
+        return not Cues.inMeleeReach(charger, defender)
+    end
+    return charger._pendingRangedCast and true or false
 end
 
 function Cues.heldReactPending(session)
     return session and session._heldReact ~= nil
 end
 
---- Play a stashed dodge/brace once the charger is in melee.
+function Cues.reactLeadPending(session)
+    if not (session and session._reactLeadUntil) then
+        return false
+    end
+    return H.now(session) < session._reactLeadUntil
+end
+
+--- True while a failed dodge/brace is still waiting to play, or the hit
+--- is giving that pose a beat to read.
+function Cues.reactOutcomePending(session)
+    return Cues.heldReactPending(session) or Cues.reactLeadPending(session)
+end
+
+--- Play a stashed dodge/brace once the incoming beat is on them.
 function Cues.tickHeldReact(session, Grid)
     local held = session and session._heldReact
     if not held then
@@ -1479,11 +1773,31 @@ function Cues.tickHeldReact(session, Grid)
     end
     local defender = H.sideEnt(session, held.side)
     local charger = H.foeOf(session, held.side)
-    if not Cues.inMeleeReach(charger, defender) then
+    local t = H.now(session)
+    local armed = tonumber(held.armedAt) or t
+    held.armedAt = armed
+    local timedOut = (t - armed) >= (Cues.REACT_HOLD_MAX or 0.95)
+    -- Too late: they already swung. Drop the pose so it cannot play after
+    -- the hit (the freeze / "dodge after I got hit" read).
+    if charger and H.hasStruckThisTurn(charger) then
+        session._heldReact = nil
         return false
+    end
+    if charger and charger._pendingCloseStrike then
+        if not Cues.inMeleeReach(charger, defender) and not timedOut then
+            return false
+        end
+    elseif charger and charger._pendingRangedCast then
+        if not timedOut then
+            return false
+        end
     end
     session._heldReact = nil
     local opts = held.opts or {}
+    -- Failed react: let the sidestep read before HP / the hit pose land.
+    if not opts.forceMiss then
+        session._reactLeadUntil = t + (Cues.REACT_LEAD or 0.22)
+    end
     opts.via = "held-react"
     return Cues.apply(session, held.side, held.kind, Grid or held.Grid,
         held.nudgeCamera, held.battle or session._battle, opts) == true
@@ -1703,6 +2017,7 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
             Grid = Grid,
             nudgeCamera = nudgeCamera,
             battle = battle,
+            armedAt = H.now(session),
         }
         H.note(session, battle, "cue hold", side, kind, "until charger is near")
         return true

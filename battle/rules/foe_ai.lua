@@ -59,6 +59,36 @@ function FoeAi.attach(reactiveDefense)
 end
 
 --- True when the foe may spend their later call on a two-tile special.
+local function attackStat(battler)
+  return battleStat(battler, "attack")
+end
+
+function FoeAi.canChargeNow(battle, incoming, opts)
+  opts = opts or {}
+  if not RD or not battle or not RD.canReact(battle, false) then
+    return false
+  end
+  if RD.isUnreactable(incoming) then
+    return false
+  end
+  if not opts.fieldBattle then
+    return false
+  end
+  if opts.statusLocked or opts.alreadyActed then
+    return false
+  end
+  if (opts.chargeCount or 0) <= 0 then
+    return false
+  end
+  if not RD.affordable(battle, false, "charge") then
+    return false
+  end
+  if RD.isSpecialClashIncoming(incoming) then
+    return false
+  end
+  return opts.playerChargeOpen == true or opts.incomingMelee == true
+end
+
 function FoeAi.canFireNow(battle, incoming, opts)
   opts = opts or {}
   if not RD or not battle or not RD.canReact(battle, false) then
@@ -136,6 +166,7 @@ function FoeAi.pickFoeReact(battle, move, isSpecial, opts)
   local wDodge = jitter(isSpecial and 32 or 16)
   local wBrace = jitter(isSpecial and 16 or 32)
   local wFire = 0
+  local wCharge = 0
   wDodge = wDodge + clamp(speGap * 0.12, -14, 16)
   wBrace = wBrace + clamp((bulk - 70) * 0.08, -10, 14)
   if opts.canFireNow and RD.affordable(battle, false, "fire") then
@@ -145,6 +176,13 @@ function FoeAi.pickFoeReact(battle, move, isSpecial, opts)
       wFire = wFire + 12
     else
       wFire = wFire + 8
+    end
+  end
+  if opts.canChargeNow and RD.affordable(battle, false, "charge") then
+    wCharge = jitter(16)
+    wCharge = wCharge + clamp((attackStat(enemy) - 55) * 0.16, 0, 20)
+    if not isSpecial then
+      wCharge = wCharge + 14
     end
   end
   if focus <= 22 then
@@ -159,11 +197,15 @@ function FoeAi.pickFoeReact(battle, move, isSpecial, opts)
   if not RD.affordable(battle, false, "fire") then
     wFire = 0
   end
+  if not RD.affordable(battle, false, "charge") then
+    wCharge = 0
+  end
   wDodge = math.max(0, wDodge)
   wBrace = math.max(0, wBrace)
   wCommit = math.max(0, wCommit)
   wFire = math.max(0, wFire)
-  local total = wCommit + wDodge + wBrace + wFire
+  wCharge = math.max(0, wCharge)
+  local total = wCommit + wDodge + wBrace + wFire + wCharge
   if total <= 0 then
     return "commit"
   end
@@ -179,8 +221,12 @@ function FoeAi.pickFoeReact(battle, move, isSpecial, opts)
   if roll < wBrace then
     return "brace"
   end
-  if wFire > 0 then
+  roll = roll - wBrace
+  if roll < wFire then
     return "fire"
+  end
+  if wCharge > 0 then
+    return "charge"
   end
   return "commit"
 end

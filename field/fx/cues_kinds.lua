@@ -6,7 +6,9 @@
 --
 --   dodge / cover / hide / brace   REACT! movement and pose
 --   cast                           overlapping FIRE pose (Charge hold; shot is the attack cue)
---   attack                         physicals walk in; specials Shoot in place
+--   attack                         physicals walk in; specials backstep if
+--                                  adjacent, then charge 0.7s and Shoot
+--                                  (REACT / FIRE NOW skip the charge)
 --                                  (Dig/Fly charge turns vanish instead)
 --   status                         in-place cast + orbit FX (Growl, Toxic, …)
 --   hit / selfhit                  knockback or a stumble (confusion / recoil)
@@ -21,7 +23,79 @@
 return function(Cues)
     local H = Cues._H
 
+    local function skipRangedWindup(opts, ent, battle)
+        if opts.rangedReady or opts.followUp or opts.again
+            or opts.releaseStrike or ent._pendingRangedCast then
+            return true
+        end
+        -- FIRE NOW / Again! / the delayed shot itself stay snappy.
+        if opts.fireNow or opts.fireCarry or (battle and battle._arFireNow) then
+            return true
+        end
+        return false
+    end
+
+    local function pendingRangedPayload(opts, category)
+        return {
+            category = category,
+            moveType = opts.moveType,
+            moveId = opts.moveId,
+            slowShot = opts.slowShot,
+            fireCarry = opts.fireCarry,
+        }
+    end
+
+    local function armRangedBackstep(session, side, ent, foe, Grid, g, opts, category, battle)
+        if skipRangedWindup(opts, ent, battle) then
+            return false
+        end
+        -- FIRE NOW is a shot from the ring (or at a charging foe). Do not
+        -- hop further just because close-gap already jumped their occupancy.
+        if foe and foe._pendingCloseStrike then
+            return false
+        end
+        if not (foe and Grid and type(Grid.openGap) == "function") then
+            return false
+        end
+        local dist = type(Grid.padDistance) == "function"
+            and Grid.padDistance(g, ent, foe) or 99
+        if dist > (Cues.RANGED_CLOSE or 1) then
+            return false
+        end
+        local tiles = Grid.openGap(g, ent, foe)
+        if not tiles or tiles < 1 then
+            return false
+        end
+        ent._pendingRangedCast = pendingRangedPayload(opts, category)
+        ent._rangedChargeAt = nil
+        Cues.armRangedHitHold(session, battle or session._battle)
+        H.note(session, battle or session._battle, "cue path", side,
+            opts.moveId or "-", "backstep", tostring(tiles), H.padSnap(ent))
+        return true
+    end
+
+    local function armRangedWindup(session, side, ent, foe, opts, category, battle)
+        if skipRangedWindup(opts, ent, battle) then
+            return false
+        end
+        local wait = Cues.RANGED_CHARGE or 0.7
+        ent._pendingRangedCast = pendingRangedPayload(opts, category)
+        ent._rangedChargeAt = H.now(session) + wait
+        Cues.armRangedHitHold(session, battle or session._battle)
+        H.faceToward(ent, foe)
+        H.playChargeHold(session, ent)
+        H.note(session, battle or session._battle, "cue path", side,
+            opts.moveId or "-", "windup", tostring(wait), H.padSnap(ent))
+        return true
+    end
+
     local function playRangedCast(session, side, ent, foe, Grid, g, opts, category, battle)
+        if armRangedBackstep(session, side, ent, foe, Grid, g, opts, category, battle) then
+            return
+        end
+        if armRangedWindup(session, side, ent, foe, opts, category, battle) then
+            return
+        end
         local Projectiles = session._deps and session._deps.Projectiles
         local Audio = session._deps and session._deps.Audio
         H.note(session, battle or session._battle, "cue path", side,
@@ -39,7 +113,7 @@ return function(Cues)
             if slow then
                 session._fireShotSlow = true
             end
-            Projectiles.move(session, side, {
+            local p = Projectiles.move(session, side, {
                 category = category or "special",
                 jump = jump,
                 moveType = opts.moveType,
@@ -47,6 +121,17 @@ return function(Cues)
                 slowShot = slow,
             })
             session._fireShotSlow = nil
+            -- FIRE NOW skips the charge, not the land. HP stays up until impact.
+            if p then
+                p.holdHit = true
+                p.onImpact = function()
+                    Cues.releaseRangedShotHold(session, battle or session._battle)
+                end
+                Cues.armRangedShotHold(session, battle or session._battle)
+            else
+                Cues.armRangedHitHold(session, battle or session._battle)
+                session._rangedHoldUntil = H.now(session) + (Cues.RANGED_HOLD_FALLBACK or 0.40)
+            end
         end
         H.playAnim(ent, "cast")
     end
@@ -318,7 +403,7 @@ return function(Cues)
             nudgeCamera(battle, foeSide, 0.45)
         end
         -- Physical: close distance on the pad, then return home.
-        -- Special: hold cell; still play an in-place cast anim.
+        -- Special: hop back if adjacent, charge 0.7s, then Shoot.
         -- Travel FX (beams, Night Shade, …) fly even when the Gen1 type split
         -- marks the move physical. Contact FX (Bite, Fire Punch) walk in even
         -- when that split marks them special.
@@ -431,7 +516,14 @@ return function(Cues)
         end
 
         if type(nudgeCamera) == "function" and battle and not clash then
-            nudgeCamera(battle, side, 0.35)
+            nudgeCamera(battle, side, (category == "special") and 0.52 or 0.44)
+        end
+        if not clash and not finishing then
+            H.contactFocus(session, side, {
+                hold = (category == "special") and 0.50 or 0.42,
+                slow = (category == "special") and 0.28 or 0.20,
+                opts = opts,
+            })
         end
         local Audio = session._deps and session._deps.Audio
         if Audio and type(Audio.playHit) == "function" then
@@ -466,12 +558,19 @@ return function(Cues)
         if Projectiles and type(Projectiles.lightHit) == "function" then
             Projectiles.lightHit(session, side, opts)
         end
+        local cat = category or session._lastAttackCategory or "physical"
+        if cat == "special" and Projectiles and type(Projectiles.specialImpact) == "function" then
+            Projectiles.specialImpact(session, {
+                followSide = side,
+                moveType = opts.moveType,
+                color = opts.color,
+            })
+        end
         if Projectiles and type(Projectiles.groundKick) == "function" then
             Projectiles.groundKick(session, side, opts)
         end
-        local cat = category or session._lastAttackCategory or "physical"
         -- Both can shove; physical more often / more reliably.
-        local pushChance = (cat == "special") and 0.45 or 0.78
+        local pushChance = (cat == "special") and 0.82 or 0.94
         if opts.push == false then
             pushChance = 0
         elseif opts.push == true then
@@ -551,6 +650,12 @@ return function(Cues)
             H.clearCloseStrike(ent)
             H.restoreStepSpeed(ent)
             ent._withdrawAfterStrike = true
+        end
+        if ent._pendingRangedCast then
+            H.clearRangedCast(ent)
+        end
+        if type(Cues.dropRangedHitHold) == "function" then
+            Cues.dropRangedHitHold(session, battle)
         end
         if battle then
             battle._arAccuracyMissSide = nil

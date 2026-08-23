@@ -160,6 +160,45 @@ function Dialogue.formatEnemyMoveCall(trainer, mon, move)
     return mon .. "!\n" .. move .. "!"
 end
 
+function Dialogue.isFaintText(text)
+    return tostring(text or ""):lower():find("fainted", 1, true) ~= nil
+end
+
+function Dialogue.isFinishCallText(text)
+    local flat = tostring(text or ""):lower():gsub("\v", " "):gsub("\n", " ")
+    return flat:find("finish it", 1, true) ~= nil
+        or flat:find("finish them", 1, true) ~= nil
+        or flat:find("end it!", 1, true) ~= nil
+        or flat:find("this is it", 1, true) ~= nil
+        or flat:find("take 'em down", 1, true) ~= nil
+        or flat:find("now's our chance", 1, true) ~= nil
+end
+
+--- Drop leftover "Finish it!" / Again finish shouts once someone is down.
+function Dialogue.scrubFinishCalls(battle)
+    if type(battle) ~= "table" then
+        return
+    end
+    local function drop(item)
+        return type(item) == "table" and Dialogue.isFinishCallText(item.text)
+    end
+    if drop(battle.current) then
+        battle.current = nil
+    end
+    local q = battle.queue
+    if type(q) ~= "table" then
+        return
+    end
+    for i = #q, 1, -1 do
+        if drop(q[i]) then
+            table.remove(q, i)
+            if type(battle.nextInsert) == "number" and i <= battle.nextInsert then
+                battle.nextInsert = math.max(0, battle.nextInsert - 1)
+            end
+        end
+    end
+end
+
 function Dialogue.isExpGainDialogue(text)
     local s = tostring(text or "")
     if s == "" or Dialogue.isGrewToLevelText(s) then
@@ -198,43 +237,57 @@ function Dialogue.rewriteMoveCallText(battle, text)
     if not mon then
         return text
     end
+    -- say() can wrap the same announce more than once (say / sayNext /
+    -- auto toast). Re-rolling the flavor each time is the dialogue flicker.
+    if type(battle) == "table" then
+        local cache = battle._arMoveCallRewrite
+        if type(cache) == "table" and cache.src == text then
+            return cache.out
+        end
+    end
+    local function memo(out)
+        if type(battle) == "table" then
+            battle._arMoveCallRewrite = { src = text, out = out }
+        end
+        return out
+    end
     local bare, isEnemy = Dialogue.stripEnemyPrefix(mon)
     if isEnemy and hostCall("enemyStatusLocked", battle) then
-        return text
+        return memo(text)
     end
     if (not isEnemy) and hostCall("playerStatusLocked", battle) then
-        return text
+        return memo(text)
     end
     if not isEnemy and hostCall("playerHasCounter", battle) then
         local line = hostCall("formatAutoCounterCall", bare, move)
         if line then
-            return line
+            return memo(line)
         end
     end
     if not opt("anime_move_calls") then
-        return text
+        return memo(text)
     end
     local S = strings()
     if isEnemy then
         local kind = battle and battle.kind
         if kind ~= "trainer" and kind ~= "link" then
-            return text
+            return memo(text)
         end
         local trainer = hostCall("personalTrainerName", battle)
         if trainer then
             local fitted = Dialogue.formatEnemyMoveCall(trainer, bare, move)
             if fitted then
-                return fitted
+                return memo(fitted)
             end
-            return Dialogue.pickFormatted(S.TRAINER_MOVE_CALLS, trainer, bare, move)
-                or (trainer .. ":\n" .. bare .. ", use " .. move .. "!")
+            return memo(Dialogue.pickFormatted(S.TRAINER_MOVE_CALLS, trainer, bare, move)
+                or (trainer .. ":\n" .. bare .. ", use " .. move .. "!"))
         end
-        return Dialogue.formatEnemyMoveCall(nil, bare, move)
+        return memo(Dialogue.formatEnemyMoveCall(nil, bare, move)
             or Dialogue.pickFormatted(S.FOE_MOVE_CALLS, bare, move)
-            or (bare .. "!\nUse " .. move .. "!")
+            or (bare .. "!\nUse " .. move .. "!"))
     end
-    return Dialogue.pickFormatted(S.PLAYER_MOVE_CALLS, bare, move)
-        or (bare .. "!\nUse " .. move .. "!")
+    return memo(Dialogue.pickFormatted(S.PLAYER_MOVE_CALLS, bare, move)
+        or (bare .. "!\nUse " .. move .. "!"))
 end
 
 function Dialogue.rewriteBattleText(battle, text)
@@ -280,6 +333,9 @@ function Dialogue.wrapBattleSay(methodName)
         end
         local displayText = Dialogue.rewriteBattleText(self, text)
         hostCall("noteBattleLine", self, text or displayText)
+        if Dialogue.isFaintText(text) or Dialogue.isFaintText(displayText) then
+            Dialogue.scrubFinishCalls(self)
+        end
         local pendingNpcOrder
         if hostCall("fieldFlowsText", self) and mon and isEnemy then
             local narrative = Dialogue.rewriteLevelUpText(text)
@@ -427,6 +483,13 @@ function Dialogue.wrapBattleSay(methodName)
                 end
             end
         end
+        if reaction and Dialogue.isFinishCallText(reaction) then
+            local foe = self.enemy and self.enemy.mon
+            if (foe and (foe.hp or 0) <= 0)
+                or Dialogue.isFaintText((self.current and self.current.text) or "") then
+                reaction = nil
+            end
+        end
         if reaction then
             local bubbleSide = "narrator"
             if not hostCall("isDodgeFailNarrator", reaction) then
@@ -504,6 +567,8 @@ function Dialogue.buildCallPool(kind, battle)
         add(strings().COMMIT_CALLS, 1)
     elseif kind == "fire" then
         add(strings().FIRE_NOW_CALLS, 1)
+    elseif kind == "charge" then
+        add(strings().CHARGE_NOW_CALLS, 1)
     elseif kind == "entrench" or kind == "entrench_hold" then
         add(strings().STAY_ENTRENCHED_CALLS, 1)
         add(strings().BRACE_SCENE[scene], 2)

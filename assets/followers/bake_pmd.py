@@ -61,7 +61,7 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     15: 23,   # Beedrill - a bit smaller
     3: 33,    #  Venusaur - make a bit bigger
     5: 23,    # charmeleon - make a bit smaller
-    6: 31,    # Charizard - make a bit bigger
+    6: 36,    # Charizard — wings read small at the 2.2m / 31px cap
     9: 31,    # Blastoise - make a bit bigger
     19: 20,   # ratata 
     20: 23,   # raticate - a bit smaller

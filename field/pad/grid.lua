@@ -628,6 +628,60 @@ function Grid.withdrawFromFoe(grid, ent, foeEnt, side)
   return Grid.setPad(grid, ent, bestU, bestV)
 end
 
+--- Give a ranged caster space: if they are in the foe's face (1 tile),
+--- hop 2 tiles away when that cell is free, else 1. Occupancy jumps;
+--- the sprite walks. Returns tiles moved, or false.
+function Grid.openGap(grid, ent, foeEnt)
+  if not (grid and ent and foeEnt) then
+    return false
+  end
+  local u, v = padOf(grid, ent)
+  local foeU, foeV = padOf(grid, foeEnt)
+  local dist = math.max(math.abs(foeU - u), math.abs(foeV - v))
+  if dist > 1 then
+    return false
+  end
+  local homeU = ent.homePadU
+  local homeV = ent.homePadV
+  if homeU == nil then
+    homeU, homeV = Grid.homePad(grid, ent._arFieldSide or ent.side)
+  end
+  if homeU == nil then
+    homeU, homeV = u, v
+  end
+  local bestU, bestV, bestScore
+  for tiles = 2, 1, -1 do
+    for deltaU = -tiles, tiles do
+      for deltaV = -tiles, tiles do
+        if math.max(math.abs(deltaU), math.abs(deltaV)) == tiles then
+          local candU, candV = u + deltaU, v + deltaV
+          if Grid.isFree(grid, candU, candV, ent.id, ent) then
+            local newDist = math.max(math.abs(candU - foeU), math.abs(candV - foeV))
+            if newDist > dist then
+              local homeDist = math.abs(candU - homeU) + math.abs(candV - homeV)
+              local score = (newDist >= 2 and 0 or 20) + homeDist
+                  + math.abs(candV - v)
+              if not bestScore or score < bestScore then
+                bestU, bestV, bestScore = candU, candV, score
+              end
+            end
+          end
+        end
+      end
+    end
+    if bestU ~= nil then
+      break
+    end
+  end
+  if not bestU then
+    return false
+  end
+  if not Grid.setPad(grid, ent, bestU, bestV) then
+    return false
+  end
+  return math.max(math.abs(bestU - u), math.abs(bestV - v))
+end
+
 function Grid.returnHome(grid, ent)
   if not (grid and ent) then
     return false

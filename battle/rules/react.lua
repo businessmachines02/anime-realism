@@ -84,6 +84,7 @@ local function freshMomentum()
         skipQueuedEnemyAction = false,
         queuedPlayerAction = nil,
         fireNowMove = nil,
+        chargeNowMove = nil,
         pickOfferedThisTurn = false,
         awaitingPick = nil,
         pendingDamage = nil,
@@ -180,6 +181,8 @@ local function resetMomentum(battle)
     -- Battle-owned latches survive hot-reload weak-table resets.
     battle._arSuppressReactDefer = nil
     battle._arPickOfferedThisTurn = nil
+    battle._arReactLocked = nil
+    battle._arNoCounterThisTurn = nil
     battle._arAwaitingReact = nil
     battle._arAwaitAgain = nil
     battle._arAwaitAgainSide = nil
@@ -213,6 +216,12 @@ clearCalloutPickState = function(battle)
         end
     end
     -- Keep _arPickOfferedThisTurn until turn_started (resetMomentum).
+end
+
+local function lockReactHud(battle)
+    if type(battle) == "table" then
+        battle._arReactLocked = true
+    end
 end
 
 local function scrubReactPickRows(battle)
@@ -387,6 +396,11 @@ local function shouldOfferCalloutPick(battle, move)
     end
     -- Frozen / asleep: can't dodge, brace, or take orders.
     if hostCall("playerStatusLocked", battle) then
+        return false
+    end
+    -- FIRE / CHARGE already committed this beat (yours or the foe's).
+    -- The shot is the react — do not open REACT on it, or again after it.
+    if battle._arReactLocked or battle._arFireNow then
         return false
     end
     -- Battle-owned latches: survive hot-reload weak momentum tables and
@@ -653,6 +667,42 @@ local function replyMoveForFire(battle, state)
     }
 end
 
+local listChargeNowMoves
+
+local function replyMoveForCharge(battle, state)
+    local inst = state and state.chargeNowMove
+    local incoming = state and state.pendingDamage and state.pendingDamage.ctx
+        and state.pendingDamage.ctx.move
+    local shots = listChargeNowMoves(battle)
+    local shot = shots[1]
+    local qid = inst and tostring(inst.id or inst.name or ""):upper():gsub("%s+", "_")
+    if qid and qid ~= "" then
+        for i = 1, #shots do
+            if shots[i].moveId == qid then
+                shot = shots[i]
+                break
+            end
+        end
+    end
+    if not inst and shot then
+        inst = shot.moveInst
+        if state then
+            state.chargeNowMove = inst
+        end
+    end
+    if not (inst or shot) then
+        return nil
+    end
+    return {
+        id = (shot and shot.moveId) or (inst and (inst.id or inst.name)),
+        name = (shot and shot.name) or (inst and (inst.name or inst.id)),
+        power = (shot and shot.moveDef and shot.moveDef.power) or (inst and inst.power),
+        type = (shot and shot.moveType) or (inst and inst.type),
+        category = "physical",
+        chargeNow = true,
+    }
+end
+
 local function spendFireNowTurn(battle, state)
     local inst = state and state.fireNowMove
     if inst and type(inst.pp) == "number" and inst.pp > 0 then
@@ -668,11 +718,12 @@ end
 -- COVER / ENTRENCH / FIRE: that pick IS the slower action. Dodge / brace /
 -- commit still get the delayed call after the incoming lands.
 local function reactSpendsQueuedAction(action, result)
-    if result and result.fireNow then
+    if result and (result.fireNow or result.chargeNow) then
         return true
     end
     action = tostring(action or "")
-    return action == "cover" or action == "entrench" or action == "entrench_hold"
+    return action == "cover" or action == "charge"
+        or action == "entrench" or action == "entrench_hold"
 end
 
 -- Going second: react, then call. A dodge/brace proc arms that later
@@ -707,6 +758,12 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     battle._arAwaitingReact = nil
     -- Invalidate any leftover REACT ui rows still sitting in the queue.
     state.reactEpoch = (state.reactEpoch or 0) + 1
+    if action == "fire" or action == "charge" then
+        lockReactHud(battle)
+    end
+    if action == "charge" then
+        battle._arNoCounterThisTurn = true
+    end
     local pending = state.pendingDamage
     state.pendingDamage = nil
     state.enemyActedThisTurn = true
@@ -724,6 +781,9 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
             pending.ctx.replyMove = replyMoveForFire(battle, state)
             battle._arCheckNow = state.checkNow == true
             battle._arHazeNow = state.hazeNow == true
+        end
+        if action == "charge" and pending and pending.ctx then
+            pending.ctx.replyMove = replyMoveForCharge(battle, state)
         end
 
         if action == "entrench_break" and RD() then
@@ -802,7 +862,7 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
     end
 
     local outcome = result.action or action
-    if result.fireClash then
+    if result.fireClash or result.chargeClash then
         outcome = "clash"
     elseif result.fireNow then
         outcome = "fire"
@@ -818,7 +878,8 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
 
     -- Dodge / cover / brace FX before the foe's swing (or instead of it).
     -- FIRE NOW lets performMove paint the special; don't also sidestep.
-    if not result.fireNow and type(host.playFocusReactFx) == "function" then
+    if not result.fireNow and not result.chargeNow
+        and type(host.playFocusReactFx) == "function" then
         host.playFocusReactFx(battle, result.action or action, result)
     end
 
@@ -890,6 +951,13 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
             if result.fireClash then
                 hostCall("playBeamClash", battle, result, pending.ctx)
                 spendFireNowTurn(battle, state)
+            elseif result.chargeClash then
+                hostCall("playChargeClash", battle, result, pending.ctx)
+                if result.chargeShotMult then
+                    battle._arChargeShotMult = result.chargeShotMult
+                end
+                hostCall("fireQueuedCharge", battle, state.chargeNowMove)
+                state.chargeNowMove = nil
             elseif result.fireNow then
                 if state.checkNow then
                     hostCall("fireQueuedCheck", battle, state.fireNowMove)
@@ -929,7 +997,8 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
                 origRunDamaging(battle, pending.ctx, pending.record)
             end
         end
-        if not result.fireNow then
+        if not result.fireNow and not result.chargeNow
+            and not battle._arNoCounterThisTurn then
             queueReactCounterStrike(battle, result, pending.ctx)
         end
     end
@@ -968,6 +1037,14 @@ end
 
 local function listFireNowMoves(battle)
     local list = hostCall("listFireNowMoves", battle, battle and battle.player)
+    if type(list) == "table" then
+        return list
+    end
+    return {}
+end
+
+function listChargeNowMoves(battle)
+    local list = hostCall("listCheckNowMoves", battle, battle and battle.player)
     if type(list) == "table" then
         return list
     end
@@ -1067,6 +1144,35 @@ local function canFireNow(battle, incoming)
     return false
 end
 
+local function canChargeNow(battle, incoming)
+    if not hostCall("isFieldBattle", battle) then
+        return false
+    end
+    if hostCall("playerStatusLocked", battle) then
+        return false
+    end
+    local state = momentumState(battle)
+    if state.playerActedThisTurn or state.skipQueuedPlayerAction then
+        return false
+    end
+    local action = state.queuedPlayerAction
+    if type(action) == "table" and (action.struggle or action.item
+        or action.switch or action.run or action.special == "holdPosition") then
+        return false
+    end
+    if incomingIsRanged(battle, incoming) then
+        return false
+    end
+    if #listChargeNowMoves(battle) == 0 then
+        return false
+    end
+    if incomingIsMelee(battle, incoming)
+        or hostCall("chargeWindowOpen", battle) then
+        return true
+    end
+    return false
+end
+
 local function fireHintForMenu(battle, incoming)
     local preferred, shots = preferredFireNowMove(battle, incoming)
     if type(shots) == "table" and #shots > 1 then
@@ -1088,6 +1194,34 @@ local function fireHintForMenu(battle, incoming)
         return "Clash now"
     end
     return "Special now"
+end
+
+local function chargeHintForMenu(battle, incoming)
+    local shots = listChargeNowMoves(battle)
+    if type(shots) == "table" and #shots > 1 then
+        return "Pick a move"
+    end
+    if shots[1] then
+        return tostring(shots[1].name or shots[1].moveId or "Crash now")
+    end
+    return "Crash the charge"
+end
+
+local function preferredChargeNowMove(battle, incoming)
+    local shots = listChargeNowMoves(battle)
+    if #shots == 0 then
+        return nil, shots, 1
+    end
+    local queued = battle and momentumState(battle).queuedPlayerAction
+    local qid = queued and tostring(queued.id or queued.name or ""):upper():gsub("%s+", "_")
+    if qid and qid ~= "" then
+        for i = 1, #shots do
+            if shots[i].moveId == qid then
+                return shots[i], shots, i
+            end
+        end
+    end
+    return shots[1], shots, 1
 end
 
 -- Serious hits: Focus menu — Dodge / Fire / Cover / Brace / Entrench / Commit.
@@ -1144,6 +1278,54 @@ local function queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
     })
 end
 
+local function queueChargeNowMoveMenu(battle, me, moveName, shots, prefIdx)
+    local choices = {}
+    for i = 1, #shots do
+        local shot = shots[i]
+        choices[#choices + 1] = {
+            label = shot.label or shot.name or shot.moveId,
+            hint = shot.hint or "Crash the charge",
+            id = "charge",
+            moveInst = shot.moveInst,
+        }
+    end
+    hostCall("insertBeforeAnim", battle, {
+        arReactPick = true,
+        arReactEpoch = momentumState(battle).reactEpoch,
+        ui = function()
+            local st = momentumState(battle)
+            if not st.pendingDamage or st.suppressReactDefer then
+                return {
+                    game = battle.game,
+                    update = function(self)
+                        if self.game and self.game.stack then
+                            self.game.stack:pop()
+                        end
+                    end,
+                    draw = function() end,
+                }
+            end
+            return newCalloutPickModal(battle.game, {
+                title = "CHARGE!",
+                subtitle = me,
+                index = prefIdx or 1,
+                pad = #choices > 0 and #choices <= 4,
+                choices = choices,
+                cancelable = false,
+                onPick = function(choice)
+                    local st = momentumState(battle)
+                    local shot = choice
+                    if not shot and shots[1] then
+                        shot = shots[1]
+                    end
+                    st.chargeNowMove = shot and shot.moveInst
+                    finishCalloutPick(battle, me, moveName, "charge", nil)
+                end,
+            })
+        end,
+    })
+end
+
 local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
     if not RD() then
         -- Fallback: commit through immediately.
@@ -1151,13 +1333,18 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
         return
     end
     local function beginFireNow(shots, prefIdx)
+        local st = momentumState(battle)
+        -- FIRE is the react. Kill leftover REACT rows so the HUD cannot
+        -- reopen while the shot picker (or the shot itself) is live.
+        lockReactHud(battle)
+        st.reactEpoch = (st.reactEpoch or 0) + 1
+        scrubReactPickRows(battle)
         shots = shots or {}
         if #shots == 0 then
             finishCalloutPick(battle, me, moveName, "commit", nil)
             return
         end
         if #shots == 1 then
-            local st = momentumState(battle)
             st.fireNowMove = shots[1].moveInst
             st.checkNow = shots[1].checkNow == true
             st.hazeNow = shots[1].hazeNow == true
@@ -1165,6 +1352,24 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
             return
         end
         queueFireNowMoveMenu(battle, me, moveName, shots, prefIdx)
+    end
+    local function beginChargeNow(shots, prefIdx)
+        local st = momentumState(battle)
+        lockReactHud(battle)
+        battle._arNoCounterThisTurn = true
+        st.reactEpoch = (st.reactEpoch or 0) + 1
+        scrubReactPickRows(battle)
+        shots = shots or {}
+        if #shots == 0 then
+            finishCalloutPick(battle, me, moveName, "commit", nil)
+            return
+        end
+        if #shots == 1 then
+            st.chargeNowMove = shots[1].moveInst
+            finishCalloutPick(battle, me, moveName, "charge", nil)
+            return
+        end
+        queueChargeNowMoveMenu(battle, me, moveName, shots, prefIdx)
     end
     local function openReactMenu()
         local pendingMove = nil
@@ -1174,9 +1379,12 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
                 and st.pendingDamage.ctx.move
         end
         local fireNow = canFireNow(battle, pendingMove)
+        local chargeNow = canChargeNow(battle, pendingMove)
         local actions = RD().menuActions(battle, pendingMove, {
             canFireNow = fireNow,
             fireHint = fireHintForMenu(battle, pendingMove),
+            canChargeNow = chargeNow,
+            chargeHint = chargeHintForMenu(battle, pendingMove),
         })
         local choices = {}
         local index = 1
@@ -1229,6 +1437,11 @@ local function queueCalloutPickMenu(battle, me, moveName, preferredKind)
                 if id == "fire" then
                     local _, shots, prefIdx = preferredFireNowMove(battle, pendingMove)
                     beginFireNow(shots, prefIdx)
+                    return
+                end
+                if id == "charge" then
+                    local _, shots, prefIdx = preferredChargeNowMove(battle, pendingMove)
+                    beginChargeNow(shots, prefIdx)
                     return
                 end
                 finishCalloutPick(battle, me, moveName, id, nil)
@@ -1334,6 +1547,10 @@ maybeQueueSameTurnCounter = function(battle)
         return
     end
     state.offerSameTurnCounter = nil
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
+        log(battle, "COUNTER! skip", "charge")
+        return
+    end
     if hostCall("playerStatusLocked", battle) then
         log(battle, "COUNTER! skip", "status-locked")
         return
@@ -1497,7 +1714,8 @@ local function shouldDeferForCalloutPick(battle, ctx)
     if not user or user.isPlayer or not target or not target.isPlayer then
         return false
     end
-    if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn then
+    if battle._arSuppressReactDefer or battle._arPickOfferedThisTurn
+        or battle._arReactLocked or battle._arFireNow then
         return false
     end
     if not shouldOfferCalloutPick(battle, move) then
@@ -1506,6 +1724,7 @@ local function shouldDeferForCalloutPick(battle, ctx)
     -- Drained Focus: COMMIT is the only row, so skip the HUD and take the hit.
     if RD() and not RD().hasReactChoice(battle, move, {
         canFireNow = canFireNow(battle, move),
+        canChargeNow = canChargeNow(battle, move),
     }) then
         return false
     end
@@ -1527,6 +1746,9 @@ local function shouldAutoCounter(battle, ctx)
     end
     local user, target, move = ctx.user, ctx.target, ctx.move
     if not user or not user.isPlayer or not target or target.isPlayer then
+        return false
+    end
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
         return false
     end
     if not move or (move.power or 0) <= 0 or move.category == "status" then
@@ -1569,6 +1791,15 @@ function React.clearPick(battle)
     return clearCalloutPickState(battle)
 end
 
+--- FIRE / CHARGE spent this beat: the REACT HUD stays closed.
+function React.lockHud(battle)
+    lockReactHud(battle)
+end
+
+function React.isLocked(battle)
+    return battle ~= nil and battle._arReactLocked == true
+end
+
 function React.resolvePending(battle)
     return resolvePendingDamage(battle)
 end
@@ -1592,6 +1823,7 @@ function React.shouldOffer(battle, move)
     if RD() then
         return RD().hasReactChoice(battle, move, {
             canFireNow = canFireNow(battle, move),
+            canChargeNow = canChargeNow(battle, move),
         }) == true
     end
     return true
@@ -1599,6 +1831,10 @@ end
 
 function React.canFireNow(battle, incoming)
     return canFireNow(battle, incoming)
+end
+
+function React.canChargeNow(battle, incoming)
+    return canChargeNow(battle, incoming)
 end
 
 local function battlerSpeed(battler)
@@ -1642,6 +1878,9 @@ function React.isGuaranteedCounterHit(battle, user, target)
         return false
     end
     if target and target.isPlayer then
+        return false
+    end
+    if battle._arNoCounterThisTurn or battle._arChargeNow then
         return false
     end
     if battle._arGuaranteedHit or battle._arCounterClash then
@@ -1724,7 +1963,9 @@ function EffectRegistry.runDamaging(battle, ctx, record)
         local move = ctx.move
         -- Cursor default only — menu always offers Focus options.
         local preferred = hostCall("foeMoveIsSpecial", move) and "dodge" or "brace"
-        if canFireNow(battle, move) then
+        if canChargeNow(battle, move) then
+            preferred = "charge"
+        elseif canFireNow(battle, move) then
             preferred = "fire"
         end
         state.awaitingPick = "react"

@@ -22,20 +22,24 @@ Emotions.FILE = {
     stunned = "Stunned",
     surprised = "Surprised",
     sigh = "Sigh",
+    happy = "Happy",
 }
 
 -- Face stays up while the mood is not normal, then fades out.
 Emotions.PORTRAIT_FADE = 0.45
 
--- Short chip labels + fills. Ink is dark on bright chips, light on deep ones.
+-- One dark ink on every chip. Light-on-deep used to leak into Font / the
+-- HUD canvas blit, so faces and dialogue flickered dark ↔ light.
+Emotions.INK = { 0.10, 0.07, 0.06 }
 Emotions.CHIP = {
-    angry = { text = "ANGRY", fill = { 0.82, 0.22, 0.16 }, ink = { 1.00, 0.96, 0.94 } },
-    pain = { text = "TIRED", fill = { 0.56, 0.34, 0.40 }, ink = { 1.00, 0.94, 0.94 } },
-    determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = { 0.16, 0.10, 0.04 } },
-    worried = { text = "WARY", fill = { 0.86, 0.78, 0.30 }, ink = { 0.18, 0.14, 0.04 } },
-    stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = { 0.12, 0.10, 0.22 } },
-    sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = { 0.10, 0.12, 0.16 } },
-    surprised = { text = "WOW", fill = { 0.96, 0.84, 0.22 }, ink = { 0.16, 0.12, 0.04 } },
+    angry = { text = "ANGRY", fill = { 0.90, 0.42, 0.32 }, ink = Emotions.INK },
+    pain = { text = "TIRED", fill = { 0.78, 0.58, 0.62 }, ink = Emotions.INK },
+    determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = Emotions.INK },
+    worried = { text = "WRRY", fill = { 0.86, 0.78, 0.30 }, ink = Emotions.INK },
+    stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = Emotions.INK },
+    sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = Emotions.INK },
+    surprised = { text = "!!!!", fill = { 0.96, 0.84, 0.22 }, ink = Emotions.INK },
+    happy = { text = "HAPPY", fill = { 0.98, 0.72, 0.28 }, ink = Emotions.INK },
 }
 
 local host = {}
@@ -54,6 +58,7 @@ local function freshSide()
         misses = 0,
         critsTaken = 0,
         angryTurns = 0,
+        happy = false,
         hitsLanded = 0,
         lastHeavy = false,
         announced = nil,
@@ -193,6 +198,7 @@ Emotions.HEAT = {
     stunned = { powerMul = 0.92, takenMul = 1.10, accuracy = -0.10, dodge = -0.10 },
     sigh = { powerMul = 1.00, takenMul = 1.00, accuracy = -0.04, dodge = 0.00 },
     surprised = { powerMul = 1.00, takenMul = 1.06, accuracy = 0.00, dodge = -0.04 },
+    happy = { powerMul = 1.00, takenMul = 1.00, accuracy = 0.00, dodge = 0.00 },
 }
 
 local function emptyMods()
@@ -292,6 +298,10 @@ local function derive(side, selfRatio, foeRatio)
     if selfRatio and selfRatio <= lowHpCut() then
         return "pain"
     end
+    -- Happy latches on a foe KO and stays until another mood wins.
+    if side.happy then
+        return "happy"
+    end
     if (side.misses or 0) >= 2 or (side.angryTurns or 0) > 0 then
         return "angry"
     end
@@ -380,18 +390,21 @@ function Emotions.note(battle, ev)
     if kind == "miss" then
         local side = resolveWho(st, battle, ev.side or ev.user)
         if side then
+            side.happy = false
             side.misses = (side.misses or 0) + 1
             side.flash = { mood = "sigh", turns = Emotions.FLASH_TURNS }
         end
     elseif kind == "crit" then
         local victim = resolveWho(st, battle, ev.side or ev.target)
         if victim and not (victim.flash and victim.flash.mood == "stunned") then
+            victim.happy = false
             victim.critsTaken = (victim.critsTaken or 0) + 1
             victim.angryTurns = Emotions.ANGRY_CRIT_TURNS
             victim.flash = { mood = "stunned", turns = Emotions.FLASH_TURNS }
         end
         local attacker = resolveWho(st, battle, ev.user)
         if attacker and attacker ~= victim then
+            attacker.happy = false
             attacker.hitsLanded = (attacker.hitsLanded or 0) + 1
         end
         if ev.foeSurprised then
@@ -404,7 +417,11 @@ function Emotions.note(battle, ev)
         local attacker = resolveWho(st, battle, ev.user or ev.side)
         local target = resolveWho(st, battle, ev.target)
         if attacker then
+            attacker.happy = false
             attacker.hitsLanded = (attacker.hitsLanded or 0) + 1
+        end
+        if target then
+            target.happy = false
         end
         local dmg = tonumber(ev.damage)
         local maxHP = tonumber(ev.maxHp or ev.maxHP)
@@ -415,7 +432,21 @@ function Emotions.note(battle, ev)
             and (dmg / maxHP) >= Emotions.HEAVY_HIT then
             target.lastHeavy = true
         end
-    elseif kind == "faint" or kind == "switch" then
+    elseif kind == "faint" then
+        local _, isPlayer = resolveWho(st, battle, ev.side or ev.battler)
+        -- Our mon just scored the KO: stay happy until the next mood event.
+        if isPlayer == false then
+            st.player.flash = { mood = "happy", turns = Emotions.FLASH_TURNS }
+            st.player.happy = true
+            st.player.hitsLanded = 0
+            st.player.lastHeavy = false
+        end
+        if isPlayer == true then
+            st.player = freshSide()
+        elseif isPlayer == false then
+            st.enemy = freshSide()
+        end
+    elseif kind == "switch" then
         local _, isPlayer = resolveWho(st, battle, ev.side or ev.battler)
         if isPlayer == true then
             st.player = freshSide()

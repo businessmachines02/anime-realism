@@ -101,12 +101,15 @@ return function(env)
     Debug = loadFile("chrome/debug.lua")
     UI = loadFile("chrome/ui.lua")
     Callouts = loadFile("chrome/callouts.lua")
+    if Callouts and UI and type(UI.paintDialoguePlate) == "function" then
+      Callouts.paintPlate = UI.paintDialoguePlate
+      Callouts.PLATE_A = UI.DIALOGUE_A
+    end
   end)
   _G.require = origRequire
   if not loadOk then
     error(loadErr)
   end
-
   local deps = {
     Layout = Layout,
     Sprites = Sprites,
@@ -199,6 +202,16 @@ return function(env)
   function FBV.shouldHoldEngineHit(session, opts)
     return Cues and type(Cues.shouldHoldEngineHit) == "function"
       and Cues.shouldHoldEngineHit(session, opts)
+  end
+
+  function FBV.shouldHoldHitCue(session, opts)
+    return Cues and type(Cues.shouldHoldHitCue) == "function"
+      and Cues.shouldHoldHitCue(session, opts)
+  end
+
+  function FBV.rangedHitHoldActive(session)
+    return Cues and type(Cues.rangedHitHoldActive) == "function"
+      and Cues.rangedHitHoldActive(session)
   end
 
   function FBV.holdCloseHit(session, side, opts)
@@ -359,6 +372,13 @@ return function(env)
     end
   end
 
+  function FBV.playChargeClash(battle, result, ctx)
+    local session = Lifecycle.get(battle)
+    if session and Cues and type(Cues.playChargeClash) == "function" then
+      return Cues.playChargeClash(session, Grid, result, ctx)
+    end
+  end
+
   function FBV.isRangedCounter(opts)
     if Cues and type(Cues.isRangedCounter) == "function" then
       return Cues.isRangedCounter(opts, Projectiles)
@@ -468,6 +488,13 @@ return function(env)
     return false
   end
 
+  function FBV.drawWindowPlayerHud(ren, metrics)
+    if UI and type(UI.drawWindowPlayerHud) == "function" then
+      return UI.drawWindowPlayerHud(ren, metrics)
+    end
+    return false
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
@@ -498,11 +525,21 @@ return function(env)
   -- One FIELD overlay pass: game box + REACT chips + banter strip. Callers
   -- must not also run battle.overlay next() (classic / gen3 / bubbles).
   function FBV.drawFrame(battle)
+    -- drawClassic (FIELD wrap) and BattleState.draw both fire overlay.
+    if battle and battle._arHudDrew then
+      return
+    end
+    if battle then
+      battle._arHudDrew = true
+    end
     FBV.drawUI(battle)
     local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"
       and FBV.fieldAllowsStackedBottomUI(battle)
     if not stacked then
       FBV.drawCallouts(battle)
+    end
+    if love and love.graphics and type(love.graphics.setColor) == "function" then
+      love.graphics.setColor(1, 1, 1, 1)
     end
   end
 

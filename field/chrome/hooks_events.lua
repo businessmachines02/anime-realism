@@ -260,6 +260,7 @@ return function(Hooks)
                     isCalled = ev.isCalled == true,
                     presentationOnly = ev.presentationOnly == true,
                     via = ev.presentationOnly and "cam" or "move_used",
+                    fireNow = battle._arFireNow == true,
                 }
                 local skip = opts.presentationOnly
                 local hit
@@ -339,9 +340,15 @@ return function(Hooks)
                     hitOpts.clash = true
                 end
 
-                -- if the mon is still walking in
-                -- we want to hold out on actually calling the engine to deal damage.
-                if session and type(FBV.shouldHoldEngineHit) == "function" and FBV.shouldHoldEngineHit(session, { user = ev.user })
+                -- Walk-in punch, or a special still charging / in the air:
+                -- stash the knockback so it lands with the contact beat.
+                local holdHit = session and (
+                    (type(FBV.shouldHoldHitCue) == "function"
+                        and FBV.shouldHoldHitCue(session, { user = ev.user }))
+                    or (type(FBV.shouldHoldEngineHit) == "function"
+                        and FBV.shouldHoldEngineHit(session, { user = ev.user }))
+                )
+                if holdHit
                 then
                     if FBV.Log and type(FBV.Log.note) == "function" then
                         pcall(FBV.Log.note, battle, "dmg hold", side, ev.damage,

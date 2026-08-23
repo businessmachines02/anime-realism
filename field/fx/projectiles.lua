@@ -778,6 +778,69 @@ local function drawClashTrail(g, p, x, y, t, c)
   end)
 end
 
+--- Two specials slam together: typed flash, then a smoke screen at mid.
+local function drawClashExplosion(g, p, x, y, t)
+  local c = p.color or { 1.00, 0.72, 0.28 }
+  local c2 = p.color2 or { 0.45, 0.72, 1.00 }
+  local age = p.age or 0
+  local fade = 1 - t * 0.22
+  if t > 0.68 then
+    fade = fade * (1 - (t - 0.68) / 0.32)
+  end
+  local flash = math.max(0, 1 - t * 2.4)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.58 * flash)
+    g.circle("fill", x, y, 12 + t * 26)
+    g.setColor(c2[1], c2[2], c2[3], 0.42 * flash)
+    g.circle("fill", x, y, 8 + t * 18)
+    g.setColor(1, 1, 1, 0.86 * flash)
+    g.circle("fill", x, y, 4.5 + flash * 3.2)
+  end)
+  g.setLineWidth(3.0)
+  g.setColor(c[1], c[2], c[3], 0.78 * fade)
+  g.circle("line", x, y, 6 + t * 26)
+  g.setLineWidth(1.8)
+  g.setColor(c2[1], c2[2], c2[3], 0.58 * fade)
+  g.circle("line", x, y, 4 + t * 18)
+  g.setLineWidth(1.1)
+  g.setColor(1, 1, 1, 0.40 * fade)
+  g.circle("line", x, y, 2.4 + t * 11)
+  for i = 1, 14 do
+    local a = i * (math.pi * 2 / 14) + t * 0.65
+    local d0 = 4 + t * 17
+    local d1 = d0 + 8 + (i % 3) * 3
+    local col = (i % 2 == 0) and c or c2
+    g.setColor(col[1], col[2], col[3], 0.90 * fade)
+    g.setLineWidth((i % 2 == 0) and 2.5 or 1.6)
+    g.line(x + math.cos(a) * d0, y + math.sin(a) * d0 * 0.68,
+      x + math.cos(a) * d1, y + math.sin(a) * d1 * 0.68)
+  end
+  for i = 1, 16 do
+    local a = age * 1.45 + i * 0.82
+    local life = math.min(1, t * 1.12 + (i % 5) * 0.035)
+    local dist = 3.2 + life * (14 + (i % 4) * 3.4)
+    local px = x + math.cos(a) * dist
+    local py = y + math.sin(a) * dist * 0.62 - life * (6 + i % 5)
+    local r = 3.8 + life * (7 + (i % 3) * 2.2)
+    local puff = (0.70 - life * 0.32) * fade
+    g.setColor(0.18, 0.16, 0.16, puff * 0.58)
+    g.circle("fill", px, py, r + 2.6)
+    local tint = (i % 2 == 0) and c or c2
+    g.setColor(
+      tint[1] * 0.42 + 0.30,
+      tint[2] * 0.42 + 0.28,
+      tint[3] * 0.42 + 0.28,
+      puff)
+    g.circle("fill", px, py, r)
+    g.setColor(0.82, 0.80, 0.76, puff * 0.30)
+    g.circle("fill", px - r * 0.22, py - r * 0.28, r * 0.44)
+  end
+  if g.ellipse then
+    g.setColor(0.14, 0.12, 0.12, 0.42 * fade)
+    g.ellipse("fill", x, y + 7, 16 + t * 12, 4.6)
+  end
+end
+
 local function drawBall(g, x, y)
   g.setColor(0.08, 0.06, 0.07, 1)
   g.circle("fill", x, y, 4)
@@ -3082,19 +3145,78 @@ end
 local function drawLightHit(g, p, x, y, t)
   local c = p.color or { 0.92, 0.92, 1.00 }
   local fade = 1 - t
-  g.setColor(1, 1, 1, 0.75 * fade)
-  g.circle("fill", x, y, 1.6 * (1 - t * 0.4))
-  for i = 1, 5 do
-    local a = i * 1.2566 + t * 2.4
-    local dist = 2.2 + t * 8
+  local flash = math.max(0, 1 - t * 1.8)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.38 * flash)
+    g.circle("fill", x, y, 5 + t * 10)
+    g.setColor(1, 1, 1, 0.62 * flash)
+    g.circle("fill", x, y, 2.4)
+  end)
+  g.setLineWidth(2.1)
+  g.setColor(c[1], c[2], c[3], 0.70 * fade)
+  g.circle("line", x, y, 3 + t * 13)
+  g.setLineWidth(1.1)
+  g.setColor(1, 1, 1, 0.42 * fade)
+  g.circle("line", x, y, 1.8 + t * 8)
+  g.setColor(1, 1, 1, 0.82 * fade)
+  g.circle("fill", x, y, 2.0 * (1 - t * 0.35))
+  for i = 1, 8 do
+    local a = i * 0.7854 + t * 2.1
+    local dist = 2.6 + t * 11
     local px = x + math.cos(a) * dist
-    local py = y + math.sin(a) * dist * 0.72 - t * 2
-    g.setColor(c[1], c[2], c[3], 0.85 * fade)
-    g.circle("fill", px, py, 1.3)
-    g.setColor(1, 1, 1, 0.55 * fade)
-    g.circle("fill", px - 0.3, py - 0.3, 0.55)
+    local py = y + math.sin(a) * dist * 0.72 - t * 2.4
+    g.setColor(c[1], c[2], c[3], 0.90 * fade)
+    g.circle("fill", px, py, 1.45)
+    g.setColor(1, 1, 1, 0.60 * fade)
+    g.circle("fill", px - 0.3, py - 0.3, 0.6)
   end
-  drawContact(g, p, x, y, math.min(1, t * 1.15))
+  for i = 1, 4 do
+    local a = i * (math.pi * 0.5) + t * 0.8
+    g.setColor(c[1], c[2], c[3], 0.72 * fade)
+    g.setLineWidth(1.6)
+    g.line(x + math.cos(a) * 2, y + math.sin(a) * 2,
+      x + math.cos(a) * (7 + t * 8), y + math.sin(a) * (5 + t * 6))
+  end
+  if g.ellipse then
+    g.setColor(c[1], c[2], c[3], 0.28 * fade)
+    g.ellipse("fill", x, y + 5, 7 + t * 5, 2.2)
+  end
+  drawContact(g, p, x, y, math.min(1, t * 1.05))
+end
+
+-- Extra beat when a special travel shot arrives: rings, shards, typed flash.
+local function drawSpecialImpact(g, p, x, y, t)
+  local c = p.color or { 0.85, 0.75, 1.00 }
+  local fade = 1 - t
+  local flash = math.max(0, 1 - t * 1.55)
+  withAdd(g, function()
+    g.setColor(c[1], c[2], c[3], 0.48 * flash)
+    g.circle("fill", x, y, 8 + t * 16)
+    g.setColor(1, 1, 1, 0.70 * flash)
+    g.circle("fill", x, y, 3.4)
+  end)
+  g.setLineWidth(2.6)
+  g.setColor(c[1], c[2], c[3], 0.82 * fade)
+  g.circle("line", x, y, 4.2 + t * 20)
+  g.setLineWidth(1.6)
+  g.setColor(1, 1, 1, 0.58 * fade)
+  g.circle("line", x, y, 2.6 + t * 13)
+  g.setLineWidth(1.0)
+  g.setColor(c[1], c[2], c[3], 0.40 * fade)
+  g.circle("line", x, y, 1.4 + t * 8)
+  for i = 1, 12 do
+    local a = i * (math.pi / 6) + t * 0.85
+    local d0 = 3.4 + t * 14
+    local d1 = d0 + 6 + (i % 2) * 3
+    g.setColor(c[1], c[2], c[3], 0.90 * fade)
+    g.setLineWidth((i % 2 == 0) and 2.2 or 1.5)
+    g.line(x + math.cos(a) * d0, y + math.sin(a) * d0 * 0.7,
+      x + math.cos(a) * d1, y + math.sin(a) * d1 * 0.7)
+  end
+  if g.ellipse then
+    g.setColor(c[1], c[2], c[3], 0.36 * fade)
+    g.ellipse("fill", x, y + 5, 11 + t * 7, 3.0)
+  end
 end
 
 local function polyUnpack(pts)
@@ -3877,6 +3999,9 @@ end)
 Projectiles.registerStyle("light_hit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawLightHit(g, p, x, y, t)
 end)
+Projectiles.registerStyle("special_impact", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawSpecialImpact(g, p, x, y, t)
+end)
 Projectiles.registerStyle("crit", function(g, p, x, y, ox, oy, t, c, glitz)
     drawCritBurst(g, p, x, y, t)
 end)
@@ -3987,6 +4112,9 @@ Projectiles.registerStyle("clash_glow", function(g, p, x, y, ox, oy, t, c, glitz
 end)
 Projectiles.registerStyle("clash_trail", function(g, p, x, y, ox, oy, t, c, glitz)
     drawClashTrail(g, p, x, y, t, c)
+end)
+Projectiles.registerStyle("clash_burst", function(g, p, x, y, ox, oy, t, c, glitz)
+    drawClashExplosion(g, p, x, y, t)
 end)
 Projectiles.registerStyle("power_impact", function(g, p, x, y, ox, oy, t, c, glitz)
     drawPowerBurst(g, x, y, t, p.age, c, { impact = true })
@@ -5192,7 +5320,7 @@ function Projectiles.lightHit(session, side, opts)
     style = "light_hit",
     glitz = glitz,
     sx = x, sy = y, ex = x, ey = y,
-    duration = 0.32,
+    duration = 0.46,
     arc = 0,
     color = fx.color or TYPE_COLORS[fx.moveType] or TYPE_COLORS.NORMAL,
   })
@@ -5282,8 +5410,8 @@ function Projectiles.groundKick(session, side, opts)
     kind = "effect",
     style = "ground_kick",
     glitz = glitz,
-    sx = x, sy = y + 5, ex = x + fx * 6, ey = y + 3,
-    duration = 0.40,
+    sx = x, sy = y + 5, ex = x + fx * 8, ey = y + 3,
+    duration = 0.50,
     arc = 4,
     color = GROUND_KICK_COLORS[glitz] or GROUND_KICK_COLORS.dust,
   })
@@ -5519,7 +5647,7 @@ function Projectiles.clashBurst(session, side, opts)
   return Projectiles.powerHit(session, foeSide, opts)
 end
 
---- Two specials meet in the middle. Short streaks + a burst at the midpoint.
+--- Two specials meet in the middle. Streaks slam, then a smoke-screen boom.
 function Projectiles.beamClash(session, playerOpts, enemyOpts)
   playerOpts = playerOpts or {}
   enemyOpts = enemyOpts or {}
@@ -5530,7 +5658,8 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
   if not (ax and bx) then
     return nil
   end
-  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5 - 2
+  local meet = 0.28
   local function streak(sx, sy, opts)
     local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
     local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
@@ -5539,27 +5668,34 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
       moveType = moveType,
       category = "special",
     })
-    return spawn(session, {
+    local shot = spawn(session, {
       kind = "move",
       style = (fx and fx.style ~= "contact" and fx.style) or "beam",
       glitz = fx and fx.glitz,
       sx = sx, sy = sy, ex = mx, ey = my,
-      duration = 0.28,
+      duration = meet,
       arc = 0,
       color = (fx and fx.color) or color,
       moveId = opts.moveId or opts.id,
       moveType = moveType,
     })
+    if shot then
+      shot.noLand = true
+    end
+    return shot
   end
   streak(ax, ay, playerOpts)
   streak(bx, by, enemyOpts)
   local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local eType = tostring(enemyOpts.moveType or enemyOpts.type or "NORMAL"):upper()
   local color = TYPE_COLORS[pType] or TYPE_COLORS.NORMAL
+  local color2 = TYPE_COLORS[eType] or TYPE_COLORS.NORMAL
   spawn(session, {
     kind = "effect",
     style = "clash_glow",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.72,
+    duration = 0.82,
+    delay = meet * 0.85,
     arc = 0,
     color = color,
   })
@@ -5567,18 +5703,95 @@ function Projectiles.beamClash(session, playerOpts, enemyOpts)
     kind = "effect",
     style = "clash_trail",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.48,
+    duration = 0.52,
+    delay = meet * 0.85,
     arc = 0,
     color = color,
   })
-  return spawn(session, {
+  local burst = spawn(session, {
     kind = "effect",
-    style = "power_hit",
+    style = "clash_burst",
     sx = mx, sy = my, ex = mx, ey = my,
-    duration = 0.36,
+    duration = 0.88,
+    delay = meet * 0.92,
     arc = 0,
     color = color,
   })
+  if burst then
+    burst.color2 = color2
+  end
+  return burst
+end
+
+--- Two physicals crash in the middle. Dashes meet, then a dust-and-shock boom.
+function Projectiles.bodyClash(session, playerOpts, enemyOpts)
+  playerOpts = playerOpts or {}
+  enemyOpts = enemyOpts or {}
+  local atk = session and session.playerMon
+  local def = session and session.enemyMon
+  local ax, ay = center(session, atk)
+  local bx, by = center(session, def)
+  if not (ax and bx) then
+    return nil
+  end
+  local mx, my = (ax + bx) * 0.5, (ay + by) * 0.5 - 1
+  local meet = 0.30
+  local function dash(sx, sy, opts)
+    local moveType = tostring(opts.moveType or opts.type or "NORMAL"):upper()
+    local color = TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL
+    local shot = spawn(session, {
+      kind = "effect",
+      style = "dash_smear",
+      glitz = "dash",
+      sx = sx, sy = sy, ex = mx, ey = my,
+      duration = meet,
+      arc = 0,
+      color = color,
+      moveId = opts.moveId or opts.id,
+      moveType = moveType,
+    })
+    if shot then
+      shot.noLand = true
+    end
+    return shot
+  end
+  dash(ax, ay, playerOpts)
+  dash(bx, by, enemyOpts)
+  local pType = tostring(playerOpts.moveType or playerOpts.type or "NORMAL"):upper()
+  local eType = tostring(enemyOpts.moveType or enemyOpts.type or "NORMAL"):upper()
+  local color = TYPE_COLORS[pType] or { 0.86, 0.78, 0.58 }
+  local color2 = TYPE_COLORS[eType] or { 0.62, 0.52, 0.40 }
+  spawn(session, {
+    kind = "effect",
+    style = "ground_kick",
+    sx = mx, sy = my + 4, ex = mx, ey = my + 2,
+    duration = 0.56,
+    delay = meet * 0.85,
+    arc = 3,
+    color = { 0.72, 0.62, 0.44 },
+  })
+  spawn(session, {
+    kind = "effect",
+    style = "clash_glow",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.72,
+    delay = meet * 0.85,
+    arc = 0,
+    color = color,
+  })
+  local burst = spawn(session, {
+    kind = "effect",
+    style = "clash_burst",
+    sx = mx, sy = my, ex = mx, ey = my,
+    duration = 0.84,
+    delay = meet * 0.90,
+    arc = 0,
+    color = color,
+  })
+  if burst then
+    burst.color2 = color2
+  end
+  return burst
 end
 
 -- Occupancy lives on grid.haze. Paint loops in drawHazeLanes each frame.
@@ -5606,6 +5819,53 @@ function Projectiles.hazeCut(session, cells)
       end
     end
   end
+end
+
+local SPECIAL_LAND_STYLE = {
+  beam = true, bolt = true, stream = true, ember = true, shadow = true,
+  surf = true, razor = true, swift = true, blast = true, gust = true,
+  drain = true, rock = true, slide = true, spiral = true, multi = true,
+  area = true, wave = true, aura = true, sand = true,
+}
+
+local function shouldSpecialLand(p)
+  if not p or p.style == "special_impact" or p.noLand then
+    return false
+  end
+  if p.specialLand then
+    return true
+  end
+  if p.kind == "move" then
+    return true
+  end
+  return SPECIAL_LAND_STYLE[p.style] == true
+end
+
+function Projectiles.specialImpact(session, spec)
+  spec = spec or {}
+  local x, y = spec.x, spec.y
+  if (not x or not y) and spec.followSide then
+    local ent = (spec.followSide == "player") and session.playerMon or session.enemyMon
+    x, y = center(session, ent)
+  end
+  if not x then
+    return nil
+  end
+  local moveType = tostring(spec.moveType or "NORMAL"):upper()
+  if moveType == "" then
+    moveType = "NORMAL"
+  end
+  return spawn(session, {
+    kind = "effect",
+    style = "special_impact",
+    glitz = spec.glitz or moveType,
+    sx = x, sy = y, ex = x, ey = y,
+    duration = 0.56,
+    arc = 0,
+    color = spec.color or TYPE_COLORS[moveType] or TYPE_COLORS.NORMAL,
+    pinTip = spec.followSide ~= nil,
+    followSide = spec.followSide,
+  })
 end
 
 function Projectiles.powerHit(session, side, opts)
@@ -5860,6 +6120,22 @@ function Projectiles.tick(session, dt)
     else
       p.px = p.sx + (p.ex - p.sx) * t
       p.py = p.sy + (p.ey - p.sy) * t - math.sin(t * math.pi) * (p.arc or 0)
+    end
+    if t >= 1 and shouldSpecialLand(p) and not p._landFx then
+      p._landFx = true
+      Projectiles.specialImpact(session, {
+        x = p.px or p.ex,
+        y = p.py or p.ey,
+        color = p.color,
+        moveType = p.moveType,
+        followSide = p.followSide,
+      })
+    end
+    if t >= 1 and p.holdHit and not p._hitFlushed then
+      p._hitFlushed = true
+      if type(p.onImpact) == "function" then
+        pcall(p.onImpact)
+      end
     end
     if t >= 1 and p.kind == "ball" and p.hold > 0 then
       local holdAge = p.age - p.duration

@@ -2074,10 +2074,14 @@ function Lifecycle.onTurnStarted(battle)
     end
     local function keepSide(side)
         local ent = (side == "player") and session.playerMon or session.enemyMon
-        if ent and ent._pendingCloseStrike then
+        if ent and (ent._pendingCloseStrike or ent._pendingRangedCast) then
             return true
         end
         local Cues = session._deps and session._deps.Cues
+        if Cues and type(Cues.rangedHitHoldActive) == "function"
+            and Cues.rangedHitHoldActive(session) then
+            return true
+        end
         return Cues and type(Cues.pendingMultiHitFollowUp) == "function"
             and Cues.pendingMultiHitFollowUp(session, battle, side)
     end
@@ -2102,6 +2106,10 @@ function Lifecycle.onTurnStarted(battle)
         battle._arCloseGapDamage = nil
         battle._arCloseGapApply = nil
         battle._arCloseGapResuming = nil
+        battle._arRangedHitHold = nil
+        battle._arHeldHpPaint = nil
+        session._rangedShotHold = nil
+        session._rangedHoldUntil = nil
         battle._arAwaitingReact = nil
         battle._arAwaitAgain = nil
         battle._arAwaitAgainSide = nil
@@ -2124,6 +2132,8 @@ function Lifecycle.onTurnStarted(battle)
                 return
             end
             ent._pendingCloseStrike = nil
+            ent._pendingRangedCast = nil
+            ent._rangedChargeAt = nil
             ent._closeStrikeDeadline = nil
             ent._closeStrikeWait = nil
             ent._closeStrikeArmedAt = nil

@@ -2,7 +2,7 @@
 --
 -- Three voices; each paints at most once per frame:
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
---      Compact bottom box only. Never the classic white slab, never a bubble.
+--      One light glass plate. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
 --   3. REACT / miss  — status chips on the battler after a successful
 --      REACT! pick (DODGE / BRACE / COVER / HOLD) or an accuracy MISS.
@@ -11,10 +11,10 @@
 -- BattleState still owns phases, cursors, input, and turn resolution.
 -- This module also paints command / move HUDs and world-anchored HP bars.
 --
--- World-anchored HP bars paint on the battle UI overlay with world→UI mapping
--- (survey zoom makes worldViewSize ≠ 160×144). Floor / cover / projectiles
--- still paint from Lifecycle.drawWorldOverlay on the world canvas when that
--- pass is visible.
+-- Battler chrome (HP / Focus / chips / face) is authored on the UI overlay
+-- corners, then docked to the window via setBattleUIAnchor (same path as
+-- Gen1BetterMenus / WideBattle EXTENDED). Move chrome stays in the letterbox.
+-- Floor / cover / projectiles still paint from Lifecycle.drawWorldOverlay.
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -52,15 +52,59 @@ end
 -- Remaining HP for the chip. Prefer live `mon.hp` over the engine drain
 -- numerator (`shownHP`): a parked queue / send-out can leave shownHP at 0
 -- while the mon is still up, which painted an empty bar on a living Pokémon.
-function UI.battlerHP(battler)
+function UI.hitPaintHeld(battle)
+    if not battle then
+        return false
+    end
+    if battle._arRangedHitHold then
+        return true
+    end
+    if type(battle._arHeldHpPaint) == "table" then
+        return true
+    end
+    local apply = battle._arCloseGapApply
+    if type(apply) == "table" and #apply > 0 then
+        return true
+    end
+    local dmg = battle._arCloseGapDamage
+    if type(dmg) == "table" and (dmg.ctx or #dmg > 0) then
+        return true
+    end
+    return false
+end
+
+function UI.heldHpSnap(battle, battler)
+    local snap = battle and battle._arHeldHpPaint
+    if type(snap) ~= "table" or not battler then
+        return nil
+    end
+    if battler == battle.player then
+        return tonumber(snap.player)
+    end
+    if battler == battle.enemy then
+        return tonumber(snap.enemy)
+    end
+    return nil
+end
+
+function UI.battlerHP(battler, battle)
     local mon = battler and battler.mon
     local maxHP = tonumber(mon and mon.stats and mon.stats.hp)
     if not maxHP or maxHP < 1 then
         maxHP = 1
     end
-    local hp = tonumber(mon and mon.hp)
-    if hp == nil then
-        hp = tonumber(battler and battler.shownHP) or 0
+    local live = tonumber(mon and mon.hp)
+    local shown = tonumber(battler and battler.shownHP)
+    local snap = UI.heldHpSnap(battle, battler)
+    local hp = live
+    -- Charge / travel shot: keep the pre-hit bar even if the engine
+    -- already resolved mon.hp. Snapshot wins; stashed shownHP is next.
+    if snap ~= nil then
+        hp = snap
+    elseif UI.hitPaintHeld(battle) and shown ~= nil then
+        hp = shown
+    elseif hp == nil then
+        hp = shown or 0
     end
     if hp < 0 then
         hp = 0
@@ -121,14 +165,54 @@ local function fitText(Font, value, maxWidth)
     return text .. "+"
 end
 
-local function box(g, x, y, w, h)
-    g.setColor(0.96, 0.92, 0.82, 0.96)
-    g.rectangle("fill", x, y, w, h)
-    g.setColor(0.10, 0.07, 0.06, 1)
-    g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
-    if w > 3 and h > 3 then
-        g.rectangle("line", x + 1.5, y + 1.5, w - 3, h - 3)
+-- Command / move HUD: one cream plate.
+-- Plain dialogue: one light glass slab, always the same fill.
+UI.HUD_PANEL_A = 0.40
+UI.DIALOGUE_FILL = { 0.98, 0.96, 0.90 }
+UI.DIALOGUE_A = 0.78
+UI.DIALOGUE_X = 4
+UI.DIALOGUE_Y = 119
+UI.DIALOGUE_W = 152
+UI.DIALOGUE_H = 23
+local DARK_INK = { 0.08, 0.06, 0.05, 1 }
+
+local function resetTint(g)
+    if g and type(g.setColor) == "function" then
+        g.setColor(1, 1, 1, 1)
     end
+end
+
+function UI.hudPanelAlpha()
+    return UI.HUD_PANEL_A
+end
+
+function UI.dialogueRect()
+    return UI.DIALOGUE_X, UI.DIALOGUE_Y, UI.DIALOGUE_W, UI.DIALOGUE_H
+end
+
+-- One light fill + one thin edge. No second frame, no dark/light swap.
+function UI.paintDialoguePlate(g, x, y, w, h, alpha)
+    if not (g and type(g.setColor) == "function") then
+        return
+    end
+    alpha = tonumber(alpha)
+    if alpha == nil then
+        alpha = UI.DIALOGUE_A
+    end
+    if alpha <= 0 then
+        return
+    end
+    local fill = UI.DIALOGUE_FILL
+    g.setColor(fill[1], fill[2], fill[3], alpha)
+    g.rectangle("fill", x, y, w, h)
+    g.setColor(0.18, 0.14, 0.12, math.min(1, alpha + 0.15))
+    g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
+end
+
+-- Move / command chrome: a single translucent fill. No second frame, no halo.
+local function hudBox(g, x, y, w, h)
+    g.setColor(0.96, 0.92, 0.82, UI.HUD_PANEL_A)
+    g.rectangle("fill", x, y, w, h)
 end
 
 local function hpBar(g, x, y, w, ratio, fill)
@@ -194,6 +278,7 @@ UI.FACE_SIZE = 28
 UI.FACE_GAP = 28
 UI.FACE_LIFT = 10
 UI.FACE_MARGIN = 2
+UI.HUD_PAD = 4
 UI.CHIP_AIR = 6
 
 function UI.faceGap(ent)
@@ -205,22 +290,159 @@ function UI.faceGap(ent)
     return gap
 end
 
--- Player chrome hugs the left edge; foe hugs the right. Y follows the body.
-function UI.faceAnchor(side, bodyX, bodyY, size, gap, canvasW)
+-- Player chrome hugs top-left; foe hugs top-right of the UI overlay.
+-- `gap` is stack height above the face.
+--
+-- Widescreen docking: author the stack in native UI pixels. The foe uses
+-- the engine's setBattleUIAnchor "topright". The engine has no topleft, so
+-- the player stack is stored and blitted after endFrame (mod wrap only).
+function UI.hudAnchor(side)
+    if side == "enemy" then
+        return "topright"
+    end
+    return "window-left"
+end
+
+function UI.hudStackBox(fx, fy, size, stackH)
     size = tonumber(size) or UI.FACE_SIZE
-    bodyY = tonumber(bodyY) or 0
+    fx = tonumber(fx) or 0
+    fy = tonumber(fy) or 0
+    stackH = tonumber(stackH) or 0
+    if stackH < 0 then
+        stackH = 0
+    end
+    local barW = UI.HP_CHIP_W or 27
+    local mid = fx + math.floor(size / 2)
+    local half = math.floor(barW / 2)
+    local left = math.min(fx, mid - half)
+    local right = math.max(fx + size, mid + barW - half)
+    local top = fy - stackH
+    if top < 0 then
+        top = 0
+    end
+    local bottom = fy + size
+    return left, top, math.max(1, right - left), math.max(1, bottom - top)
+end
+
+function UI.anchorFieldHud(battle, side, x, y, w, h)
+    local ren = battle and battle.game and battle.game.renderer
+    if not ren then
+        return false
+    end
+    if side == "player" then
+        ren._arFieldHudLeft = {
+            x = tonumber(x) or 0,
+            y = tonumber(y) or 0,
+            w = tonumber(w) or 1,
+            h = tonumber(h) or 1,
+            canvas = ren.battleHUDCanvas,
+        }
+        return true
+    end
+    if type(ren.setBattleUIAnchor) ~= "function" then
+        return false
+    end
+    local ok = pcall(ren.setBattleUIAnchor, ren, x, y, w, h, UI.hudAnchor(side))
+    return ok == true
+end
+
+-- Copy the stored player stack to the real window left. Called after the
+-- engine finishes compositing so this is not clipped to the letterbox.
+function UI.drawWindowPlayerHud(ren, metrics)
+    local box = ren and ren._arFieldHudLeft
+    local canvas = box and (box.canvas or (ren and ren.battleHUDCanvas))
+    if not (box and canvas and love and love.graphics) then
+        return false
+    end
+    metrics = metrics or {}
+    local g = love.graphics
+    local ww = tonumber(metrics.width)
+    local wh = tonumber(metrics.height)
+    if not ww and type(g.getWidth) == "function" then
+        ww = g.getWidth()
+    end
+    if not wh and type(g.getHeight) == "function" then
+        wh = g.getHeight()
+    end
+    if not (ww and wh and ww > 0 and wh > 0) then
+        return false
+    end
+    local dpiX = tonumber(metrics.dpiX) or 1
+    local dpiY = tonumber(metrics.dpiY) or 1
+    if dpiX < 1 then
+        dpiX = 1
+    end
+    if dpiY < 1 then
+        dpiY = 1
+    end
+    local uiw, uih = UI.WIDTH, UI.HEIGHT
+    if ren and type(ren.uiSize) == "function" then
+        local a, b = ren:uiSize()
+        if type(a) == "number" and a > 0 then
+            uiw, uih = a, b or uih
+        end
+    end
+    local up = 1
+    if type(ren.uiScale) == "function" then
+        up = tonumber(ren:uiScale()) or 1
+    end
+    if ren.uiFill then
+        up = math.min((wh * dpiY) / uih, (ww * dpiX) / uiw)
+    end
+    if up < 1 then
+        up = 1
+    end
+    local ux, uy = up / dpiX, up / dpiY
+    local dx = (box.x or 0) * ux
+    local dy = (box.y or 0) * uy
+    local dw = (box.w or 1) * ux
+    local dh = (box.h or 1) * uy
+    dx = math.max(0, math.min(math.max(0, ww - dw), dx))
+    dy = math.max(0, math.min(math.max(0, wh - dh), dy))
+    g.push("all")
+    if type(g.origin) == "function" then
+        g.origin()
+    end
+    if type(g.setScissor) == "function" then
+        g.setScissor()
+    end
+    g.setColor(1, 1, 1, 1)
+    if type(ren.blitCanvas) == "function" then
+        local ok = pcall(ren.blitCanvas, ren, canvas, ux, uy, nil, ux, uy,
+            dx - (box.x or 0) * ux, dy - (box.y or 0) * uy,
+            dx, dy, dw, dh, dpiX, dpiY)
+        g.pop()
+        return ok == true
+    end
+    if type(g.newQuad) == "function" and canvas.getWidth then
+        local quad = g.newQuad(box.x, box.y, box.w, box.h,
+            canvas:getWidth(), canvas:getHeight())
+        g.draw(canvas, quad, dx, dy, 0, ux, uy)
+    else
+        g.draw(canvas, dx - (box.x or 0) * ux, dy - (box.y or 0) * uy, 0, ux, uy)
+    end
+    g.pop()
+    return true
+end
+
+function UI.faceAnchor(side, _bodyX, _bodyY, size, gap, canvasW)
+    size = tonumber(size) or UI.FACE_SIZE
     canvasW = tonumber(canvasW) or UI.WIDTH
-    local margin = UI.FACE_MARGIN or 2
+    local pad = UI.HUD_PAD or UI.FACE_MARGIN or 4
     local fx
     if side == "player" then
-        fx = margin
+        fx = pad
     else
-        fx = canvasW - margin - size
+        fx = canvasW - pad - size
     end
     if fx < 1 then
         fx = 1
     end
-    return fx, bodyY - math.floor(size / 2) - (UI.FACE_LIFT or 0)
+    local stackAbove = tonumber(gap) or 0
+    if stackAbove < 0 then
+        stackAbove = 0
+    end
+    return fx, pad + stackAbove
 end
 
 -- HP chip sits on the portrait: centered on the face, just above it.
@@ -371,6 +593,8 @@ local CHIP_PHRASE = {
     { "NARROWLY AVOIDED", "DODGE" },
     { "EVADED SKILLFULLY", "DODGE" },
     { "DODGED ASIDE", "DODGE" },
+    { "CRASHED THROUGH", "CHARGE" },
+    { "THEY CRASHED", "CHARGE" },
 }
 
 local function chipFlat(text)
@@ -462,6 +686,7 @@ function UI.drawFace(g, img, x, y, size, alpha)
     end
     g.setColor(1, 1, 1, alpha)
     g.draw(img, math.floor(x + 0.5), math.floor(y + 0.5), 0, scale, scale)
+    resetTint(g)
 end
 
 function UI.moodChipSpec(mood)
@@ -502,10 +727,11 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
         y = 1
     end
     local fill = chip.fill or { 1, 1, 0.94 }
-    local ink = chip.ink or { 0, 0, 0 }
+    local ink = chip.ink or DARK_INK
+    g.push("all")
     g.setColor(fill[1], fill[2], fill[3], 1)
     g.rectangle("fill", cx, y, w, h)
-    g.setColor(ink[1], ink[2], ink[3], 1)
+    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
     g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
     if Font and type(Font.draw) == "function" then
         g.push()
@@ -514,6 +740,8 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
         Font.draw(text, 0, 0)
         g.pop()
     end
+    resetTint(g)
+    g.pop()
 end
 
 -- Draw HP chips above each field battler.
@@ -530,6 +758,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
     camY = camY or 0
     mode = mode or "ui"
     local ren = battle and battle.game and battle.game.renderer
+    if ren then
+        ren._arFieldHudLeft = nil
+    end
     local ow = battle and battle.game and battle.game.overworld
     if (camX == 0 and camY == 0) and ow and ow.camera then
         camX = ow.camera.x or 0
@@ -545,9 +776,9 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local lift = UI.barLift(ent)
             local wx = (ent.px or 0) - camX + 8
             local wy = (ent.py or 0) - camY - lift
-            local x, y = wx, wy
+            local spriteX, spriteY = wx, wy
             if mode == "ui" and Coords and type(Coords.worldViewToUi) == "function" then
-                x, y = Coords.worldViewToUi(wx, wy, ren)
+                spriteX, spriteY = Coords.worldViewToUi(wx, wy, ren)
             end
             local canvasW, canvasH = overlaySize(ren)
             if mode ~= "ui" and ren and type(ren.worldViewSize) == "function" then
@@ -576,35 +807,18 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 faceImg, faceA = UI.faceFlash(battle, item.side == "player")
             end
             local fs = UI.FACE_SIZE or 28
-            local fx, fy
-            local onFace = faceImg ~= nil and (faceA or 1) > 0.02
-            if onFace then
-                local bx = (ent.px or 0) - camX + 8
-                local by = (ent.py or 0) - camY + 4
-                if mode == "ui" and Coords and type(Coords.worldViewToUi) == "function" then
-                    bx, by = Coords.worldViewToUi(bx, by, ren)
-                end
-                fx, fy = UI.faceAnchor(item.side, bx, by, fs, nil, canvasW)
-                local stackH = extraTop + chipTop + UI.HP_CHIP_H + 2
-                if fy - stackH < 1 then
-                    fy = 1 + stackH
-                end
-                if fy + fs > canvasH - 1 then
-                    fy = canvasH - 1 - fs
-                end
-                if fy < 1 then
-                    fy = 1
-                end
-                x, y = UI.hpAboveFace(fx, fy, fs)
-            else
-                x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop + chipTop)
+            local stackH = extraTop + chipTop + UI.HP_CHIP_H + 2
+            local fx, fy = UI.faceAnchor(item.side, nil, nil, fs, stackH, canvasW)
+            if fy + fs > canvasH - 1 then
+                fy = canvasH - 1 - fs
             end
+            local x, y = UI.hpAboveFace(fx, fy, fs)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
-            -- Stash UI anchors for speech bubbles / other overlay chrome.
+            -- Bubbles still point at the mon; HUD chrome is screen-pinned.
             if mode == "ui" then
                 ent._fieldWorldX, ent._fieldWorldY = wx, wy
-                ent._fieldScreenX, ent._fieldScreenY = x, y
+                ent._fieldScreenX, ent._fieldScreenY = spriteX, spriteY
             end
             local initial = barInitial(battler)
             local barW = UI.HP_BAR_W
@@ -612,16 +826,17 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local totalW = letterW + 1 + barW
             local left = x - math.floor(totalW / 2)
             if Font and type(Font.draw) == "function" then
-                g.setColor(0.08, 0.06, 0.05, 1)
+                g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
                 g.push()
                 g.translate(left, y - 1)
                 g.scale(0.75, 0.75)
                 Font.draw(initial, 0, 0)
                 g.pop()
             else
-                g.setColor(0.08, 0.06, 0.05, 1)
+                g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
                 g.print(initial, left, y - 2)
             end
+            resetTint(g)
             if showFocus and type(UI.focusRatio) == "function" then
                 local target = tonumber(UI.focusRatio(battle, item.side == "player"))
                 if target then
@@ -635,7 +850,7 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                     focusBar(g, left + letterW + 1, y - extraTop, barW, shown[key])
                 end
             end
-            local ratio, hp, maxHP = UI.battlerHP(battler)
+            local ratio, hp, maxHP = UI.battlerHP(battler, battle)
             local fills = battle._arHpBarFill
             if type(fills) ~= "table" then
                 fills = {}
@@ -644,10 +859,6 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local target = UI.hpFillWidth(barW - 2, hp, maxHP)
             fills[item.side] = UI.easeHpFill(fills[item.side], target)
             hpBar(g, left + letterW + 1, y, barW, ratio, fills[item.side])
-            if not onFace then
-                g.setColor(0.12, 0.09, 0.08, 1)
-                g.polygon("fill", x - 1, y + 4, x + 1, y + 4, x, y + 6)
-            end
             local stackY = y - extraTop
             if chip then
                 stackY = stackY - (UI.CHIP_H + 1)
@@ -660,9 +871,14 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             if faceImg and (faceA or 1) > 0.02 and fx then
                 UI.drawFace(g, faceImg, fx, fy, fs, faceA)
             end
+            if mode == "ui" then
+                resetTint(g)
+                local bx, by, bw, bh = UI.hudStackBox(fx, fy, fs, stackH)
+                UI.anchorFieldHud(battle, item.side, bx, by, bw, bh)
+            end
         end
     end
-    g.setColor(1, 1, 1, 1)
+    resetTint(g)
 end
 
 local function drawScaled(g, Font, text, x, y, scale)
@@ -670,6 +886,37 @@ local function drawScaled(g, Font, text, x, y, scale)
     g.push()
     g.translate(x, y)
     g.scale(scale, scale)
+    Font.draw(text, 0, 0)
+    g.pop()
+end
+
+local function labelWidth(Font, text)
+    if Font and type(Font.getWidth) == "function" then
+        return tonumber(Font.getWidth(text)) or (#text * 8)
+    end
+    if Font and type(Font.width) == "function" then
+        return tonumber(Font.width(text)) or (#text * 8)
+    end
+    return #tostring(text or "") * 8
+end
+
+local function drawHudLabel(g, Font, text, x, y, scale, alignRight, ink)
+    if not (Font and type(Font.draw) == "function") then
+        return
+    end
+    scale = scale or 1
+    ink = ink or DARK_INK
+    local ox = 0
+    if alignRight then
+        ox = -labelWidth(Font, text)
+    end
+    g.push("all")
+    g.translate(x, y)
+    if scale ~= 1 then
+        g.scale(scale, scale)
+    end
+    g.translate(ox, 0)
+    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
     Font.draw(text, 0, 0)
     g.pop()
 end
@@ -693,7 +940,8 @@ end
 local function drawCommand(g, Font, battle)
     -- Draws FIGHT/PKMN/ITEM/RUN at the panel corners: TL, TR, BL, BR.
     local x, y, w, h = 48, 100, 140, 36  -- x a little more left, w wider
-    box(g, x, y, w, h)
+    hudBox(g, x, y, w, h)
+
     local labels = commandLabels(battle)
     local index = math.max(1, math.min(4, battle.menuIndex or 1))
     local scale = 0.90
@@ -711,34 +959,17 @@ local function drawCommand(g, Font, battle)
     for i = 1, 4 do
         local tx = panel[i].tx
         local ty = panel[i].ty
-        if Font and type(Font.draw) == "function" then
-            g.setColor(0.08, 0.06, 0.05, 1)
-            g.push()
-            g.translate(tx, ty)
-            g.scale(scale, scale)
-            -- Text anchor: align left for TL/BL, right for TR/BR
-            if i == 2 or i == 4 then
-                -- Move left for right alignment
-                local label = labels[i] or ""
-                local textWidth = Font.getWidth and Font.getWidth(label) or (#label * 8)
-                g.translate(-textWidth, 0)
-            end
-            Font.draw(labels[i], 0, 0)
-            g.pop()
-        end
+        drawHudLabel(g, Font, labels[i], tx, ty, scale, i == 2 or i == 4)
         if i == index then
             -- Slightly to left for TL/BL, rightward for TR/BR
             local selX = tx
             if i == 2 or i == 4 then
-                local label = labels[i] or ""
-                local textWidth = Font.getWidth and Font.getWidth(label) or (#label * 8)
-                selX = tx - textWidth
-                drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
-            else
-                drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
+                selX = tx - labelWidth(Font, labels[i] or "")
             end
+            drawCodeScaled(g, Font, 0xED, selX - 14, ty, 0.9)
         end
     end
+    g.setColor(1, 1, 1, 1) -- Reset color afterwards
 end
 
 local function moveRows(battle)
@@ -748,10 +979,76 @@ local function moveRows(battle)
     return battle.player and battle.player.curMoves or {}
 end
 
+local function moveDefOf(battle, move)
+    if not (battle and move) then
+        return nil
+    end
+    if type(battle.moveDef) == "function" then
+        local ok, def = pcall(battle.moveDef, battle, move)
+        if ok and type(def) == "table" then
+            return def
+        end
+    end
+    local dex = battle.data and battle.data.moves
+    local id = move.id
+    if id and type(dex) == "table" and type(dex[id]) == "table" then
+        return dex[id]
+    end
+    return nil
+end
+
 local function moveName(battle, move)
     if not move then return "-" end
-    local def = battle.data and battle.data.moves and battle.data.moves[move.id]
-    return def and def.name or tostring(move.id or "-")
+    local def = moveDefOf(battle, move)
+    return (def and def.name) or tostring(move.id or "-")
+end
+
+-- Remaining PP, plus max when the instance or dex has one.
+function UI.movePP(battle, move)
+    if not move or move.struggle then
+        return nil, nil
+    end
+    local cur = tonumber(move.pp)
+    if cur == nil then
+        return nil, nil
+    end
+    if cur < 0 then
+        cur = 0
+    end
+    cur = math.floor(cur)
+    local def = moveDefOf(battle, move)
+    local max = tonumber(move.maxPP or move.ppMax or move.maxPp)
+        or tonumber(def and (def.maxPP or def.ppMax or def.pp))
+    if max ~= nil then
+        max = math.floor(max)
+        if max < 0 then
+            max = 0
+        end
+    end
+    return cur, max
+end
+
+function UI.movePPLabel(battle, move, withMax)
+    local cur, max = UI.movePP(battle, move)
+    if cur == nil then
+        return nil
+    end
+    if withMax and max ~= nil then
+        return tostring(cur) .. "/" .. tostring(max)
+    end
+    return tostring(cur)
+end
+
+local function drawHeaderPP(g, Font, battle, move, right, y)
+    local header = UI.movePPLabel(battle, move, true)
+    if not header then
+        return
+    end
+    local cur = UI.movePP(battle, move)
+    local ink = cur == 0
+        and { 0.78, 0.18, 0.12, 1 }
+        or { 0.35, 0.30, 0.25, 1 }
+    drawHudLabel(g, Font, "PP " .. header, right, y, 1, true, ink)
 end
 
 function UI.moveHudStyle(style)
@@ -768,10 +1065,10 @@ local function drawMovesClassic(g, Font, battle)
     local index = battle.phase == "mimicSelect"
         and (battle.mimicIndex or 1) or (battle.moveIndex or 1)
     local x, y, w, h = 4, 100, 152, 40
-    box(g, x, y, w, h)
+    hudBox(g, x, y, w, h)
     if Font and type(Font.draw) == "function" then
-        g.setColor(0.35, 0.30, 0.25, 1)
-        Font.draw("B PAUSE", x + 6, y + 3)
+        drawHudLabel(g, Font, "B PAUSE", x + 6, y + 3, 1, false, { 0.35, 0.30, 0.25, 1 })
+        drawHeaderPP(g, Font, battle, rows[index], x + w - 6, y + 3)
     end
     local slots = {
         { i = 1, label = "U", col = 0, row = 0 },
@@ -791,17 +1088,15 @@ local function drawMovesClassic(g, Font, battle)
                 drawCodeScaled(g, Font, 0xED, tx, ty, 0.9)
             end
             local name = fitText(Font, moveName(battle, move), 52)
-            if Font and type(Font.draw) == "function" then
-                g.setColor(0.08, 0.06, 0.05, 1)
-                Font.draw(slot.label, tx + 12, ty)
-                Font.draw(name, tx + 22, ty)
-            end
+            drawHudLabel(g, Font, slot.label, tx + 12, ty, 1)
+            drawHudLabel(g, Font, name, tx + 22, ty, 1)
         end
     end
+    g.setColor(1, 1, 1, 1) -- Reset color afterwards, just in case
 end
 
 local function drawMovesDiamond(g, Font, battle)
-    -- Diamond compass: direction matches slot. Opaque panel covers TYPE/PP ghosts.
+    -- Diamond compass: direction matches slot. Translucent plate over the field.
     --   U = 1, R = 2, L = 3, D = 4
     local rows = moveRows(battle)
     local index = battle.phase == "mimicSelect"
@@ -812,14 +1107,10 @@ local function drawMovesDiamond(g, Font, battle)
         { i = 3, label = "L", x = 4,  y = 106 },
         { i = 4, label = "D", x = 44, y = 120 },
     }
-    g.setColor(0.96, 0.92, 0.82, 1)
-    g.rectangle("fill", 0, 64, 160, 80)
-    g.setColor(0.10, 0.07, 0.06, 1)
-    g.rectangle("line", 0.5, 64.5, 159, 79)
-    g.rectangle("line", 1.5, 65.5, 157, 77)
+    hudBox(g, 0, 64, 160, 80)
     if Font and type(Font.draw) == "function" then
-        g.setColor(0.35, 0.30, 0.25, 1)
-        Font.draw("B PAUSE", 4, 68)
+        drawHudLabel(g, Font, "B PAUSE", 4, 68, 1, false, { 0.35, 0.30, 0.25, 1 })
+        drawHeaderPP(g, Font, battle, rows[index], 154, 68)
     end
     for s = 1, #slots do
         local slot = slots[s]
@@ -830,20 +1121,18 @@ local function drawMovesDiamond(g, Font, battle)
             if selected then
                 g.setColor(0.16, 0.30, 0.55, 1)
             else
-                g.setColor(0.99, 0.96, 0.88, 1)
+                g.setColor(0.99, 0.96, 0.88, 0.42)
             end
             g.rectangle("fill", cx, cy, cw, ch)
             g.setColor(0.10, 0.08, 0.06, 1)
             g.rectangle("line", cx + 0.5, cy + 0.5, cw - 1, ch - 1)
             local name = fitText(Font, moveName(battle, move), 52)
-            if Font and type(Font.draw) == "function" then
-                if selected then
-                    g.setColor(1, 1, 1, 1)
-                else
-                    g.setColor(0.08, 0.06, 0.05, 1)
-                end
-                Font.draw(slot.label, cx + 2, cy + 2)
-                Font.draw(name, cx + 12, cy + 2)
+            if selected then
+                drawHudLabel(g, Font, slot.label, cx + 2, cy + 2, 1, false, { 1, 1, 1, 1 })
+                drawHudLabel(g, Font, name, cx + 12, cy + 2, 1, false, { 1, 1, 1, 1 })
+            else
+                drawHudLabel(g, Font, slot.label, cx + 2, cy + 2, 1)
+                drawHudLabel(g, Font, name, cx + 12, cy + 2, 1)
             end
         end
     end
@@ -862,11 +1151,12 @@ local function drawDialogue(g, Font, battle)
     local shown = battle.shown or {}
     if #shown == 0 and not (battle.current or battle.msgHold
         or battle.msgWaiting or battle.msgPrompt) then
-        return
+        return false
     end
-    local x, y, w, h = 4, 119, 152, 23
-    box(g, x, y, w, h)
-    g.setColor(0.08, 0.06, 0.05, 1)
+    local x, y, w, h = UI.dialogueRect()
+    g.push("all")
+    UI.paintDialoguePlate(g, x, y, w, h)
+    g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
     local first = math.max(1, #shown - 1)
     for lineIndex = first, #shown do
         local line = shown[lineIndex]
@@ -883,6 +1173,10 @@ local function drawDialogue(g, Font, battle)
             Font.drawCode(0xEE, x + w - 11, y + h - 9)
         end
     end
+    resetTint(g)
+    g.pop()
+    battle._arNarratorTop = y
+    return true
 end
 
 
@@ -895,18 +1189,41 @@ function UI.draw(battle, style)
     local Font = font()
     local state = UI.layoutState(battle)
     g.push("all")
-    -- HP on the UI overlay with world→UI mapping so bars survive 3D/world
-    -- overrides and stay glued to mons under survey zoom.
+    -- HP / faces go on the extended HUD canvas so setBattleUIAnchor can
+    -- dock them to the window. Move / command chrome stays on the UI canvas.
+    local ren = battle and battle.game and battle.game.renderer
+    local hudPrev
+    local hudPass = ren and type(ren.beginBattleHUDPass) == "function"
+        and type(ren.endBattleHUDPass) == "function"
+    if hudPass then
+        local ok, prev = pcall(ren.beginBattleHUDPass, ren)
+        if ok then
+            hudPrev = prev
+        else
+            hudPass = false
+        end
+    end
     UI.drawWorldHP(battle, nil, nil, "ui")
+    resetTint(g)
+    if hudPass then
+        pcall(ren.endBattleHUDPass, ren, hudPrev)
+    end
+    resetTint(g)
+    local paintedDialogue = false
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then
         drawMoves(g, Font, battle, style)
     elseif state.showDialogue then
-        drawDialogue(g, Font, battle)
+        paintedDialogue = drawDialogue(g, Font, battle) == true
     end
-    g.setColor(1, 1, 1, 1)
+    if not paintedDialogue then
+        battle._arNarratorTop = nil
+    end
+    resetTint(g)
     g.pop()
+    -- HUD canvas blit uses the current multiply. Do not leave dark ink.
+    resetTint(g)
 end
 
 return UI

@@ -52,17 +52,32 @@ return function(Cues)
         end
         Cues.tickHeldReact(session, Grid)
         Cues.tickTossLand(session, Grid)
-        local waiting = Cues.heldReactPending(session)
+        if session._reactLeadUntil and t >= session._reactLeadUntil then
+            session._reactLeadUntil = nil
+        end
+        local waiting = Cues.reactOutcomePending(session)
         -- FIRE / clash shot was latched on the HUD click; run it here so
         -- performMove cannot mutate sprites after this frame's pose.
-        -- Dodge/brace vs a charge waits until they are in your face.
+        -- Failed dodge/brace waits until they are in your face, then a
+        -- short lead so the pose is not the same frame as the hit.
         do
             local resume = battle and battle._arResumeReactPick
-            if type(resume) == "function" and not waiting then
-                battle._arResumeReactPick = nil
-                local okR, errR = pcall(resume)
-                if not okR then
-                    H.noteErr(session, battle, "resumeReactPick", errR)
+            if type(resume) == "function" then
+                battle._arResumeArmedAt = battle._arResumeArmedAt or t
+                local stuck = (t - battle._arResumeArmedAt)
+                    >= (Cues.REACT_RESUME_MAX or 1.25)
+                if not waiting or stuck then
+                    battle._arResumeReactPick = nil
+                    battle._arResumeArmedAt = nil
+                    if stuck then
+                        session._heldReact = nil
+                        session._reactLeadUntil = nil
+                        waiting = false
+                    end
+                    local okR, errR = pcall(resume)
+                    if not okR then
+                        H.noteErr(session, battle, "resumeReactPick", errR)
+                    end
                 end
             end
         end
@@ -150,6 +165,28 @@ return function(Cues)
                     H.restoreStepSpeed(ent)
                 end
             end
+            if ent and ent._pendingRangedCast then
+                if Cues.stillWalkingToPad(ent) then
+                    -- Backing up; charge starts once the feet land.
+                    elseif not ent._rangedChargeAt then
+                    ent._rangedChargeAt = t + (Cues.RANGED_CHARGE or 0.7)
+                    local foe = H.foeOf(session, side)
+                    H.faceToward(ent, foe)
+                    H.playChargeHold(session, ent)
+                elseif t >= ent._rangedChargeAt then
+                    local shot = ent._pendingRangedCast
+                    H.clearRangedCast(ent)
+                    Cues.apply(session, side, "attack", Grid, nil, battle or session._battle, {
+                        category = shot.category,
+                        moveType = shot.moveType,
+                        moveId = shot.moveId,
+                        slowShot = shot.slowShot,
+                        fireCarry = shot.fireCarry,
+                        rangedReady = true,
+                        via = "rangedBackstep",
+                    })
+                end
+            end
             if ent and ent._releaseAt and t >= ent._releaseAt then
                 ent._releaseAt = nil
                 local pending = ent._pendingReleaseAttack
@@ -168,6 +205,13 @@ return function(Cues)
                     })
                 end
             end
+        end
+        local holdUntil = session._rangedHoldUntil
+        if holdUntil and t >= holdUntil
+            and not Cues.rangedCastHoldActive(session)
+            and not Cues.rangedHoldHasProjectile(session) then
+            session._rangedHoldUntil = nil
+            Cues.releaseRangedShotHold(session, battle)
         end
     end
 

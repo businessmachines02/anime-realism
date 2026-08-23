@@ -164,6 +164,9 @@ return function(Cues)
         if Cues.tossAirPending(session) then
             return true
         end
+        if Cues.rangedCastWalking(session) then
+            return true
+        end
         local p, e = session.playerMon, session.enemyMon
         return (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) or false
     end
@@ -246,6 +249,7 @@ return function(Cues)
             return false
         end
         H.clearCloseStrike(ent)
+        H.clearRangedCast(ent)
         ent._closeStruckMoveId = nil
         ent._struckMoves = nil
         H.restoreStepSpeed(ent)
@@ -257,6 +261,29 @@ return function(Cues)
 
     --- True while a physical closer is still walking; engine damage must wait.
     function Cues.shouldHoldEngineHit(session, ctx)
+        if Cues.rangedCastHoldActive(session) then
+            local user = ctx and ctx.user
+            if not user then
+                -- No attacker: only the hop must block HP. In-place charge
+                -- has to reach runDamaging so REACT can open.
+                return Cues.rangedCastWalking(session)
+            end
+            local side = user.isPlayer and "player" or "enemy"
+            local ent = H.sideEnt(session, side)
+            if not (ent and ent._pendingRangedCast) then
+                return false
+            end
+            if Cues.stillWalkingToPad(ent) then
+                return true
+            end
+            -- Player's own special: keep HP on the beam. Incoming specials
+            -- must not hold runDamaging or the REACT menu never appears.
+            return user.isPlayer == true
+        end
+        if Cues.rangedShotHoldActive(session) then
+            local user = ctx and ctx.user
+            return user ~= nil and user.isPlayer == true
+        end
         if not Cues.closeGapHoldActive(session) then
             return false
         end
@@ -274,8 +301,14 @@ return function(Cues)
         if not (session and battle) then
             return false
         end
-        if battle._arFireNow or battle._arCloseGapResuming then
+        if battle._arCheckNow or battle._arCloseGapResuming then
             return false
+        end
+        if Cues.rangedHitHoldActive(session) then
+            return true
+        end
+        if battle._arRangedHitHold then
+            return true
         end
         if not Cues.closeGapHoldActive(session) then
             return false
@@ -332,16 +365,29 @@ return function(Cues)
         if (p and p._pendingCloseStrike) or (e and e._pendingCloseStrike) then
             return false
         end
+        if Cues.rangedHitHoldActive(session) then
+            return false
+        end
+        if battle._arRangedHitHold then
+            return false
+        end
         local runs = heldRunList(battle._arCloseGapDamage)
         local stashed = battle._arCloseGapApply
-        if not runs and (type(stashed) ~= "table" or #stashed == 0) then
+        local pendingHit = session and session._pendingCloseHit
+        if not runs and (type(stashed) ~= "table" or #stashed == 0)
+            and not pendingHit then
             return false
         end
         battle._arCloseGapDamage = nil
         battle._arCloseGapApply = nil
         -- Punch already applied this when Grid was available. If not, shove
         -- before HP replay so a second damage_dealt cannot double-push.
+        -- Specials stash the contact beat with no HP row when applyDamage
+        -- already ran; still play knockback / camera on impact.
         Cues.flushCloseHit(session, session._deps and session._deps.Grid)
+        if not runs and (type(stashed) ~= "table" or #stashed == 0) then
+            return true
+        end
         battle._arCloseGapResuming = true
         local replayedRun = runs and true or false
         H.note(session, battle, "flushHeldHit", replayedRun and "runDamaging" or "applyDamage")

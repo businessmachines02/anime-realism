@@ -205,9 +205,9 @@ function Hooks.installInput(FBV, mod, ctx)
                                 moveType = move.type,
                             })
                         end
-                        if melee then
+                        if damaging then
                             pcall(FBV.react, self, "player", "attack", {
-                                category = "physical",
+                                category = special and "special" or "physical",
                                 moveType = move.type,
                                 moveId = move.id,
                                 movePower = move.power,
