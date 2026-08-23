@@ -28,16 +28,18 @@ Emotions.FILE = {
 -- Face stays up while the mood is not normal, then fades out.
 Emotions.PORTRAIT_FADE = 0.45
 
--- Short chip labels + fills. Ink is dark on bright chips, light on deep ones.
+-- One dark ink on every chip. Light-on-deep used to leak into Font / the
+-- HUD canvas blit, so faces and dialogue flickered dark ↔ light.
+Emotions.INK = { 0.10, 0.07, 0.06 }
 Emotions.CHIP = {
-    angry = { text = "ANGRY", fill = { 0.82, 0.22, 0.16 }, ink = { 1.00, 0.96, 0.94 } },
-    pain = { text = "TIRED", fill = { 0.56, 0.34, 0.40 }, ink = { 1.00, 0.94, 0.94 } },
-    determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = { 0.16, 0.10, 0.04 } },
-    worried = { text = "WRRY", fill = { 0.86, 0.78, 0.30 }, ink = { 0.18, 0.14, 0.04 } },
-    stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = { 0.12, 0.10, 0.22 } },
-    sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = { 0.10, 0.12, 0.16 } },
-    surprised = { text = "!!!!", fill = { 0.96, 0.84, 0.22 }, ink = { 0.16, 0.12, 0.04 } },
-    happy = { text = "HAPPY", fill = { 0.98, 0.72, 0.28 }, ink = { 0.18, 0.10, 0.04 } },
+    angry = { text = "ANGRY", fill = { 0.90, 0.42, 0.32 }, ink = Emotions.INK },
+    pain = { text = "TIRED", fill = { 0.78, 0.58, 0.62 }, ink = Emotions.INK },
+    determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = Emotions.INK },
+    worried = { text = "WRRY", fill = { 0.86, 0.78, 0.30 }, ink = Emotions.INK },
+    stunned = { text = "STUN", fill = { 0.70, 0.66, 0.88 }, ink = Emotions.INK },
+    sigh = { text = "SIGH", fill = { 0.60, 0.66, 0.72 }, ink = Emotions.INK },
+    surprised = { text = "!!!!", fill = { 0.96, 0.84, 0.22 }, ink = Emotions.INK },
+    happy = { text = "HAPPY", fill = { 0.98, 0.72, 0.28 }, ink = Emotions.INK },
 }
 
 local host = {}

@@ -2,7 +2,7 @@
 --
 -- Three voices; each paints at most once per frame:
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
---      Compact bottom box only. Never the classic white slab, never a bubble.
+--      One light glass plate. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
 --   3. REACT / miss  — status chips on the battler after a successful
 --      REACT! pick (DODGE / BRACE / COVER / HOLD) or an accuracy MISS.
@@ -165,25 +165,48 @@ local function fitText(Font, value, maxWidth)
     return text .. "+"
 end
 
--- Command / move HUD: one cream plate. Dialogue keeps the opaque `box`.
+-- Command / move HUD: one cream plate.
+-- Plain dialogue: one light glass slab, always the same fill.
 UI.HUD_PANEL_A = 0.40
+UI.DIALOGUE_FILL = { 0.98, 0.96, 0.90 }
+UI.DIALOGUE_A = 0.78
+UI.DIALOGUE_X = 4
+UI.DIALOGUE_Y = 119
+UI.DIALOGUE_W = 152
+UI.DIALOGUE_H = 23
+local DARK_INK = { 0.08, 0.06, 0.05, 1 }
+
+local function resetTint(g)
+    if g and type(g.setColor) == "function" then
+        g.setColor(1, 1, 1, 1)
+    end
+end
 
 function UI.hudPanelAlpha()
     return UI.HUD_PANEL_A
 end
 
-local function box(g, x, y, w, h, fillA)
-    fillA = tonumber(fillA)
-    if fillA == nil then
-        fillA = 0.96
+function UI.dialogueRect()
+    return UI.DIALOGUE_X, UI.DIALOGUE_Y, UI.DIALOGUE_W, UI.DIALOGUE_H
+end
+
+-- One light fill + one thin edge. No second frame, no dark/light swap.
+function UI.paintDialoguePlate(g, x, y, w, h, alpha)
+    if not (g and type(g.setColor) == "function") then
+        return
     end
-    g.setColor(0.96, 0.92, 0.82, fillA)
+    alpha = tonumber(alpha)
+    if alpha == nil then
+        alpha = UI.DIALOGUE_A
+    end
+    if alpha <= 0 then
+        return
+    end
+    local fill = UI.DIALOGUE_FILL
+    g.setColor(fill[1], fill[2], fill[3], alpha)
     g.rectangle("fill", x, y, w, h)
-    g.setColor(0.10, 0.07, 0.06, math.min(1, fillA + 0.40))
+    g.setColor(0.18, 0.14, 0.12, math.min(1, alpha + 0.15))
     g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
-    if w > 3 and h > 3 then
-        g.rectangle("line", x + 1.5, y + 1.5, w - 3, h - 3)
-    end
 end
 
 -- Move / command chrome: a single translucent fill. No second frame, no halo.
@@ -663,6 +686,7 @@ function UI.drawFace(g, img, x, y, size, alpha)
     end
     g.setColor(1, 1, 1, alpha)
     g.draw(img, math.floor(x + 0.5), math.floor(y + 0.5), 0, scale, scale)
+    resetTint(g)
 end
 
 function UI.moodChipSpec(mood)
@@ -703,10 +727,11 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
         y = 1
     end
     local fill = chip.fill or { 1, 1, 0.94 }
-    local ink = chip.ink or { 0, 0, 0 }
+    local ink = chip.ink or DARK_INK
+    g.push("all")
     g.setColor(fill[1], fill[2], fill[3], 1)
     g.rectangle("fill", cx, y, w, h)
-    g.setColor(ink[1], ink[2], ink[3], 1)
+    g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
     g.rectangle("line", cx + 0.5, y + 0.5, w - 1, h - 1)
     if Font and type(Font.draw) == "function" then
         g.push()
@@ -715,6 +740,8 @@ local function drawStatusChip(g, Font, chip, x, y, canvasW)
         Font.draw(text, 0, 0)
         g.pop()
     end
+    resetTint(g)
+    g.pop()
 end
 
 -- Draw HP chips above each field battler.
@@ -799,16 +826,17 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local totalW = letterW + 1 + barW
             local left = x - math.floor(totalW / 2)
             if Font and type(Font.draw) == "function" then
-                g.setColor(0.08, 0.06, 0.05, 1)
+                g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
                 g.push()
                 g.translate(left, y - 1)
                 g.scale(0.75, 0.75)
                 Font.draw(initial, 0, 0)
                 g.pop()
             else
-                g.setColor(0.08, 0.06, 0.05, 1)
+                g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
                 g.print(initial, left, y - 2)
             end
+            resetTint(g)
             if showFocus and type(UI.focusRatio) == "function" then
                 local target = tonumber(UI.focusRatio(battle, item.side == "player"))
                 if target then
@@ -844,12 +872,13 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 UI.drawFace(g, faceImg, fx, fy, fs, faceA)
             end
             if mode == "ui" then
+                resetTint(g)
                 local bx, by, bw, bh = UI.hudStackBox(fx, fy, fs, stackH)
                 UI.anchorFieldHud(battle, item.side, bx, by, bw, bh)
             end
         end
     end
-    g.setColor(1, 1, 1, 1)
+    resetTint(g)
 end
 
 local function drawScaled(g, Font, text, x, y, scale)
@@ -876,12 +905,12 @@ local function drawHudLabel(g, Font, text, x, y, scale, alignRight, ink)
         return
     end
     scale = scale or 1
-    ink = ink or { 0.08, 0.06, 0.05, 1 }
+    ink = ink or DARK_INK
     local ox = 0
     if alignRight then
         ox = -labelWidth(Font, text)
     end
-    g.push()
+    g.push("all")
     g.translate(x, y)
     if scale ~= 1 then
         g.scale(scale, scale)
@@ -1122,11 +1151,12 @@ local function drawDialogue(g, Font, battle)
     local shown = battle.shown or {}
     if #shown == 0 and not (battle.current or battle.msgHold
         or battle.msgWaiting or battle.msgPrompt) then
-        return
+        return false
     end
-    local x, y, w, h = 4, 119, 152, 23
-    box(g, x, y, w, h)
-    g.setColor(0.08, 0.06, 0.05, 1)
+    local x, y, w, h = UI.dialogueRect()
+    g.push("all")
+    UI.paintDialoguePlate(g, x, y, w, h)
+    g.setColor(DARK_INK[1], DARK_INK[2], DARK_INK[3], 1)
     local first = math.max(1, #shown - 1)
     for lineIndex = first, #shown do
         local line = shown[lineIndex]
@@ -1143,6 +1173,10 @@ local function drawDialogue(g, Font, battle)
             Font.drawCode(0xEE, x + w - 11, y + h - 9)
         end
     end
+    resetTint(g)
+    g.pop()
+    battle._arNarratorTop = y
+    return true
 end
 
 
@@ -1170,18 +1204,26 @@ function UI.draw(battle, style)
         end
     end
     UI.drawWorldHP(battle, nil, nil, "ui")
+    resetTint(g)
     if hudPass then
         pcall(ren.endBattleHUDPass, ren, hudPrev)
     end
+    resetTint(g)
+    local paintedDialogue = false
     if state.showCommand then
         drawCommand(g, Font, battle)
     elseif state.showMoves then
         drawMoves(g, Font, battle, style)
     elseif state.showDialogue then
-        drawDialogue(g, Font, battle)
+        paintedDialogue = drawDialogue(g, Font, battle) == true
     end
-    g.setColor(1, 1, 1, 1)
+    if not paintedDialogue then
+        battle._arNarratorTop = nil
+    end
+    resetTint(g)
     g.pop()
+    -- HUD canvas blit uses the current multiply. Do not leave dark ink.
+    resetTint(g)
 end
 
 return UI

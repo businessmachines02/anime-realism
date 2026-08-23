@@ -1,9 +1,9 @@
 -- Field battle — standalone foe dialogue box (UI overlay).
 --
--- One live shout at a time. It can outlast the white narrator box for the
--- rest of that beat, then it is gone — not replayed, not stacked behind the
--- next order. Engine prompts (learn-move / "about to use" / switch) and the
--- command menu dismiss it so a used-move callout cannot linger into your turn.
+-- One live shout at a time. Same light glass as the narrator box; lifts
+-- above it when both are up. Engine prompts (learn-move / "about to use" /
+-- switch) and the command menu dismiss it so a used-move callout cannot
+-- linger into your turn.
 
 local Callouts = {}
 
@@ -329,7 +329,7 @@ local function toastAlpha(age, hold)
   return 1
 end
 
-local function drawBox(g, Font, text, vanillaTop, alpha, fill)
+local function drawBox(g, Font, text, vanillaTop, alpha)
   if alpha <= 0 then
     return
   end
@@ -351,16 +351,19 @@ local function drawBox(g, Font, text, vanillaTop, alpha, fill)
   end
   local bh = math.max(23, padY * 2 + #lines * lineH)
   local x, y, bw = Callouts.dockRect(bh, vanillaTop)
-  fill = fill or { 0.84, 0.84, 0.86 }
+  local plateA = (tonumber(Callouts.PLATE_A) or 0.78) * alpha
 
   g.push("all")
-  g.setColor(fill[1], fill[2], fill[3], alpha)
-  g.rectangle("fill", x, y, bw, bh)
-  g.setColor(0, 0, 0, alpha)
-  g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
-  g.rectangle("line", x + 1.5, y + 1.5, bw - 3, bh - 3)
+  if type(Callouts.paintPlate) == "function" then
+    Callouts.paintPlate(g, x, y, bw, bh, plateA)
+  else
+    g.setColor(0.98, 0.96, 0.90, plateA)
+    g.rectangle("fill", x, y, bw, bh)
+    g.setColor(0.18, 0.14, 0.12, math.min(1, plateA + 0.15))
+    g.rectangle("line", x + 0.5, y + 0.5, bw - 1, bh - 1)
+  end
 
-  g.setColor(0, 0, 0, alpha)
+  g.setColor(0.08, 0.06, 0.05, alpha)
   local ty = y + padY
   for i = 1, #lines do
     local codes = Font.encode(lines[i])
@@ -386,13 +389,11 @@ function Callouts.draw(session, battle)
   local all = session._trainerCallouts
   local playerQ = all.player
   local foeQ = all.foe
-  local toast, fill
+  local toast
   if playerQ and playerQ[1] then
     toast = playerQ[1]
-    fill = { 0.96, 0.92, 0.82 }
   elseif foeQ and foeQ[1] then
     toast = foeQ[1]
-    fill = { 0.84, 0.84, 0.86 }
   else
     return
   end
@@ -403,7 +404,7 @@ function Callouts.draw(session, battle)
   local vanillaTop = battle and battle._arNarratorTop or nil
   local g = love.graphics
   local alpha = toastAlpha(toast.age, toast.hold)
-  drawBox(g, Font, toast.text, vanillaTop, alpha, fill)
+  drawBox(g, Font, toast.text, vanillaTop, alpha)
 end
 
 return Callouts

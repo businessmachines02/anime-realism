@@ -101,6 +101,10 @@ return function(env)
     Debug = loadFile("chrome/debug.lua")
     UI = loadFile("chrome/ui.lua")
     Callouts = loadFile("chrome/callouts.lua")
+    if Callouts and UI and type(UI.paintDialoguePlate) == "function" then
+      Callouts.paintPlate = UI.paintDialoguePlate
+      Callouts.PLATE_A = UI.DIALOGUE_A
+    end
   end)
   _G.require = origRequire
   if not loadOk then
@@ -533,6 +537,9 @@ return function(env)
       and FBV.fieldAllowsStackedBottomUI(battle)
     if not stacked then
       FBV.drawCallouts(battle)
+    end
+    if love and love.graphics and type(love.graphics.setColor) == "function" then
+      love.graphics.setColor(1, 1, 1, 1)
     end
   end
 

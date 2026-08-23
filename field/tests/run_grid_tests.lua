@@ -30,6 +30,7 @@ local Cues = load("fx/cues.lua")
 Cues.attach(load)
 local Callouts = load("chrome/callouts.lua")
 local Projectiles = load("fx/projectiles.lua")
+local Audio = load("fx/audio.lua")
 local UI = load("chrome/ui.lua")
 local Lifecycle = load("session/lifecycle.lua")
 local Compat = load("session/compat.lua")
@@ -866,6 +867,18 @@ function tests.hud_plate_is_one_glass_alpha()
     UI.HUD_PANEL_A, "caves use the same plate")
   eq(UI.hudPanelAlpha({ _arFieldSession = { coverScene = "route" } }),
     UI.HUD_PANEL_A, "routes use the same plate")
+end
+
+function tests.dialogue_plate_is_one_light_glass()
+  local fill = UI.DIALOGUE_FILL
+  truthy(fill and fill[1] > 0.9 and fill[2] > 0.9 and fill[3] > 0.8,
+    "plain dialogue is a light plate")
+  truthy(UI.DIALOGUE_A > 0.5 and UI.DIALOGUE_A < 1,
+    "plain dialogue is translucent")
+  local x, y, w, h = UI.dialogueRect()
+  eq(x, 4, "dialogue stays in the bottom slot")
+  eq(y, 119, "dialogue sits on the vanilla row")
+  eq(w, 152, "dialogue keeps the full-width slot")
 end
 
 function tests.move_hud_style_defaults_to_classic()
@@ -8911,6 +8924,16 @@ function tests.emotions_chip_colors_match_mood()
   eq(E.chip("normal"), nil, "normal has no chip")
 end
 
+function tests.emotions_chip_ink_is_always_dark()
+  local E = loadEmotions()
+  for mood, spec in pairs(E.CHIP) do
+    local ink = spec.ink
+    truthy(ink, mood .. " has ink")
+    local luma = (ink[1] or 0) * 0.3 + (ink[2] or 0) * 0.59 + (ink[3] or 0) * 0.11
+    truthy(luma < 0.35, mood .. " ink stays dark so Font color cannot bleach the overlay")
+  end
+end
+
 function tests.emotions_portrait_holds_until_normal()
   local E = loadEmotions()
   local battle = moodBattle(80, 100, 80, 100)
@@ -9023,6 +9046,40 @@ function tests.mood_aura_paints_when_angry()
   eq(rects, 0, "normal mood has no body aura")
   Projectiles.moodOf = nil
   love = prevLove
+end
+
+function tests.field_sfx_overlap_ducks_the_prior_voice()
+  Audio.clearVoices()
+  local function voice(playing)
+    local vol = Audio.VOICE_VOL
+    local on = playing ~= false
+    return {
+      isPlaying = function()
+        return on
+      end,
+      setVolume = function(_, value)
+        vol = value
+      end,
+      getVolume = function()
+        return vol
+      end,
+      stop = function()
+        on = false
+      end,
+    }
+  end
+  local first = voice()
+  local second = voice()
+  truthy(Audio.pushVoice(first, Audio.VOICE_VOL), "first voice lands")
+  eq(Audio.voiceCount(), 1, "one live voice")
+  truthy(Audio.pushVoice(second, Audio.VOICE_VOL), "second voice stacks")
+  eq(Audio.voiceCount(), 2, "both voices stay up")
+  truthy(first:getVolume() < Audio.VOICE_VOL, "the earlier sample is ducked")
+  eq(second:getVolume(), Audio.VOICE_VOL, "the new sample stays full")
+  first.stop()
+  eq(Audio.voiceCount(), 1, "finished voices drop off")
+  Audio.clearVoices()
+  eq(Audio.voiceCount(), 0, "clear stops the stack")
 end
 
 local count = 0
