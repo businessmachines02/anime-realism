@@ -121,6 +121,23 @@ local function pathExists(path)
     if type(path) ~= "string" or path == "" then
         return false
     end
+    local fs = love and love.filesystem
+    if fs and type(fs.getInfo) == "function" then
+        local ok, info = pcall(fs.getInfo, path)
+        if ok and info then
+            return true
+        end
+        local rel = path:match("assets/.+$")
+        if rel and rel ~= path then
+            ok, info = pcall(fs.getInfo, rel)
+            if ok and info then
+                return true
+            end
+        end
+    end
+    if love and love.graphics then
+        return false
+    end
     local f = io.open(path, "rb")
     if f then
         f:close()

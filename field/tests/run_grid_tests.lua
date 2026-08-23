@@ -28,6 +28,7 @@ local Arena = load("stage/arena.lua")
 local Survey = load("pad/survey.lua")
 local Cues = load("fx/cues.lua")
 Cues.attach(load)
+package.loaded.field_type = load("chrome/type.lua")
 local Callouts = load("chrome/callouts.lua")
 local Projectiles = load("fx/projectiles.lua")
 local Audio = load("fx/audio.lua")
@@ -44,6 +45,7 @@ local Hooks = load("chrome/hooks.lua")
 load("chrome/hooks_draw.lua")(Hooks)
 load("chrome/hooks_input.lua")(Hooks)
 load("chrome/hooks_events.lua")(Hooks)
+UI.foeIsDown = Hooks.foeIsDown
 
 do
   local ids = {
@@ -182,9 +184,60 @@ function tests.faint_drops_sticky_move_diamond()
   truthy(Hooks.foeIsDown({
     enemy = { mon = { hp = 0 } },
   }), "KO'd foe drops the diamond")
-  truthy(Hooks.foeIsDown({
+  truthy(not Hooks.foeIsDown({
     enemy = { shownHP = 0, mon = { hp = 8 } },
-  }), "empty foe bar drops the diamond")
+  }), "empty bar on a living foe is send-out, not a KO")
+  local faintedMenu = {
+    phase = "menu",
+    enemy = { mon = { hp = 0 } },
+    current = { text = "Enemy RATTATA\nfainted!" },
+  }
+  truthy(Hooks.holdFightMenu(faintedMenu), "FIGHT stays closed over a fainted foe")
+  local state = UI.layoutState(faintedMenu)
+  truthy(not state.showCommand, "command HUD does not cover faint text")
+  truthy(not state.showMoves, "move HUD does not cover faint text")
+  local intro = {
+    phase = "menu",
+    current = { text = "A wild RATTATA appeared!" },
+    player = { mon = { hp = 20 } },
+    enemy = { shownHP = 0, mon = { hp = 12 } },
+  }
+  truthy(not Hooks.holdFightMenu(intro), "opening dialogue does not lock FIGHT")
+  truthy(UI.layoutState(intro).showCommand, "opening dialogue still reaches the command menu")
+  local sentOut = {
+    phase = "messages",
+    enemySendingOut = true,
+    current = { text = "MISTY sent\nout NINETALES!" },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(sentOut), "trainer send-out is not a FIGHT hold")
+  local staleFlag = {
+    phase = "menu",
+    current = { text = "MISTY sent\nout NINETALES!" },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(staleFlag),
+    "sent-out line is not a FIGHT hold after enemySendingOut drops")
+  truthy(not Hooks.faintScriptLive(staleFlag),
+    "sent-out leftover current is not a faint script")
+  truthy(UI.layoutState(staleFlag).showCommand,
+    "sent-out beat still reaches the command menu")
+  local goLine = {
+    phase = "menu",
+    current = { text = "Go! SQUIRTLE!" },
+    sendingOut = true,
+    player = { mon = { hp = 20 } },
+    enemy = { mon = { hp = 0 } },
+  }
+  truthy(not Hooks.holdFightMenu(goLine), "Go! send-out is not a FIGHT hold")
+  truthy(Hooks.faintScriptLive(faintedMenu), "faint line is a live faint script")
+  local playerDown = {
+    phase = "menu",
+    player = { mon = { hp = 0 } },
+    enemy = { mon = { hp = 12 } },
+  }
+  truthy(not Hooks.holdFightMenu(playerDown), "player faint still reaches PKMN")
+  truthy(UI.layoutState(playerDown).showCommand, "player faint keeps the command menu")
 end
 
 function tests.supported_battle_gate()
@@ -601,7 +654,7 @@ function tests.mood_portrait_sits_beside_the_sprite()
   eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
   eq(hx, px + 14, "HP sits on the face midline")
-  eq(hy, py - UI.HP_CHIP_H - 2, "HP sits just above the portrait")
+  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "HP sits just above the portrait")
   local stack = 12
   local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
   eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
@@ -767,10 +820,10 @@ function tests.move_hud_shows_b_pause_hint()
   local sawHeaderPP = false
   local up, right, left, down = false, false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then
+    if drawn[i] == "B Pause" then
       hinted = true
     end
-    if drawn[i] == "TACKLE" then
+    if drawn[i] == "Tackle" then
       listed = true
     end
     if drawn[i] == "PP 35/35" then
@@ -841,7 +894,7 @@ function tests.diamond_move_hud_uses_compass()
   package.loaded["src.render.Font"] = nil
   local hinted, up, right, sawHeaderPP = false, false, false, false
   for i = 1, #drawn do
-    if drawn[i] == "B PAUSE" then hinted = true end
+    if drawn[i] == "B Pause" then hinted = true end
     if drawn[i] == "U" then up = true end
     if drawn[i] == "R" then right = true end
     if drawn[i] == "PP 35/35" then sawHeaderPP = true end
@@ -859,6 +912,20 @@ function tests.move_hud_pp_label()
     data = { moves = { TACKLE = { pp = 35 } } },
   }, { id = "TACKLE", pp = 12 }, true), "12/35", "remaining over max")
   eq(UI.movePPLabel({}, { struggle = true, pp = 1 }), nil, "struggle has no PP")
+end
+
+function tests.hud_text_uses_lowercase_words()
+  eq(UI.hudText("FIGHT"), "Fight", "command words use the pixel lowercase")
+  eq(UI.hudText("PKMN"), "PKMN", "PKMN stays a tag")
+  eq(UI.hudText("B PAUSE"), "B Pause", "hints title-case the words")
+  eq(UI.hudText("TACKLE"), "Tackle", "move names title-case")
+  eq(UI.hudText("ACID ARMOR"), "Acid Armor", "two-word moves title-case")
+  eq(UI.hudText("PP 35/35"), "PP 35/35", "PP stays a tag")
+  eq(UI.hudText("Go! SQUIRTLE!"), "Go! Squirtle!",
+    "mixed lines only rewrite the ALL-CAPS words")
+  local Type = UI.Type
+  truthy(Type and Type.FILE:find("pokepixel%-gba", 1, false),
+    "HUD typeface is pokepixel-gba")
 end
 
 function tests.hud_plate_is_one_glass_alpha()
@@ -2430,6 +2497,40 @@ function tests.charge_clashes_with_an_incoming_physical()
   truthy(styles.dash_smear, "both charges smear toward mid")
   truthy(styles.clash_burst, "body clash paints a crash boom")
   RD.clear(battle)
+end
+
+function tests.dodge_chance_rises_with_defender_health()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local attacker = { stats = { speed = 50 } }
+  local full = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 40, stats = { hp = 40, speed = 50 } },
+  }
+  local hurt = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 8, stats = { hp = 40, speed = 50 } },
+  }
+  local empty = {
+    stats = { speed = 50, hp = 40 },
+    mon = { hp = 0, stats = { hp = 40, speed = 50 } },
+  }
+  local unknown = { stats = { speed = 50 } }
+  eq(RD.hpRatio(full), 1, "full bar is 1")
+  eq(RD.hpRatio(hurt), 0.2, "8/40 is 0.2")
+  eq(RD.hpRatio(empty), 0, "empty bar is 0")
+  eq(RD.dodgeHealthBonus(full), RD.DODGE_HEALTH_BONUS, "full HP gets the whole bonus")
+  eq(RD.dodgeHealthBonus(hurt), RD.DODGE_HEALTH_BONUS * 0.2, "hurt HP scales the bonus")
+  eq(RD.dodgeHealthBonus(empty), 0, "empty HP adds nothing")
+  eq(RD.dodgeHealthBonus(unknown), 0, "missing HP adds nothing")
+  local fresh = RD.dodgeSuccessChance(full, attacker)
+  local wounded = RD.dodgeSuccessChance(hurt, attacker)
+  local down = RD.dodgeSuccessChance(empty, attacker)
+  local base = RD.dodgeSuccessChance(unknown, attacker)
+  truthy(fresh > wounded, "full HP dodges more often than 20%")
+  truthy(wounded > down, "20% HP still dodges more than empty")
+  eq(down, base, "empty HP matches a battler with no HP data")
+  eq(fresh, base + RD.DODGE_HEALTH_BONUS,
+    "full HP adds DODGE_HEALTH_BONUS on equal speed")
 end
 
 function tests.failed_npc_dodge_is_not_a_dodge_cue()
@@ -8038,7 +8139,7 @@ function tests.kit_idle_override_follows_status()
   }, false), "freeze", "frozen standing uses freeze")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { confusedTurns = 3, mon = {} },
-  }, false), "confuse", "confused standing uses confuse")
+  }, false), nil, "confused standing stays on Idle, not Rotate")
   eq(Sprites.kitIdleOverride({
     _battleBattler = { mon = { status = "PAR" } },
   }, false), nil, "para stays idle")
@@ -8123,6 +8224,28 @@ function tests.physical_kit_prefers_specialized_strips()
     "multi-hit falls back to Kick when Multi is missing")
   eq(Cues.physicalKitAnim({ _kitSheet = true }, { moveId = "FURY_ATTACK" }, Sprites),
     "attack", "no sidecar extras stay on Attack")
+end
+
+function tests.golem_attack_kit_is_special0()
+  local path = root .. "/../assets/followers/follower_076.kit"
+  local f = io.open(path, "r")
+  truthy(f, "Golem kit sidecar is present")
+  local body = f:read("*a") or ""
+  f:close()
+  local line = body:match("physical[^\n]+")
+  eq(line, "physical 6 6 6 6 6 6", "Golem Attack is Special0, not the punch strip")
+  truthy(not body:find("\nroll ", 1, true), "Golem has no extra roll row")
+  eq(Sprites.kitMoveOverride({
+    _kitSheet = true,
+    _spriteSpecies = "GOLEM",
+    _kitPoseBlock = { physical = 3, confuse = 14 },
+  }, true), nil, "Golem still walks on Walk")
+  eq(Cues.physicalKitAnim({
+    _kitSheet = true,
+    _spriteSpecies = "GOLEM",
+    _kitPoseBlock = { physical = 3 },
+  }, { moveId = "TACKLE" }, Sprites), "attack",
+    "Golem's strike is the physical row")
 end
 
 function tests.pose_keeps_kit_on_the_plant()
@@ -8922,6 +9045,89 @@ function tests.emotions_chip_colors_match_mood()
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
   eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
   eq(E.chip("normal"), nil, "normal has no chip")
+end
+
+function tests.status_chips_are_smaller_than_hud_type()
+  eq(UI.CHIP_H, 13, "chip plate fits native HUD type")
+  eq(UI.CHIP_SCALE, 1, "chip type is not scaled down")
+  eq(UI.HP_LETTER_W, 11, "initial sits on a cream badge")
+  eq(UI.HP_LETTER_SCALE, 1, "initial is native HUD type")
+  truthy(UI.HP_BAR_H >= 5, "HP chip is thick enough to read")
+end
+
+function tests.react_chips_follow_the_mon()
+  local hx, hy = UI.hpAboveFace(4, 40, 28)
+  local mx, my = UI.moodChipAboveHp(hx, hy, 0)
+  eq(mx, hx, "worry pill stays on the HUD stack midline")
+  eq(my, hy - UI.CHIP_AIR - UI.CHIP_H, "worry pill sits above HP with air")
+  local rx, ry = UI.reactChipAboveMon(48, 90)
+  eq(rx, 48, "REACT pill is centered on the sprite")
+  eq(ry, 90 - UI.CHIP_H - UI.REACT_CHIP_LIFT, "REACT pill sits over the mon")
+  truthy(UI.CHIP_AIR >= 4, "emotion pill has a gap above the HP row")
+  eq(UI.HP_FACE_GAP, 0, "HP row hugs the portrait")
+
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local player = {
+    _arFieldBattler = true,
+    _arFieldSide = "player",
+    px = 40, py = 90, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    frame = 1,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 20, mon = { name = "GEODUDE", stats = { hp = 20 } } },
+    game = {
+      overworld = { camera = { x = 0, y = 0 }, entities = { player } },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.armStatusChip(battle, "player", "DODGE")
+  local spriteX = (player.px or 0) + 8
+  local spriteY = (player.py or 0) - (player._fieldBarLift or 0)
+  local chipX, chipY = UI.reactChipAboveMon(spriteX, spriteY)
+  local function sawChip()
+    for i = 1, #painted do
+      if painted[i].y == chipY then
+        return true
+      end
+    end
+    return false
+  end
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  truthy(not sawChip(), "HUD pass does not paint REACT on the mon")
+  painted = {}
+  UI.drawReactChips(battle, 0, 0)
+  love = prevLove
+  truthy(sawChip(), "REACT pill paints over the battler on the overlay")
+  local hit
+  for i = 1, #painted do
+    if painted[i].y == chipY then
+      hit = painted[i]
+      break
+    end
+  end
+  truthy(hit and hit.x <= chipX and (hit.x + 40) >= chipX,
+    "REACT pill is centered on the sprite X")
 end
 
 function tests.emotions_chip_ink_is_always_dark()

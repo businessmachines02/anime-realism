@@ -49,6 +49,7 @@ return function(env)
   end
   -- Sibling shims only while this package loads. Always restore _G.require;
   -- a leaked wrapper can hand Dramatic Shape our pad coords module.
+  local TypeFace
   local origRequire = _G.require
   _G.require = function(name)
     if name == "coords" then
@@ -59,6 +60,9 @@ return function(env)
     end
     if name == "fx_catalog" then
       return FxCatalog
+    end
+    if name == "field_type" then
+      return TypeFace
     end
     return origRequire(name)
   end
@@ -99,6 +103,13 @@ return function(env)
     end
     Intercept = loadFile("session/intercept.lua")
     Debug = loadFile("chrome/debug.lua")
+    TypeFace = loadFile("chrome/type.lua")
+    do
+      local loaded = package and package.loaded
+      if type(loaded) == "table" then
+        loaded["field_type"] = TypeFace
+      end
+    end
     UI = loadFile("chrome/ui.lua")
     Callouts = loadFile("chrome/callouts.lua")
     if Callouts and UI and type(UI.paintDialoguePlate) == "function" then
@@ -721,6 +732,21 @@ return function(env)
   function FBV.install(mod)
     if mod and mod._arPackages then
       pcall(FBV.bind, mod._arPackages)
+    end
+    if UI and UI.Type then
+      if type(UI.Type.bindRoot) == "function" then
+        pcall(UI.Type.bindRoot, mod and (mod.path or mod.root))
+      end
+      if type(UI.Type.bindReader) == "function" and mod and type(mod.read) == "function" then
+        pcall(UI.Type.bindReader, function(rel)
+          return mod:read(rel)
+        end)
+      end
+    end
+    if Sprites and type(Sprites.bindReader) == "function" and mod and type(mod.read) == "function" then
+      pcall(Sprites.bindReader, function(rel)
+        return mod:read(rel)
+      end)
     end
     pcall(Intercept.install, FBV, mod)
     if Sprites and type(Sprites.installKitBillboards) == "function" then

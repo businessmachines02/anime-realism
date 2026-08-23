@@ -50,8 +50,58 @@ local function findHandle(mod, id)
   return nil
 end
 
+function Sprites.bindReader(read)
+  Sprites.read = type(read) == "function" and read or nil
+end
+
+local function modRel(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  return path:match("assets/.+$") or path
+end
+
+local function sandboxBody(path)
+  if not (Sprites.read and type(path) == "string") then
+    return nil
+  end
+  local rel = modRel(path)
+  local ok, body = pcall(Sprites.read, rel)
+  if ok and type(body) == "string" and body ~= "" then
+    return body
+  end
+  if rel ~= path then
+    ok, body = pcall(Sprites.read, path)
+    if ok and type(body) == "string" and body ~= "" then
+      return body
+    end
+  end
+  return nil
+end
+
 local function pathExists(path)
   if type(path) ~= "string" or path == "" then
+    return false
+  end
+  if sandboxBody(path) then
+    return true
+  end
+  local fs = love and love.filesystem
+  if fs and type(fs.getInfo) == "function" then
+    local ok, info = pcall(fs.getInfo, path)
+    if ok and info then
+      return true
+    end
+    local rel = modRel(path)
+    if rel and rel ~= path then
+      ok, info = pcall(fs.getInfo, rel)
+      if ok and info then
+        return true
+      end
+    end
+  end
+  -- Tests (no Love sandbox). In-game io.open warns.
+  if love and love.graphics then
     return false
   end
   local f = io.open(path, "rb")
@@ -374,17 +424,32 @@ local function readTextFile(path)
   if type(path) ~= "string" or path == "" then
     return nil
   end
+  local body = sandboxBody(path)
+  if body then
+    return body
+  end
+  local fs = love and love.filesystem
+  if fs and type(fs.read) == "function" then
+    local ok, text = pcall(fs.read, path)
+    if ok and type(text) == "string" and text ~= "" then
+      return text
+    end
+    local rel = modRel(path)
+    if rel and rel ~= path then
+      ok, text = pcall(fs.read, rel)
+      if ok and type(text) == "string" and text ~= "" then
+        return text
+      end
+    end
+  end
+  if love and love.graphics then
+    return nil
+  end
   local f = io.open(path, "rb")
   if f then
     local text = f:read("*a")
     f:close()
     if type(text) == "string" and text ~= "" then
-      return text
-    end
-  end
-  if love and love.filesystem and type(love.filesystem.read) == "function" then
-    local ok, text = pcall(love.filesystem.read, path)
-    if ok and type(text) == "string" and text ~= "" then
       return text
     end
   end
@@ -802,10 +867,7 @@ function Sprites.kitIdleOverride(ent, moving)
   if status == "FRZ" then
     return "freeze"
   end
-  local confused = battler and tonumber(battler.confusedTurns)
-  if confused and confused > 0 then
-    return "confuse"
-  end
+  -- Confused keeps Idle. The PMD confuse row is Rotate / spin.
   return nil
 end
 

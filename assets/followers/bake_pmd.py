@@ -139,6 +139,13 @@ EXTRA_POSES = [
     ("multi", ("MultiStrike", "MultiScratch", "MultiAttack", "Double"), True, None),
 ]
 
+# Dex → pose → PMD names. Golem's Attack is Special0 (the roll).
+POSE_NAMES_BY_DEX: dict[int, dict[str, tuple[str, ...]]] = {
+    76: {
+        "physical": ("Special0", "Attack", "Kick", "Punch", "Strike", "Swing"),
+    },
+}
+
 PREFER_NAMED = {"idle", "faint"}
 
 # Kit rows: front, left, right, back, then the four diagonals.
@@ -696,9 +703,12 @@ def bake_dir(pack_dir: Path, out_path: Path, dex: int | None = None) -> bool:
     if faces > BLOCK_ROWS:
         print(f"  faces {faces} (cardinals + diagonals)")
     for pose, names in POSES:
+        override = POSE_NAMES_BY_DEX.get(dex or 0, {}).get(pose)
+        if override:
+            names = override
         anim, dirs = pose_anim(
             pack_dir, by_name, names,
-            prefer_named=(pose in PREFER_NAMED))
+            prefer_named=(pose in PREFER_NAMED) or override is not None)
         # One-cell Idle is often a sit / faint hold. Walk has the stand cycle.
         if pose == "idle" and anim and anim_cols(pack_dir, anim) < 2:
             walk, wdirs = pose_anim(pack_dir, by_name, ("Walk",), prefer_named=True)

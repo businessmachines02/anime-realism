@@ -63,7 +63,8 @@ function Hooks.playerMustSwitch(battle)
     return false
 end
 
--- Foe fainted / empty bar: do not reopen the move diamond over "fainted!".
+-- Real KO only. shownHP is 0 at send-out / intro while mon.hp is still up;
+-- treating that as a faint ate other mods' opening dialogue.
 function Hooks.foeIsDown(battle)
     if not battle then
         return false
@@ -73,14 +74,93 @@ function Hooks.foeIsDown(battle)
         return false
     end
     local hp = (e.mon and e.mon.hp) or e.hp
-    if type(hp) == "number" and hp <= 0 then
+    return type(hp) == "number" and hp <= 0
+end
+
+-- Hide FIGHT / moves over a KO'd foe. Player faint still needs PKMN.
+-- A trainer send-out keeps the old HP at 0 until the new battler lands;
+-- holding FIGHT there parks "X sent out Y!" with nowhere to go.
+-- `enemySendingOut` often drops a frame before HP is swapped, so also
+-- key off the live narrator line.
+function Hooks.narratorText(battle)
+    return tostring(battle and battle.current and battle.current.text or "")
+end
+
+function Hooks.isSendOutText(text)
+    text = tostring(text or ""):lower():gsub("%s+", " ")
+    if text:find("sent out", 1, true) then
         return true
     end
-    local shown = e.shownHP
-    if type(shown) == "number" and shown <= 0 then
+    if text:find("go!", 1, true) then
         return true
     end
     return false
+end
+
+function Hooks.isFaintScriptText(text)
+    text = tostring(text or ""):lower():gsub("%s+", " ")
+    if text:find("fainted", 1, true) then
+        return true
+    end
+    if text:find("gained", 1, true) or text:find("grew to", 1, true) then
+        return true
+    end
+    if text:find("exp. point", 1, true) or text:find("exp point", 1, true) then
+        return true
+    end
+    return false
+end
+
+function Hooks.isSendOutBeat(battle)
+    if not battle then
+        return false
+    end
+    if battle.enemySendingOut or battle.sendingOut then
+        return true
+    end
+    if Hooks.isSendOutText(Hooks.narratorText(battle)) then
+        return true
+    end
+    local q = battle.queue
+    if type(q) == "table" and q[1] and Hooks.isSendOutText(q[1].text) then
+        return true
+    end
+    return false
+end
+
+-- Remount narrator only for a live faint / EXP row, never leftover "sent out".
+function Hooks.faintScriptLive(battle)
+    if not battle or Hooks.isSendOutBeat(battle) then
+        return false
+    end
+    if battle.draining or battle.animPlaying or battle.waitingUI then
+        return true
+    end
+    if (tonumber(battle.waitFrames) or 0) > 0 then
+        return true
+    end
+    if Hooks.isFaintScriptText(Hooks.narratorText(battle)) then
+        return true
+    end
+    local q = battle.queue
+    if type(q) == "table" and q[1] and Hooks.isFaintScriptText(q[1].text) then
+        return true
+    end
+    if (battle.msgWaiting or battle.msgPrompt)
+        and Hooks.isFaintScriptText(Hooks.narratorText(battle)) then
+        return true
+    end
+    return false
+end
+
+function Hooks.holdFightMenu(battle)
+    if not battle or Hooks.playerMustSwitch(battle) then
+        return false
+    end
+    if Hooks.isSendOutBeat(battle) then
+        return false
+    end
+    return Hooks.foeIsDown(battle)
 end
 
 -- B on the move diamond (or the sticky command frame before it reopens)
