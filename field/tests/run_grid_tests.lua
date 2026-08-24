@@ -7654,6 +7654,118 @@ function tests.camera_look_zone_skips_touch_chrome()
   truthy((session.mouseLookT or 0) > 0, "look timer is held from the inner viewport")
 end
 
+function tests.camera_idle_tour_orbits_pad()
+  local sx, sy = Lifecycle.idleTourSpan(160, 144)
+  eq(sx, Lifecycle.CAMERA_TOUR_SPAN_X, "classic view keeps the 20px tour X")
+  eq(sy, Lifecycle.CAMERA_TOUR_SPAN_Y, "classic view keeps the 12px tour Y")
+  eq(select(1, Lifecycle.idleTourSpan(320, 144)), Lifecycle.CAMERA_TOUR_SPAN_X * 2,
+    "double-wide view doubles tour X")
+
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  Lifecycle._testBind(battle, {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+  })
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local restX, restY = followed.x, followed.y
+
+  battle.phase = "menu"
+  for _ = 1, 120 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local tour1x, tour1y = followed.x, followed.y
+  truthy(math.abs(tour1x - restX) > 2 or math.abs(tour1y - restY) > 2,
+    "command idle lifts the camera off the tight battler lock")
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  truthy(math.abs(followed.x - tour1x) > 2 or math.abs(followed.y - tour1y) > 2,
+    "idle tour keeps drifting over the pad")
+
+  battle.phase = "messages"
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  eq(followed.x, restX, "action framing returns camera X after the tour")
+  eq(followed.y, restY, "action framing returns camera Y after the tour")
+end
+
+function tests.camera_idle_tour_yields_to_mouse_look()
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    phase = "menu",
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+    _mouseLookInjected = true,
+  }
+  Lifecycle._testBind(battle, session)
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local tourX = followed.x
+
+  Lifecycle.noteMouseLook(session, 1, 0, 8)
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  truthy(followed.x > tourX + 8, "mouse look takes the lens from the idle tour")
+end
+
 function tests.sprite_cast_and_animation()
   local grid, plan = sampleGrid()
   local overworld = { entities = {} }

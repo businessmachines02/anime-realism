@@ -3,7 +3,6 @@
 -- Focus-meter reactions: Commit / Dodge / Take Cover / Brace / Entrench.
 -- Pure logic module; rules/react.lua owns menus, queue splicing, and engine hooks.
 
-
 -- We intentionally want to hide focus points from the player to create a sense of immersion.  
 -- I don't like the idea of quantifying things too much during a battle, so the goal is to craft hte battle system 
 -- in a way that feels closer to what we would have fantasized as kids playing this game. 
@@ -34,23 +33,25 @@ RD.COST = {
   entrench = 30,
 }
 
--- Dodging is a high-risk high-reward play.
+-- Dodging is a high-risk, but potentially rewarding, play.
 
--- If it lands: 
--- 1. You miss damage completely that turn. 
--- 2. You have a 30% chance to effectively deal 1.5 damage (of a selected counter move) in return
+-- If it lands:
+-- 1. You miss damage completely that turn.
+-- 2. You have a 30% chance to effectively deal a weak counter move in return (was 1.5, now 1.1 damage scale).
 --
 -- If it doesn't:
 -- 1. You are not punished too badly ( due to the inherant focus trade-off made earlier in the turn ~ you could have conserved more focus points by bracing instead )
 --
--- Generally, it should consume high levels of focus, creating an clear tradeoff situation. 
+-- Generally, it should consume high levels of focus, creating a clear tradeoff situation.
 -- In practice, remaining stationary or not taking action ("committing") is less taxing than actively dodging or reacting, 
 -- which requires more focus and effort—mirroring how it's easier to stay still than to move suddenly in real life.
 --
 -- Bracing on the other hand, is never likely to "miss"...unless the foe naturally does. 
 -- but since bracing is a buff to yourself, it does consume focus points.
-RD.DODGE_COUNTER_CHANCE = 0.30
-RD.DODGE_COUNTER_POWER = 0.50
+
+-- Change: Dodge is easier to land, but the follow-up/counter is weaker.
+RD.DODGE_COUNTER_CHANCE = 0.50 -- up from .30; easier to get a dodge follow-up
+RD.DODGE_COUNTER_POWER = 0.25  -- down from .50; follow-up move deals less damage
 RD.DODGE_COUNTER_CD = 2
 RD.DODGE_FAIL_MULT = 1.10
 -- Fresh legs dodge better. +this at full HP, none when the bar is empty.
@@ -617,7 +618,7 @@ end
 function RD.dodgeSuccessChance(defender, attacker, battle)
   local speDef = speedStat(defender)
   local speAtk = speedStat(attacker)
-  local chance = clamp(35 + (speDef - speAtk) * 0.14, 20, 85) / 100
+  local chance = clamp(50 + (speDef - speAtk) * 0.14, 35, 95) / 100 -- increased base/easier ceiling
   if hasCoverTypeBonus(defender) then
     chance = clamp(chance * 1.5, 0, 1)
   end
@@ -625,7 +626,7 @@ function RD.dodgeSuccessChance(defender, attacker, battle)
   if type(RD.emotionDodgeBonus) == "function" then
     chance = chance + (tonumber(RD.emotionDodgeBonus(defender, attacker, battle)) or 0)
   end
-  return clamp(chance, 0.05, 0.90)
+  return clamp(chance, 0.15, 0.97) -- wider easier range
 end
 
 -- Trainer-foe picks live in rules/foe_ai.lua (FoeAi.attach installs
@@ -879,7 +880,7 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
       }
       result.chip = "DODGE"
       result.lines[#result.lines + 1] = dodgeLines[math.random(#dodgeLines)]
- 
+
       if (side.dodgeCounterCd or 0) <= 0 and rng() < RD.DODGE_COUNTER_CHANCE then
         side.dodgeCounterCd = RD.DODGE_COUNTER_CD
         local counterLines = {

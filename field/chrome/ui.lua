@@ -1034,6 +1034,7 @@ function UI.drawWindowFaceHud(ren, metrics, battle)
     local g = love.graphics
     local Font = font()
     local pad = UI.HUD_PAD or UI.FACE_MARGIN or 4
+    -- fs stands for "face size", the pixel size of the face display; uses UI.FACE_SIZE if set, otherwise defaults to 28
     local fs = UI.FACE_SIZE or 28
     local painted = false
     g.push("all")

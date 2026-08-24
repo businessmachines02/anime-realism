@@ -26,7 +26,7 @@
 --   FOLLOWERS          hide the walking buddy so it is not in the fight
 --   WORLD OVERLAY      floor + cover + clash letterbox (projectiles live in UI)
 --   SESSION            get / active / liveBattle — find the live fight
---   CAMERA             pan, mouse peek, keep action on screen
+--   CAMERA             pan, mouse peek, idle pad tour, keep action on screen
 --   BEGIN              survey the pad, spawn the cast, go Live
 --   MONS               send-out, switch, faint when HP hits 0, capture
 --   IDLE / TRAINERS    roam in place; trainers walk to the opening rim
@@ -68,6 +68,16 @@ Lifecycle.CAMERA_LOOK_SPAN = 56
 Lifecycle.CAMERA_LOOK_CLAMP_PAD = 64
 Lifecycle.CAMERA_LOOK_MOVE_PX = 3
 Lifecycle.CAMERA_LOOK_ZONE_INSET = 0.22
+-- Idle tour: while the player picks a command, drift over the pad like a
+-- high establishing shot. Mouse look / clash / messages take the camera back.
+Lifecycle.CAMERA_TOUR_RATE = 0.22
+Lifecycle.CAMERA_TOUR_SPAN_X = 20
+Lifecycle.CAMERA_TOUR_SPAN_Y = 12
+Lifecycle.CAMERA_TOUR_BLEND = 0.42
+Lifecycle.CAMERA_TOUR_UI_BIAS = 10
+Lifecycle.CAMERA_TOUR_FADE_IN = 1.4
+Lifecycle.CAMERA_TOUR_FADE_OUT = 0.7
+Lifecycle.CAMERA_TOUR_PAN_RATE = 1.85
 
 -- Weak keys: sessions die with their BattleState without explicit cleanup races.
 local sessionByBattle = setmetatable({}, { __mode = "k" })
@@ -570,8 +580,9 @@ end
 
 -- ---------------------------------------------------------------------------
 -- CAMERA — keep the fight on screen.
--- Soft-pan between the two mons, peek when the mouse moves, clamp to the
--- surveyed envelope, restore onto the player when FIELD ends.
+-- Soft-pan between the two mons, peek when the mouse moves, slow tour over
+-- the pad while the command menu is up, clamp to the surveyed envelope,
+-- restore onto the player when FIELD ends.
 -- ---------------------------------------------------------------------------
 local function cameraViewSize(session, game)
     local viewW, viewH = 160, 144
@@ -603,6 +614,73 @@ function Lifecycle.mouseLookSpan(viewW, viewH)
         viewH = 144
     end
     return base * (viewW / 160), base * (viewH / 144)
+end
+
+--- Idle-tour drift in world pixels. Scales with the live world view so a
+--- phone-sized pass covers the same fraction of the pad as desktop.
+function Lifecycle.idleTourSpan(viewW, viewH)
+    local spanX = Lifecycle.CAMERA_TOUR_SPAN_X or 20
+    local spanY = Lifecycle.CAMERA_TOUR_SPAN_Y or 12
+    viewW = tonumber(viewW) or 160
+    viewH = tonumber(viewH) or 144
+    if viewW < 1 then
+        viewW = 160
+    end
+    if viewH < 1 then
+        viewH = 144
+    end
+    return spanX * (viewW / 160), spanY * (viewH / 144)
+end
+
+local function commandPhaseIdle(battle)
+    local phase = battle and battle.phase
+    return phase == "menu" or phase == "moveSelect" or phase == "mimicSelect"
+end
+
+--- True when the fight is waiting on the player and nothing else owns the lens.
+local function idleTourWanted(battle, session, looking, nudgeT)
+    if not session or looking or (nudgeT or 0) > 0 then
+        return false
+    end
+    if session._clashPunch or session._reactHold then
+        return false
+    end
+    if session.awaitPlayerMon then
+        return false
+    end
+    if not commandPhaseIdle(battle) then
+        return false
+    end
+    local stack = battle and battle.game and battle.game.stack
+    if stack and type(stack.top) == "function" then
+        local ok, top = pcall(stack.top, stack)
+        if ok and top and top ~= battle then
+            return false
+        end
+    end
+    return true
+end
+
+local function tickIdleTour(session, dt, wanted)
+    local fade = session._tourFade or 0
+    local fadeIn = Lifecycle.CAMERA_TOUR_FADE_IN or 1.4
+    local fadeOut = Lifecycle.CAMERA_TOUR_FADE_OUT or 0.7
+    if wanted then
+        if fadeIn > 0 then
+            fade = math.min(1, fade + dt / fadeIn)
+        else
+            fade = 1
+        end
+        session._tourAngle = (session._tourAngle or 0) + dt * (Lifecycle.CAMERA_TOUR_RATE or 0.22)
+    elseif fade > 0 then
+        if fadeOut > 0 then
+            fade = math.max(0, fade - dt / fadeOut)
+        else
+            fade = 0
+        end
+    end
+    session._tourFade = fade
+    return fade
 end
 
 --- Invert Camera:follow / fallback top-left so we can seed a pan from the live view.
@@ -970,12 +1048,14 @@ function Lifecycle.focusCamera(battle, dt)
     end
 
     local viewW, viewH = cameraViewSize(session, game)
+    local tourFade = tickIdleTour(session, useDt, idleTourWanted(battle, session, looking, nudgeT))
 
     -- Battle menus occupy the lower screen. Aim the camera below the action so
     -- the compact pad appears in the unobstructed upper viewport.
     local targetX = focusX
-    local targetY = focusY + (session._clashUiBias
-        or session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y)
+    local restBias = session._clashUiBias
+        or session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y
+    local targetY = focusY + restBias
     if looking then
         local spanX, spanY = Lifecycle.mouseLookSpan(viewW, viewH)
         targetX = targetX + (session.mouseLookX or 0) * spanX
@@ -987,6 +1067,26 @@ function Lifecycle.focusCamera(battle, dt)
         if envelopePx then
             targetX = clamp(targetX, envelopePx.minX, envelopePx.maxX)
             targetY = clamp(targetY, envelopePx.minY, envelopePx.maxY + (session.cameraUiBiasY or Lifecycle.CAMERA_UI_BIAS_Y))
+        end
+    elseif tourFade > 0 then
+        -- High establishing shot: lean toward the pad mid and drift a slow
+        -- ellipse over the field. Fade shrinks the offset when action resumes.
+        local envelopePx = envelopeRectPx(session)
+        local blend = (Lifecycle.CAMERA_TOUR_BLEND or 0.42) * tourFade
+        if envelopePx then
+            local tourBias = Lifecycle.CAMERA_TOUR_UI_BIAS or 10
+            targetX = targetX + (envelopePx.midX - focusX) * blend
+            targetY = targetY + ((envelopePx.midY + tourBias) - (focusY + restBias)) * blend
+        end
+        local spanX, spanY = Lifecycle.idleTourSpan(viewW, viewH)
+        local angle = session._tourAngle or 0
+        targetX = targetX + math.cos(angle) * spanX * tourFade
+        targetY = targetY + math.sin(angle * 0.92) * spanY * tourFade
+        local pad = Lifecycle.CAMERA_LOOK_CLAMP_PAD or 64
+        local clampRect = envelopeRectPx(session, math.max(pad, spanX, spanY))
+        if clampRect then
+            targetX = clamp(targetX, clampRect.minX, clampRect.maxX)
+            targetY = clamp(targetY, clampRect.minY, clampRect.maxY + restBias)
         end
     end
     session.cameraTargetX, session.cameraTargetY = targetX, targetY
@@ -1017,6 +1117,8 @@ function Lifecycle.focusCamera(battle, dt)
             rate = Lifecycle.CAMERA_PAN_NUDGE_RATE
         elseif offscreen then
             rate = Lifecycle.CAMERA_PAN_CATCHUP_RATE
+        elseif tourFade > 0.05 then
+            rate = Lifecycle.CAMERA_TOUR_PAN_RATE or 1.85
         end
         local alpha = 1 - math.exp(-useDt * rate)
         currentX = currentX + dx * alpha

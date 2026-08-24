@@ -72,16 +72,23 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     34: 27,  # nidoking
     38: 27,   # Ninetales
     58: 22,   # Growlithe
+    96: 24,   # Drowzee - a bit smaller
+    97: 24,   # Hypno - a bit smaller
     133: 22,  # Eevee (a bit bigger)
     117: 23,   # Seadra - a bit smaller
     130: 23,   # Tauros - a bit smaller
     134: 24,  # Vaporeon (a bit bigger; 1.0m would otherwise sit in the 24px band)
     135: 24,  # Jolteon (a bit bigger)
     136: 24,  # Flareon (a bit bigger)
+    68: 35,   # Machamp - a bit bigger
+    112: 33,  # Rhydon - a bit bigger
+    92: 22,   # Gastly - a bit smaller
+    93: 23,   # Haunter - a bit smaller
+    94: 23,   # Gengar - a bit smaller
     196: 22,  # Espeon
     197: 22,  # Umbreon
-    95: 38,    # Onix
-    130: 38,   # Gyarados
+    95: 42,    # Onix
+    130: 42,   # Gyarados
 }
 
 # Gen 1 Pokédex height in meters. Index 0 unused.
