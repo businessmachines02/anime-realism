@@ -252,6 +252,11 @@ return function(Cues)
         end
         opts = opts or {}
         Grid.dodge(session.grid, ent, H.foeOf(session, side))
+        if opts.counterPick then
+            -- Snap back and keep the clock running — COUNTER is a live HUD.
+            H.playAnim(ent, "walk")
+            return true
+        end
         -- Pose variety (type / speed / cycle) is picked inside play("dodge").
         H.playAnim(ent, "dodge")
         Cues.fireDodgeCounterShot(session, side, opts)
@@ -485,6 +490,7 @@ return function(Cues)
                 if Grid and type(Grid.knockbackTiles) == "function" then
                     Grid.knockbackTiles(session.grid, ent, foe, tiles)
                 end
+                Cues.applyWaterHazard(session, side, Grid, battle)
                 ent._heavyHit = true
                 local Projectiles = session._deps and session._deps.Projectiles
                 if not battle._arCheckNow then
@@ -545,6 +551,7 @@ return function(Cues)
             end
             session._clashHitFx = nil
             Grid.knockbackTiles(g, ent, foe, clash and 1 or 2)
+            Cues.applyWaterHazard(session, side, Grid, battle)
             if obstacle and Projectiles and Projectiles.wallImpact then
                 Projectiles.wallImpact(session, obstacle, opts)
             end
@@ -670,9 +677,11 @@ return function(Cues)
         end
         H.playAnim(ent, "miss")
         -- The target hops aside so a miss still reads as a dodge, not a
-        -- quiet no-contact. Skip if they already sidestepped this beat.
+        -- quiet no-contact. Skip if they already sidestepped this beat,
+        -- or if they are asleep / frozen (issue #87).
         local foe = H.foeOf(session, side)
-        if foe and foe.anim ~= "dodge" and not H.isExitPlaying(foe) then
+        if foe and foe.anim ~= "dodge" and not H.isExitPlaying(foe)
+            and not H.statusLocked(foe) then
             if Grid and type(Grid.dodge) == "function" then
                 Grid.dodge(session.grid, foe, ent)
             end

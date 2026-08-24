@@ -72,7 +72,7 @@ Catalog.MOVE_FX = {
     radius = 18,
     color = { 0.18, 0.62, 0.98 },
   },
-  BLIZZARD = { style = "area", glitz = "frost", radius = 22 },
+  BLIZZARD = { style = "blizzard", glitz = "frost", radius = 24, duration = 0.72 },
   PSYCHIC = {
     style = "aura",
     glitz = "psy",

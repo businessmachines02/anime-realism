@@ -108,6 +108,24 @@ local function isCommitChoice(choice)
     return choice and (choice.id == "commit" or choice.dir == "a")
 end
 
+local function drawLiveTimer(g, modal, chrome, x, y, w)
+    local dur = tonumber(modal and modal.duration)
+    local left = tonumber(modal and modal.remaining)
+    if not (dur and dur > 0 and left and w and w > 0) then
+        return
+    end
+    local frac = left / dur
+    if frac < 0 then
+        frac = 0
+    elseif frac > 1 then
+        frac = 1
+    end
+    g.setColor(chrome.muted[1], chrome.muted[2], chrome.muted[3], 0.55)
+    g.rectangle("fill", x, y, w, 2)
+    g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 0.95)
+    g.rectangle("fill", x, y, math.max(1, math.floor(w * frac)), 2)
+end
+
 -- Floating labels. No boxes, no dock panel. COMMIT is A, not drawn.
 local function drawReactTabs(g, Font, modal, chrome)
     local choices = modal.choices
@@ -227,6 +245,7 @@ local function drawReactTabs(g, Font, modal, chrome)
             end
         end
     end
+    drawLiveTimer(g, modal, chrome, 4, 144 - 5, 152)
     g.setColor(1, 1, 1, 1)
 end
 
@@ -296,6 +315,7 @@ local function drawReactDiamond(g, Font, modal, chrome)
             end
         end
     end
+    drawLiveTimer(g, modal, chrome, 6, 140, 148)
     g.setColor(1, 1, 1, 1)
 end
 
@@ -380,6 +400,7 @@ local function drawReactGrid(g, Font, modal, chrome, choiceForDir)
             g.pop()
         end
     end
+    drawLiveTimer(g, modal, chrome, x + 6, y + h - 4, w - 12)
     g.setColor(1, 1, 1, 1)
 end
 
@@ -534,6 +555,8 @@ function Pick.newModal(game, opts)
         _padArmed = not usePad,
         _tabAge = 0,
         _resolved = false,
+        duration = tonumber(opts.timeout) or nil,
+        remaining = tonumber(opts.timeout) or nil,
     }
 
     local function choiceForDir(dir)
@@ -591,8 +614,23 @@ function Pick.newModal(game, opts)
     }
 
     function self:update(dt)
+        dt = tonumber(dt) or 0
         if self.usePad and self.style == "TABS" then
-            self._tabAge = (self._tabAge or 0) + (tonumber(dt) or 0)
+            self._tabAge = (self._tabAge or 0) + dt
+        end
+        if self.remaining and not self._resolved then
+            self.remaining = self.remaining - dt
+            if self.remaining <= 0 then
+                local hold
+                for i = 1, #self.choices do
+                    if self.choices[i].hold then
+                        hold = self.choices[i]
+                        break
+                    end
+                end
+                confirm(hold or { hold = true, label = "HOLD" })
+                return
+            end
         end
         local input = self.game.input
         local n = #self.choices
@@ -719,6 +757,323 @@ function Pick.newModal(game, opts)
     end
 
     return self
+end
+
+-- Live FIELD overlay: a slim chip strip (not the REACT GRID box). Instant
+-- D-pad confirm, no cursor, no stack modal. The fight keeps moving.
+Pick.WINDOW = 2.2
+
+local LIVE_DIR_LETTER = {
+    up = "U", left = "L", right = "R", down = "D", a = "A",
+}
+
+local function fieldType()
+    local ok, Type = pcall(require, "field_type")
+    if ok and type(Type) == "table" then
+        return Type
+    end
+    return nil
+end
+
+local function drawTypeText(g, Font, text, x, y, ink)
+    local Type = fieldType()
+    if Type and type(Type.draw) == "function" then
+        return Type.draw(g, text, x, y, ink, Font)
+    end
+    if Font and type(Font.draw) == "function" then
+        g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+        Font.draw(text, x, y)
+        return true
+    end
+    if type(g.print) == "function" then
+        g.setColor(ink[1], ink[2], ink[3], ink[4] or 1)
+        g.print(text, x, y)
+        return true
+    end
+    return false
+end
+
+local function typeWidth(Font, text)
+    local Type = fieldType()
+    if Type and type(Type.width) == "function" then
+        return tonumber(Type.width(text, Font)) or (#tostring(text) * 5)
+    end
+    return glyphWidth(Font, text)
+end
+
+function Pick.liveChipTexts(live)
+    local out = {}
+    local hold
+    local choices = live and live.choices or {}
+    for i = 1, #choices do
+        local choice = choices[i]
+        if choice then
+            local letter = LIVE_DIR_LETTER[choice.dir] or ""
+            local name = shortReactLabel(choice)
+            local text = letter ~= "" and (letter .. " " .. name) or name
+            if choice.hold or choice.id == "hold" then
+                hold = text
+            else
+                out[#out + 1] = text
+            end
+        end
+    end
+    if hold then
+        out[#out + 1] = hold
+    end
+    return out
+end
+
+-- One thin plate + pokepixel labels. Engine Font.draw is 8px tiles and
+-- doubles when scaled — that is why the old GRID COUNTER looked glitched.
+local function drawLiveCounterStrip(g, Font, modal, chrome)
+    local chips = Pick.liveChipTexts(modal)
+    if #chips < 1 then
+        return
+    end
+    local title = tostring(modal.title or "COUNTER")
+    local titleW = typeWidth(Font, title)
+    local gap = 7
+    local chipW = {}
+    local chipsW = 0
+    for i = 1, #chips do
+        chipW[i] = typeWidth(Font, chips[i])
+        chipsW = chipsW + chipW[i]
+        if i > 1 then
+            chipsW = chipsW + gap
+        end
+    end
+    local inner = 144
+    local oneLine = titleW + 8 + chipsW <= inner
+    local chipRows = 1
+    if not oneLine and chipsW > inner then
+        chipRows = 2
+    end
+    local rows = oneLine and 1 or (1 + chipRows)
+    local rowH = 8
+    local inset = 3
+    local h = inset + rows * rowH + math.max(0, rows - 1) * 1 + 3 + inset
+    local t = easeOutCubic((modal._tabAge or 0) / 0.12)
+    local x, w = 4, 152
+    local y = 144 - h * t
+    g.setColor(chrome.paper[1], chrome.paper[2], chrome.paper[3], 1)
+    g.rectangle("fill", x, y, w, h)
+    g.setColor(chrome.ink[1], chrome.ink[2], chrome.ink[3], 0.40)
+    g.rectangle("line", x + 0.5, y + 0.5, w - 1, h - 1)
+
+    local muted = chrome.muted
+    local ink = chrome.ink
+    local textY = y + inset - 1
+    if oneLine then
+        drawTypeText(g, Font, title, x + 4, textY, muted)
+        local cx = x + 4 + titleW + 8
+        for i = 1, #chips do
+            drawTypeText(g, Font, chips[i], cx, textY, ink)
+            cx = cx + chipW[i] + gap
+        end
+    else
+        drawTypeText(g, Font, title, x + 4, textY, muted)
+        local chipY = textY + rowH + 1
+        local cx = x + 4
+        local used = 0
+        for i = 1, #chips do
+            local nextW = chipW[i] + (used > 0 and gap or 0)
+            if chipRows > 1 and used > 0 and used + nextW > inner then
+                chipY = chipY + rowH + 1
+                cx = x + 4
+                used = 0
+            end
+            if used > 0 then
+                cx = cx + gap
+            end
+            drawTypeText(g, Font, chips[i], cx, chipY, ink)
+            cx = cx + chipW[i]
+            used = used + chipW[i] + (used > 0 and gap or 0)
+        end
+    end
+    drawLiveTimer(g, modal, chrome, x + 4, y + h - 4, w - 8)
+    g.setColor(1, 1, 1, 1)
+end
+
+local function assignLiveDirs(choices)
+    local dirs = { "up", "left", "right", "down" }
+    local di = 1
+    for i = 1, #choices do
+        local choice = choices[i]
+        if choice.hold or choice.id == "hold" then
+            choice.dir = "a"
+        elseif dirs[di] then
+            choice.dir = dirs[di]
+            di = di + 1
+        end
+    end
+    return choices
+end
+
+function Pick.live(battle)
+    local live = battle and battle._arLiveCounter
+    if live and not live.resolved then
+        return live
+    end
+    return nil
+end
+
+function Pick.armLive(battle, opts)
+    if not battle then
+        return nil
+    end
+    opts = opts or {}
+    local choices = assignLiveDirs(opts.choices or {})
+    local window = tonumber(opts.window) or Pick.WINDOW
+    if window < 0.4 then
+        window = 0.4
+    end
+    local live = {
+        title = tostring(opts.title or "COUNTER"),
+        subtitle = opts.subtitle and tostring(opts.subtitle) or nil,
+        choices = choices,
+        index = 1,
+        style = reactHudStyle(),
+        usePad = true,
+        duration = window,
+        remaining = window,
+        onPick = opts.onPick,
+        resolved = false,
+        _padArmed = false,
+        _tabAge = 0,
+        slim = true,
+    }
+    -- FIELD calls these as methods (`live:tick(dt)`). Accept both.
+    function live.tick(a, b)
+        local dt = type(a) == "number" and a or b
+        return Pick.tickLive(battle, dt)
+    end
+    function live.draw()
+        return Pick.drawLive(battle)
+    end
+    function live.input(a, b)
+        local inp = (type(a) == "table" and type(a.wasPressed) == "function") and a or b
+        return Pick.handleLiveInput(battle, inp)
+    end
+    battle._arLiveCounter = live
+    return live
+end
+
+function Pick.resolveLive(battle, choice)
+    local live = battle and battle._arLiveCounter
+    if not live or live.resolved then
+        return nil
+    end
+    live.resolved = true
+    local onPick = live.onPick
+    battle._arLiveCounter = nil
+    if type(onPick) == "function" then
+        pcall(onPick, choice or { hold = true, label = "HOLD" })
+    end
+    return choice
+end
+
+function Pick.tickLive(battle, dt)
+    local live = Pick.live(battle)
+    if not live then
+        return nil
+    end
+    live._tabAge = (live._tabAge or 0) + (tonumber(dt) or 0)
+    live.remaining = (live.remaining or 0) - (tonumber(dt) or 0)
+    if live.remaining <= 0 then
+        local hold
+        for i = 1, #live.choices do
+            if live.choices[i].hold then
+                hold = live.choices[i]
+                break
+            end
+        end
+        return Pick.resolveLive(battle, hold or { hold = true, label = "HOLD" })
+    end
+    return nil
+end
+
+function Pick.handleLiveInput(battle, input)
+    local live = Pick.live(battle)
+    if not (live and input and type(input.wasPressed) == "function") then
+        return false
+    end
+    local down = input.isDown or input.down
+    local function anyPadDown()
+        if type(down) ~= "function" then
+            return false
+        end
+        return down(input, "up") or down(input, "down")
+            or down(input, "left") or down(input, "right")
+            or down(input, "a") or down(input, "b")
+    end
+    if not live._padArmed then
+        if not anyPadDown() then
+            live._padArmed = true
+        end
+        return true
+    end
+    local function choiceForDir(dir)
+        for i = 1, #live.choices do
+            if live.choices[i].dir == dir then
+                return live.choices[i]
+            end
+        end
+        return nil
+    end
+    if input:wasPressed("b") then
+        local hold
+        for i = 1, #live.choices do
+            if live.choices[i].hold then
+                hold = live.choices[i]
+                break
+            end
+        end
+        Pick.resolveLive(battle, hold or { hold = true, label = "HOLD" })
+        return true
+    end
+    -- Timed window: D-pad / A confirm immediately (same as DIAMOND).
+    do
+        local dir
+        if input:wasPressed("up") then
+            dir = "up"
+        elseif input:wasPressed("down") then
+            dir = "down"
+        elseif input:wasPressed("left") then
+            dir = "left"
+        elseif input:wasPressed("right") then
+            dir = "right"
+        elseif input:wasPressed("a") then
+            dir = "a"
+        end
+        if dir then
+            local choice = choiceForDir(dir)
+            if choice then
+                Pick.resolveLive(battle, choice)
+            end
+        end
+        return true
+    end
+end
+
+function Pick.drawLive(battle)
+    local live = Pick.live(battle)
+    if not (live and love and love.graphics) then
+        return false
+    end
+    local Font
+    do
+        local ok, mod = pcall(require, "src.render.Font")
+        if ok then
+            Font = mod
+        end
+    end
+    local Type = fieldType()
+    if not Font and not (Type and type(Type.draw) == "function") then
+        return false
+    end
+    drawLiveCounterStrip(love.graphics, Font, live, reactChrome())
+    return true
 end
 
 return Pick

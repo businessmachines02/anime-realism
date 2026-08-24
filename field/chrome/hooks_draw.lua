@@ -177,6 +177,24 @@ function Hooks.installDraw(FBV, mod, ctx)
             BattleState._arFbvDraw = true
         end
 
+        -- Stamp chrome after the engine finishes the battle draw. Overlay
+        -- can run, then beginBattleHUDPass / a later clear wipes it.
+        if type(BattleState.draw) == "function" and not BattleState._arFbvDrawTail then
+            local origBattleDraw = BattleState.draw
+            function BattleState.draw(self, ...)
+                local result = origBattleDraw(self, ...)
+                if self and isFieldBattle(self)
+                    and FBV and type(FBV.drawChrome) == "function" then
+                    local okC, errC = pcall(FBV.drawChrome, self)
+                    if not okC then
+                        dumpAndThrow(self, "drawChrome", errC)
+                    end
+                end
+                return result
+            end
+            BattleState._arFbvDrawTail = true
+        end
+
         if type(BattleState.drawZonePass) == "function" and not BattleState._arFbvZone then
             local origZone = BattleState.drawZonePass
             function BattleState:drawZonePass(...)
@@ -285,17 +303,41 @@ function Hooks.installDraw(FBV, mod, ctx)
             and not Renderer._arFbvLeftHud then
             local origEnd = Renderer.endFrame
             function Renderer:endFrame(...)
-                local result = origEnd(self, ...)
-                if FBV.enabled(mod) and type(FBV.liveBattle) == "function" then
-                    local battle = select(1, FBV.liveBattle(gameSingleton()))
-                    if battle and isFieldBattle(battle)
-                        and type(FBV.drawWindowPlayerHud) == "function" then
-                        pcall(FBV.drawWindowPlayerHud, self, result)
-                    end
-                end
-                return result
+                -- Player HP lives on the battle overlay now. A second
+                -- window blit of battleHUDCanvas was the dark/light flicker.
+                return origEnd(self, ...)
             end
             Renderer._arFbvLeftHud = true
+        end
+        -- beginBattleHUDPass clears the HUD / overlay canvas after the
+        -- first overlay paint. We already skip drawHUDs; the pass itself
+        -- still wiped HP + plates and made them blink.
+        if okR and type(Renderer) == "table" and not Renderer._arFbvHudPass then
+            if type(Renderer.beginBattleHUDPass) == "function" then
+                local origBegin = Renderer.beginBattleHUDPass
+                function Renderer:beginBattleHUDPass(...)
+                    if FBV.enabled(mod) and type(FBV.liveBattle) == "function" then
+                        local battle = select(1, FBV.liveBattle(gameSingleton()))
+                        if battle and isFieldBattle(battle) then
+                            self._arSkipHudPass = true
+                            return nil
+                        end
+                    end
+                    self._arSkipHudPass = nil
+                    return origBegin(self, ...)
+                end
+            end
+            if type(Renderer.endBattleHUDPass) == "function" then
+                local origHudEnd = Renderer.endBattleHUDPass
+                function Renderer:endBattleHUDPass(prev, ...)
+                    if self._arSkipHudPass then
+                        self._arSkipHudPass = nil
+                        return
+                    end
+                    return origHudEnd(self, prev, ...)
+                end
+            end
+            Renderer._arFbvHudPass = true
         end
     end
 
@@ -306,17 +348,40 @@ function Hooks.installDraw(FBV, mod, ctx)
     -- collapse onto one voxel pose. One tick per display frame.
     local presentGen = 0
     local presentOpened = false
+    local presentOpenedAt = 0
+    local function presentNow()
+        if love and love.timer and type(love.timer.getTime) == "function" then
+            return tonumber(love.timer.getTime()) or 0
+        end
+        return 0
+    end
     local function openPresentFrame()
-        if not presentOpened then
-            presentGen = presentGen + 1
+        -- Letterbox closes the flag before a late overlay in the same
+        -- vsync. Treat a <2ms reopen as the same display frame so HUD / FX
+        -- do not stack (translucent or additive = flicker).
+        local t = presentNow()
+        local sameSlice = presentOpenedAt > 0 and t > 0 and (t - presentOpenedAt) < 0.002
+        if presentOpened or sameSlice then
             presentOpened = true
-            if type(FBV.liveBattle) == "function" then
-                local battle = select(1, FBV.liveBattle(gameSingleton()))
-                if battle then
-                    battle._arHudDrew = nil
-                end
+            return presentGen
+        end
+        presentGen = presentGen + 1
+        presentOpened = true
+        presentOpenedAt = t
+        FBV._presentGen = presentGen
+        if type(FBV.liveBattle) == "function" then
+            local battle = select(1, FBV.liveBattle(gameSingleton()))
+            if battle then
+                battle._arHudDrew = nil
+                battle._arHudDrewGen = nil
             end
         end
+        return presentGen
+    end
+    -- Overlay can beat input.step. Opening the frame here keeps faces and
+    -- the command plate from skipping on a leftover _arHudDrew.
+    function FBV.beginPresentFrame()
+        return openPresentFrame()
     end
     local function presentTick(game, dt)
         if not FBV.enabled(mod) then

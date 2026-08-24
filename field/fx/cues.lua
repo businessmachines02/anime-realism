@@ -94,6 +94,13 @@ function H.isExitPlaying(ent)
         or ent.anim == "faint"
 end
 
+--- Sleep / freeze: inert. A miss must not hop them aside as if they dodged.
+function H.statusLocked(ent)
+    local battler = ent and ent._battleBattler
+    local status = battler and battler.mon and battler.mon.status
+    return status == "SLP" or status == "FRZ"
+end
+
 function H.playAnim(ent, name)
     if ent and type(ent.play) == "function" then
         ent:play(name)
@@ -721,6 +728,33 @@ Cues.CLOUD_MOVES = {
 Cues.CHECK_HIT_FRAC = 0.35
 Cues.HAZE_SLOW = 0.45
 Cues.HAZE_CHIP = 4
+Cues.WATER_HAZARD_CHIP = 8
+
+--- Land mon shoved into water: splash, chip HP, scramble back to dry land.
+function Cues.applyWaterHazard(session, side, Grid, battle)
+    local ent = H.sideEnt(session, side)
+    if not (ent and ent._waterHazard) then
+        return false
+    end
+    ent._waterHazard = nil
+    H.playAnim(ent, "tumble")
+    local chip = Cues.WATER_HAZARD_CHIP or 8
+    local target = battle and ((side == "player") and battle.player or battle.enemy)
+    if battle and type(battle.applyDamage) == "function" and target then
+        pcall(battle.applyDamage, battle, target, chip)
+    elseif type(ent.hp) == "number" then
+        ent.hp = math.max(0, ent.hp - chip)
+    end
+    Grid = Grid or (session and session._deps and session._deps.Grid)
+    if Grid and type(Grid.escapeWater) == "function" then
+        Grid.escapeWater(session.grid, ent)
+    end
+    local Projectiles = session and session._deps and session._deps.Projectiles
+    if Projectiles and type(Projectiles.lightHit) == "function" then
+        pcall(Projectiles.lightHit, session, side, { moveType = "WATER" })
+    end
+    return true
+end
 --- Dedicated clouds usually stick. Traveling fire/water is a roll.
 Cues.LANE_SEED_CHANCE = {
     poison = 0.72,
@@ -2078,6 +2112,9 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
         end
         H.note(session, battle, "cue ok", side, kind, opts.moveId)
         if result then
+            if kind == "miss" then
+                Cues.markMissSpent(session, battle, side)
+            end
             Cues.afterLaneCue(session, side, kind, Grid, opts)
         end
         return result and true or false
@@ -2087,6 +2124,36 @@ function Cues.apply(session, side, kind, Grid, nudgeCamera, battle, opts)
     end
     H.note(session, battle, "cue ok", side, kind, opts.moveId)
     return true
+end
+
+--- One miss pose per attacker per turn. Also strips leftover tagged
+--- "attack missed" rows so the engine queue cannot replay the hop.
+function Cues.markMissSpent(session, battle, side)
+    if not session or (side ~= "player" and side ~= "enemy") then
+        return
+    end
+    session._missSpent = session._missSpent or {}
+    session._missSpent[side] = true
+    battle = battle or session._battle
+    local function strip(row)
+        if type(row) ~= "table" then
+            return
+        end
+        local cue = row.arFieldCue
+        if cue and tostring(cue.kind or "") == "miss"
+            and (cue.side == side or cue.side == nil) then
+            row.arFieldCue = nil
+        end
+    end
+    if type(battle) == "table" then
+        strip(battle.current)
+        local q = battle.queue
+        if type(q) == "table" then
+            for i = 1, #q do
+                strip(q[i])
+            end
+        end
+    end
 end
 
 function Cues.skipReason(session, side, kind, opts)
@@ -2103,6 +2170,12 @@ function Cues.skipReason(session, side, kind, opts)
     end
     if H.cueForce(opts) then
         return nil
+    end
+    -- One miss pose per side per turn. The live COUNTER window is 2.2s, so
+    -- the 1.25s beat skip expires and a leftover "attack missed" row would
+    -- replay the hop after the pick.
+    if kind == "miss" and session._missSpent and session._missSpent[side] then
+        return "spent"
     end
     if kind == "attack" or kind == "status" then
         local mid = H.cueMoveId(opts)

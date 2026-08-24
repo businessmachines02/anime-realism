@@ -35,12 +35,28 @@ function Hooks.installInput(FBV, mod, ctx)
                     self.letterboxWhite = false
 
                     local input = self.game and self.game.input
+                    local live = self._arLiveCounter
+                    local liveCounter = live and not live.resolved
+                    local ateLiveInput = false
+
+                    -- Read the pad before the engine peeks A, or HOLD never fires.
+                    if liveCounter then
+                        ateLiveInput = true
+                        if type(live.tick) == "function" then
+                            pcall(live.tick, live, dt)
+                        end
+                        if input and type(live.input) == "function" then
+                            pcall(live.input, live, input)
+                        end
+                        live = self._arLiveCounter
+                        liveCounter = live and not live.resolved
+                    end
 
                     local swallowPause = false
                     local swallowB = false
                     local phaseBefore = self.phase
                     local pressedA = false
-                    if input and type(input.wasPressed) == "function" then
+                    if input and type(input.wasPressed) == "function" and not liveCounter then
                         pressedA = input:wasPressed("a") == true
                     end
                     local entrenched = focusEntrenched(self)
@@ -153,7 +169,9 @@ function Hooks.installInput(FBV, mod, ctx)
                         and FBV.moveHudStyle(mod) == "DIAMOND"
                         and (self.phase == "moveSelect" or self.phase == "mimicSelect")
                         and not stackedMenu
-                        and not self._arAwaitingReact then
+                        and not self._arAwaitingReact
+                        and not liveCounter
+                        and not ateLiveInput then
                         if input and type(input.wasPressed) == "function" then
                             local moves = self.phase == "mimicSelect"
                                 and (self.mimicMoves or {})
@@ -232,10 +250,16 @@ function Hooks.installInput(FBV, mod, ctx)
                     end
 
                     local result
-                    if (self._arFieldInstantMove or swallowPause or swallowB) and input then
+                    if (self._arFieldInstantMove or swallowPause or swallowB
+                            or ateLiveInput) and input then
                         local origWasPressed = input.wasPressed
                         local injectA = self._arFieldInstantMove and true or false
                         input.wasPressed = function(inp, key)
+                            if ateLiveInput and (key == "a" or key == "b"
+                                    or key == "up" or key == "down"
+                                    or key == "left" or key == "right") then
+                                return false
+                            end
                             if injectA and key == "a" then
                                 return true
                             end

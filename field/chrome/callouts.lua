@@ -378,7 +378,7 @@ local function drawBox(g, Font, text, vanillaTop, alpha)
   end
   local bh = math.max(23, padY * 2 + #lines * lineH)
   local x, y, bw = Callouts.dockRect(bh, vanillaTop)
-  local plateA = (tonumber(Callouts.PLATE_A) or 0.78) * alpha
+  local plateA = (tonumber(Callouts.PLATE_A) or 1) * alpha
 
   g.push("all")
   if type(Callouts.paintPlate) == "function" then

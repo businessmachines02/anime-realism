@@ -26,7 +26,7 @@ RD.FOCUS_REGEN_REACT = 5
 RD.COST = {
   commit = 0, -- just take it the usual way
   dodge = 25,
-  fire = 15,
+  fire = 20,
   charge = 15,
   cover = 20,
   cover_exit = 10,
@@ -56,6 +56,8 @@ RD.DODGE_FAIL_MULT = 1.10
 -- Fresh legs dodge better. +this at full HP, none when the bar is empty.
 RD.DODGE_HEALTH_BONUS = 0.18
 RD.FIRE_CAST_MULT = 1.20
+-- Small chance the interrupt itself goes wide; incoming still lands.
+RD.FIRE_WHIFF_CHANCE = 0.12
 -- REACT special: no charge, so the shot itself is a bit weaker.
 RD.REACT_SPECIAL_MULT = 0.75
 -- Beam clash: ratio to shove the other shot aside. Below this is a deadlock.
@@ -70,6 +72,7 @@ RD.BRACE_COUNTER_CHANCE = 0.35
 RD.BRACE_COUNTER_CD = 4
 RD.BRACE_STATUS_RESIST = 0.30
 
+RD.COVER_MISS_CHANCE = 0.30
 RD.COVER_DEF_MULT = 1.5
 RD.COVER_TYPE_BONUS = 1.20 -- a rock type covering in a cave, or water type around water.
 RD.COVER_EMERGE_MULT = 1.20
@@ -122,6 +125,9 @@ local function clamp(n, lo, hi)
 end
 
 local function rng()
+  if type(RD._testRng) == "function" then
+    return RD._testRng()
+  end
   local r = (love and love.math and love.math.random) or math.random
   return r()
 end
@@ -274,11 +280,20 @@ function RD.clashScore(battle, user, move, foe)
   return math.max(1, power) * spec * mod
 end
 
+--- Electric FIRE cuts a Water incoming regardless of Special.
+function RD.electricCutsWater(incoming, reply, battle)
+  return clashMoveType(battle, reply) == "ELECTRIC"
+      and clashMoveType(battle, incoming) == "WATER"
+end
+
 --- `opts.replySide` is "player" (default) or "enemy". Win means the
 --- defender's reply overpowers the incoming shot.
 function RD.contestSpecialClash(battle, incoming, reply, opts)
   if not (battle and incoming and reply) then
     return "tie", 1
+  end
+  if RD.electricCutsWater(incoming, reply, battle) then
+    return "win", math.max(RD.CLASH_PUSH or 1.35, 2)
   end
   opts = opts or {}
   local replySide = opts.replySide or "player"
@@ -769,6 +784,13 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
     end
     result.focusSpent = cost
     side.reactedThisTurn = true
+    if rng() < (RD.FIRE_WHIFF_CHANCE or 0) then
+      result.action = "commit"
+      result.fireWhiff = true
+      result.chip = "MISS"
+      result.lines[#result.lines + 1] = "The shot\nwent wide!"
+      return result
+    end
     result.fireNow = true
     local incoming = ctx and ctx.move
     local reply = ctx and ctx.replyMove
@@ -782,7 +804,13 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
         result.fireNowContinue = true
         result.fireShotMult = RD.CLASH_WIN_SHOT_MULT
         result.damageMult = 1
-        result.lines[#result.lines + 1] = "Overpowered it!"
+        if RD.electricCutsWater(incoming, reply, battle) then
+          result.fireShotMult = RD.FIRE_CAST_MULT
+          result.damageMult = RD.FIRE_CAST_MULT
+          result.lines[#result.lines + 1] = "Cut through\nthe water!"
+        else
+          result.lines[#result.lines + 1] = "Overpowered it!"
+        end
       elseif verdict == "tie" then
         result.forceMiss = true
         result.fireNowContinue = false
@@ -899,6 +927,12 @@ function RD.resolveIncoming(battle, action, braceCall, ctx)
       result.coverDurMult = RD.COVER_PIERCE_MULT
     else
       result.coverDurMult = 1
+      if rng() < (RD.COVER_MISS_CHANCE or 0) then
+        result.forceMiss = true
+        result.coverSoak = false
+        result.chip = "MISS"
+        result.lines[#result.lines + 1] = "Hid just in time!"
+      end
     end
     return result
   end

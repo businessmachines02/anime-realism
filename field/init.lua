@@ -111,6 +111,11 @@ return function(env)
       end
     end
     UI = loadFile("chrome/ui.lua")
+    if UI then
+      UI.sessionOf = function(battle)
+        return Lifecycle and Lifecycle.get and Lifecycle.get(battle)
+      end
+    end
     Callouts = loadFile("chrome/callouts.lua")
     if Callouts and UI and type(UI.paintDialoguePlate) == "function" then
       Callouts.paintPlate = UI.paintDialoguePlate
@@ -506,6 +511,26 @@ return function(env)
     return false
   end
 
+  -- HP / command / dialogue only. The engine clears the UI canvas between
+  -- the two overlay calls in one BattleState.draw; skipping chrome there
+  -- is what made the whole HUD blink off.
+  function FBV.drawChrome(battle)
+    if battle and FBV.shouldUse(mod, battle) then
+      battle._arAnimeField = true
+    end
+    if UI and type(UI.prepareCanvas) == "function" and love and love.graphics then
+      UI.prepareCanvas(love.graphics)
+    elseif love and love.graphics and type(love.graphics.setBlendMode) == "function" then
+      pcall(love.graphics.setBlendMode, "alpha")
+    end
+    if UI and type(UI.draw) == "function" then
+      UI.draw(battle, FBV.moveHudStyle(mod))
+    end
+    if love and love.graphics and type(love.graphics.setColor) == "function" then
+      love.graphics.setColor(1, 1, 1, 1)
+    end
+  end
+
   function FBV.drawUI(battle)
     if battle and FBV.shouldUse(mod, battle) then
       battle._arAnimeField = true
@@ -517,10 +542,8 @@ return function(env)
         battle._arFieldChipDialogue = nil
       end
     end
-    if UI and type(UI.draw) == "function" then
-      UI.draw(battle, FBV.moveHudStyle(mod))
-    end
-    -- Attack FX on the same overlay as HP (world→UI mapped).
+    -- FX first. Additive bursts used to paint over the cream plates and
+    -- flash dialogue / command / HP every time a shot crossed the HUD.
     local session = Lifecycle and Lifecycle.get and Lifecycle.get(battle)
     if session and Projectiles and type(Projectiles.drawUi) == "function" then
       local okUi, errUi = pcall(Projectiles.drawUi, session, battle)
@@ -531,26 +554,37 @@ return function(env)
         end
       end
     end
+    FBV.drawChrome(battle)
   end
 
   -- One FIELD overlay pass: game box + REACT chips + banter strip. Callers
   -- must not also run battle.overlay next() (classic / gen3 / bubbles).
   function FBV.drawFrame(battle)
-    -- drawClassic (FIELD wrap) and BattleState.draw both fire overlay.
-    if battle and battle._arHudDrew then
+    -- drawClassic and BattleState.draw both fire overlay. The engine often
+    -- CLEARS the UI canvas between those two calls. Skipping the second
+    -- call left a blank overlay for a frame (HP + command + dialogue blink).
+    -- FX still run once per present gen; chrome restamps every overlay.
+    local gen = 0
+    if type(FBV.beginPresentFrame) == "function" then
+      gen = tonumber(FBV.beginPresentFrame()) or 0
+    end
+    local already = battle and (
+      (gen > 0 and battle._arHudDrewGen == gen)
+      or (gen <= 0 and battle._arHudDrew)
+    )
+    if already then
+      FBV.drawChrome(battle)
       return
     end
     if battle then
       battle._arHudDrew = true
+      battle._arHudDrewGen = gen
     end
     FBV.drawUI(battle)
     local stacked = type(FBV.fieldAllowsStackedBottomUI) == "function"
       and FBV.fieldAllowsStackedBottomUI(battle)
     if not stacked then
       FBV.drawCallouts(battle)
-    end
-    if love and love.graphics and type(love.graphics.setColor) == "function" then
-      love.graphics.setColor(1, 1, 1, 1)
     end
   end
 

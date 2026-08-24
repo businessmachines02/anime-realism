@@ -2049,6 +2049,7 @@ function Lifecycle.onTurnStarted(battle)
     if not (session and session.live and session.grid) then
         return
     end
+    session._missSpent = nil
     local Grid = session._deps.Grid
     local function repairInvalidCell(ent)
         if not ent or ent._removed or ent._fainting then

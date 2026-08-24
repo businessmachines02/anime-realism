@@ -1402,6 +1402,16 @@ function Sprites.isWaterType(battler, game, species)
   return Sprites.hasType(battler, "WATER", game, species)
 end
 
+function Sprites.isFlyingType(battler, game, species)
+  return Sprites.hasType(battler, "FLYING", game, species)
+end
+
+--- Water-types swim; Flying-types hover. Land mons stay off water.
+function Sprites.canTraverseWater(battler, game, species)
+  return Sprites.isWaterType(battler, game, species)
+      or Sprites.isFlyingType(battler, game, species)
+end
+
 -- Sprite-shift + type-flavored dodges (issue #66). Generics cycle so two
 -- Normal-types in a row do not always hop the same way.
 local DODGE_GENERIC = { "sidehop", "duck", "lean", "hop" }
@@ -1995,8 +2005,9 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
     trainerPx = basePx,
     trainerPy = basePy,
     bobT = (side == "enemy") and 2.1 or 0.4,
-    -- Continuous sine bob (through rest pose) — keep lively while standing still.
-    bobAmp = (side == "enemy") and 2.0 or 1.8,
+    -- Legacy idle wave: slight sine jiggle while standing still. Off.
+    -- bobAmp = (side == "enemy") and 2.0 or 1.8,
+    bobAmp = 0,
     bobSpeed = (side == "enemy") and 4.3 or 4.0,
     swayAmp = 0,
     anim = "idle",
@@ -2478,8 +2489,11 @@ local function buildEntity(side, cellX, cellY, facing, species, drawer, kind, gr
       bobSpeed = bobSpeed * (1 - 0.35 * k)
     end
     self.bobT = (self.bobT or 0) + dt * bobSpeed
-    local bob = math.sin(self.bobT) * bobAmp
-    local ox, oy = 0, bob
+    -- Legacy idle wave (back-and-forth / vertical sine). Activation off.
+    -- local bob = math.sin(self.bobT) * bobAmp
+    -- local ox, oy = 0, bob
+    local bob = 0
+    local ox, oy = 0, 0
     if self._fainting then
       bob = bob * (1 - math.min(1, (self.animT or 0) / 0.18))
       ox, oy = 0, bob
@@ -3040,9 +3054,10 @@ local function finalizeEntity(ent, battler, barLift, mod, game, species)
     ent._spriteGame = game
     ent._spriteSpecies = species
     ent._fieldSurface = "land"
-    -- Combat mons may splash through surveyed water; the swim sheet
-    -- follows their feet, not their typing.
-    ent.canSwim = true
+    -- SPEC: water cells are legal only for Water-types (swim) or Flying
+    -- (hover). Land mons stay off the drink unless a shove forces a splash.
+    ent.canSwim = Sprites.isWaterType(battler, game, species)
+    ent.canFly = Sprites.isFlyingType(battler, game, species)
     ent._kitBlocks = ent._kitBlocks or 1
     ent._kitBlock = ent._kitBlock or 0
     ent._kitCol = ent._kitCol or 0
@@ -3470,7 +3485,8 @@ function Sprites.syncSurface(ent)
   if not ent or ent._removed or ent.hidden then
     return
   end
-  local want = Sprites.feetOnWater(ent) and "water" or "land"
+  -- Flyers hover; do not swap them onto a swim sheet.
+  local want = (Sprites.feetOnWater(ent) and not ent.canFly) and "water" or "land"
   if want ~= ent._fieldSurface then
     Sprites.applySurface(ent, want)
   end

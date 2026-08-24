@@ -487,6 +487,7 @@ end
 
 -- After the incoming swing: counter toast + physical jab + HP drain.
 -- Dodge/brace flavor stays on the first beat (result.lines).
+local maybeQueueSameTurnCounter
 local function queueReactCounterStrike(battle, result, ctx)
     if not (battle and result and result.counter and ctx) then
         return
@@ -510,6 +511,19 @@ local function queueReactCounterStrike(battle, result, ctx)
             { kind = "counter" })
         hostCall("armFieldChip", battle, "player", "COUNTER")
         log(battle, "REACT counter", "defer→later call")
+        return
+    end
+    if result.counter.playerPick then
+        local st = momentumState(battle)
+        st.mode = "counter"
+        st.boosted = false
+        st.offerSameTurnCounter = true
+        st.reactCounterPick = true
+        hostCall("pushNotice", battle, result.counter.line or "It's a counterattack!",
+            { kind = "counter" })
+        hostCall("armFieldChip", battle, "player", "COUNTER")
+        log(battle, "REACT counter", "player pick")
+        maybeQueueSameTurnCounter(battle)
         return
     end
 
@@ -841,25 +855,8 @@ local function finishCalloutPick(battle, me, moveName, action, braceCall)
             battle._arGuaranteedHit = true
         end
         if not result.counter.deferToCall then
-            local moveId = hostCall("pickCounterStrikeMove", battle, result.counter.kind,
-                battle.player, pending and pending.ctx and pending.ctx.move)
-            local moves = battle.data and battle.data.moves
-            local move = (moveId and type(moves) == "table" and type(moves[moveId]) == "table")
-                and moves[moveId]
-                or (moveId and { id = moveId, category = "physical", type = "NORMAL" })
-                or nil
-            local category = tostring((move and move.category) or "physical"):lower()
-            if category ~= "special" then
-                category = "physical"
-            end
-            result.counter.moveId = moveId
-            result.counter.moveType = move and move.type
-            result.counter.category = category
-            result.counter.ranged = hostCall("isRangedCounter", battle, {
-                moveId = moveId,
-                moveType = result.counter.moveType,
-                category = category,
-            }) == true
+            -- Issue #87: let the player pick the counter in slow-mo.
+            result.counter.playerPick = true
         end
     end
     -- REACT dodge skips origRunDamaging, so accuracy never stamps the
@@ -1610,21 +1607,45 @@ maybeQueueSameTurnCounter = function(battle)
     -- After miss anim + dodge-whiff text — never before the foe's swing.
     log(battle, "COUNTER! menu",
         replacing and "re-pick after miss anim" or "extra strike after miss anim")
+    local onPick = function(choice)
+        finishSameTurnCounter(battle, choice)
+    end
+    -- FIELD: live overlay, no stack modal, no slow-mo. A couple seconds
+    -- then the opening expires (HOLD). Classic still uses the REACT HUD
+    -- with the same timeout so it does not sit on a list box forever.
+    if hostCall("isFieldBattle", battle) == true
+        and Hud and type(Hud.armLive) == "function" then
+        Hud.armLive(battle, {
+            title = "COUNTER",
+            subtitle = replacing and "Pick a move" or me,
+            choices = choices,
+            window = (Hud.WINDOW or 2.2),
+            onPick = onPick,
+        })
+        -- One-frame wait so this updateQueue cannot run end-of-turn
+        -- before the live window is parked.
+        hostCall("insertAfterMissAnim", battle, {
+            wait = 1,
+            arLiveCounter = true,
+        })
+        return
+    end
     hostCall("insertAfterMissAnim", battle, {
         ui = function()
             return newCalloutPickModal(battle.game, {
-                title = "COUNTER!",
+                title = "COUNTER",
                 subtitle = replacing and "Pick a move" or me,
                 choices = choices,
-                pad = false,
-                cancelable = false,
-                onPick = function(choice)
-                    finishSameTurnCounter(battle, choice)
+                pad = true,
+                timeout = (Hud and Hud.WINDOW) or 2.2,
+                cancelable = true,
+                onPick = onPick,
+                onCancel = function()
+                    onPick({ hold = true, label = "HOLD" })
                 end,
             })
         end,
     })
-    -- Opening is live after "dodged aside!".
 end
 
 local function finishCounterPick(battle, me, moveName, doCounter)
