@@ -34,6 +34,9 @@ local Projectiles = load("fx/projectiles.lua")
 local Audio = load("fx/audio.lua")
 local UI = load("chrome/ui.lua")
 local Lifecycle = load("session/lifecycle.lua")
+UI.sessionOf = function(battle)
+  return Lifecycle.get(battle)
+end
 local Compat = load("session/compat.lua")
 local Sprites = load("fx/sprites.lua")
 local Cast = load("pad/cast.lua")
@@ -433,6 +436,83 @@ function tests.water_types_may_step_onto_water()
   truthy(Sprites.isWaterType({ curTypes = { "WATER", "FLYING" } }), "dual Water")
   truthy(not Sprites.isWaterType({ curTypes = { "FIRE" } }), "Fire is not Water")
   truthy(Sprites.isWaterType({ def = { types = { "WATER" } } }), "def.types WATER")
+  truthy(Sprites.isFlyingType({ curTypes = { "FIRE", "FLYING" } }), "Charizard flies")
+  truthy(Sprites.canTraverseWater({ curTypes = { "FIRE", "FLYING" } }),
+    "Flying may hover over water")
+  truthy(not Sprites.canTraverseWater({ curTypes = { "FIRE" } }),
+    "Fire stays off water")
+end
+
+function tests.flying_mons_may_hover_over_water()
+  local plan = Layout.plan(10, 10, 14, 10)
+  local map = {
+    inBounds = function() return true end,
+    isWaterCell = function(_, x, y)
+      return x == 12 and y == 10
+    end,
+    isWalkableCell = function(_, x, y)
+      return not (x == 12 and y == 10)
+    end,
+    isGrassCell = function() return false end,
+    warpAtCell = function() return nil end,
+  }
+  local envelope = Survey.build(map, plan, {})
+  local grid = Grid.build(Arena.generate(nil, plan, 1, envelope), plan)
+  local landU, landV = Coords.worldToPad(envelope.pad, 11, 10)
+  local waterU, waterV = Coords.worldToPad(envelope.pad, 12, 10)
+  local flyer = {
+    id = "charizard", padU = landU, padV = landV, canFly = true, canSwim = false,
+  }
+  Grid.occupy(grid, flyer.id, landU, landV)
+  truthy(Grid.step(grid, flyer, waterU - landU, waterV - landV),
+    "Flying mon can hover onto water")
+  eq(flyer.padU, waterU, "flyer occupies water pad u")
+end
+
+function tests.land_mon_shoved_into_water_takes_a_chip()
+  local plan = Layout.plan(10, 10, 14, 10)
+  local map = {
+    inBounds = function() return true end,
+    isWaterCell = function(_, x, y)
+      return x == 12 and y == 10
+    end,
+    isWalkableCell = function(_, x, y)
+      return not (x == 12 and y == 10)
+    end,
+    isGrassCell = function() return false end,
+    warpAtCell = function() return nil end,
+  }
+  local envelope = Survey.build(map, plan, {})
+  local grid = Grid.build(Arena.generate(nil, plan, 1, envelope), plan)
+  local landU, landV = Coords.worldToPad(envelope.pad, 11, 10)
+  local waterU, waterV = Coords.worldToPad(envelope.pad, 12, 10)
+  local fire = {
+    id = "charmander", padU = landU, padV = landV, canSwim = false, canFly = false,
+    hp = 40,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local foe = {
+    id = "foe", padU = landU - 1, padV = landV,
+  }
+  Grid.occupy(grid, fire.id, landU, landV)
+  Grid.occupy(grid, foe.id, foe.padU, foe.padV)
+  local moved = Grid.knockbackTiles(grid, fire, foe, 1)
+  eq(moved, 1, "shove moves the land mon")
+  eq(fire.padU, waterU, "land mon is forced onto water")
+  eq(fire.padV, waterV, "land mon water v")
+  truthy(fire._waterHazard, "shove marks a water hazard")
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = fire,
+    enemyMon = foe,
+    _deps = { Projectiles = { lightHit = function() end }, Grid = Grid },
+  }
+  truthy(Cues.applyWaterHazard(session, "player", Grid, nil), "hazard resolves")
+  eq(fire.lastAnim, "tumble", "splash plays tumble")
+  eq(fire.hp, 40 - Cues.WATER_HAZARD_CHIP, "water chips HP")
+  truthy(not Grid.isWater(grid, fire.padU, fire.padV),
+    "land mon scrambles back to dry land")
 end
 
 function tests.mons_on_water_use_the_swim_sheet()
@@ -645,6 +725,8 @@ function tests.status_chip_abbreviations()
 end
 
 function tests.mood_portrait_sits_beside_the_sprite()
+  eq(UI.FACE_SIZE, 20, "emotion icons are compact")
+  eq(UI.FACE_BORDER, 1, "emotion icons have a 1px black frame")
   local pad = UI.HUD_PAD
   local px, py = UI.faceAnchor("player", 40, 80, 28, 0, 160)
   eq(px, pad, "player face hugs the left edge")
@@ -653,8 +735,15 @@ function tests.mood_portrait_sits_beside_the_sprite()
   eq(ex, 160 - pad - 28, "foe face hugs the right edge")
   eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
-  eq(hx, px + 14, "HP sits on the face midline")
-  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "HP sits just above the portrait")
+  eq(hx, px + 14, "legacy helper still centers HP on the face")
+  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "legacy helper sits HP above the portrait")
+  local mx, my = UI.hpAboveMon(48, 90)
+  eq(mx, 48, "field HP is centered on the sprite")
+  eq(my, 90 - UI.HP_CHIP_H, "field HP sits just above the sprite")
+  local chipX, chipY = UI.moodBesideFace(px, py, 28, "player", 20)
+  truthy(chipX > px + 28, "player mood sits inward of the left face")
+  chipX = select(1, UI.moodBesideFace(ex, ey, 28, "enemy", 20))
+  truthy(chipX < ex, "foe mood sits inward of the right face")
   local stack = 12
   local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
   eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
@@ -669,6 +758,158 @@ function tests.mood_portrait_sits_beside_the_sprite()
     "tall hop-padded kits still plant HP on the ~24px body")
   eq(UI.barLift({ _fieldBarLift = 24, _kitSheet = true, _kitCell = 32 }), 22,
     "32px kits sit a couple px above the cell top")
+end
+
+function tests.hp_stack_does_not_jump_when_mood_appears()
+  local function paintBadgeY(mood)
+    local prevMood, prevChip = UI.moodOf, UI.moodChip
+    UI.moodOf = function()
+      return mood
+    end
+    UI.moodChip = function()
+      return { text = "WRRY", fill = { 1, 1, 0.94 } }
+    end
+    local firstY
+    local prevLove = love
+    love = {
+      graphics = {
+        setColor = function() end,
+        rectangle = function(_, _, y)
+          if firstY == nil then
+            firstY = y
+          end
+        end,
+        polygon = function() end,
+        push = function() end,
+        pop = function() end,
+        translate = function() end,
+        scale = function() end,
+        print = function() end,
+      },
+    }
+    local player = {
+      _arFieldBattler = true,
+      _arFieldSide = "player",
+      px = 20, py = 40, _fieldBarLift = 10, hidden = false,
+    }
+    local battle = {
+      _arAnimeField = true,
+      player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+      game = {
+        overworld = {
+          camera = { x = 0, y = 0 },
+          entities = { player },
+        },
+        renderer = {
+          uiSize = function() return 160, 144 end,
+          worldViewSize = function() return 160, 144 end,
+          fitScale = function() return 1 end,
+        },
+      },
+    }
+    UI.drawWorldHP(battle, 0, 0, "ui")
+    love = prevLove
+    UI.moodOf, UI.moodChip = prevMood, prevChip
+    return firstY
+  end
+  eq(paintBadgeY(nil), paintBadgeY("worried"),
+    "HP chip stays put when a mood pill appears")
+end
+
+function tests.hp_chip_plants_on_the_sprite()
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80, py = 64, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = { camera = { x = 0, y = 0 }, entities = { enemy } },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  local hx, hy = UI.hpAboveMon((enemy.px or 0) + 8, (enemy.py or 0) - 10)
+  hx, hy = UI.clampHpChip(hx, hy, 160, 144, 0)
+  truthy(#painted > 0, "HP chip paints on the overlay")
+  local near = false
+  for i = 1, #painted do
+    if math.abs((painted[i].x or 0) - (hx - math.floor(UI.HP_CHIP_W / 2))) <= 2 then
+      near = true
+      break
+    end
+  end
+  truthy(near, "HP chip sits next to the field sprite, not the window corner")
+end
+
+function tests.window_faces_hug_true_window_corners()
+  local drawn = {}
+  local prevFace, prevMood, prevChip = UI.faceFlash, UI.moodOf, UI.moodChip
+  UI.faceEnabled = function() return true end
+  UI.faceFlash = function(_, isPlayer)
+    return { getWidth = function() return 40 end }, 1, isPlayer
+  end
+  UI.moodOf = function() return nil end
+  local prevLove = love
+  love = {
+    graphics = {
+      getWidth = function() return 800 end,
+      getHeight = function() return 450 end,
+      push = function() end,
+      pop = function() end,
+      origin = function() end,
+      setScissor = function() end,
+      setColor = function() end,
+      setBlendMode = function() end,
+      translate = function() end,
+      scale = function() end,
+      draw = function(_, x, y)
+        drawn[#drawn + 1] = { x = x, y = y }
+      end,
+    },
+  }
+  local battle = { _arAnimeField = true }
+  local ren = {
+    uiScale = function() return 2 end,
+    uiSize = function() return 160, 144 end,
+    _arFieldFaceBattle = battle,
+  }
+  truthy(UI.drawWindowFaceHud(ren, { width = 800, height = 450, dpiX = 1, dpiY = 1 }, battle),
+    "window faces paint")
+  love = prevLove
+  UI.faceFlash, UI.moodOf, UI.moodChip = prevFace, prevMood, prevChip
+  UI.faceEnabled = nil
+  eq(#drawn, 2, "both faces paint")
+  local pad = UI.HUD_PAD
+  local fs = UI.FACE_SIZE
+  eq(drawn[1].x, pad, "player face authors at the left pad")
+  eq(drawn[1].y, pad, "player face authors at the top pad")
+  eq(drawn[2].x, 160 - pad - fs, "foe face authors at the right pad")
+  eq(drawn[2].y, pad, "foe face authors at the top pad")
 end
 
 function tests.field_hud_registers_wide_anchors()
@@ -717,15 +958,9 @@ function tests.field_hud_registers_wide_anchors()
   }
   UI.drawWorldHP(battle, 0, 0, "ui")
   love = prevLove
-  local sawRight = false
-  for i = 1, #anchors do
-    if anchors[i].anchor == "topright" then
-      sawRight = true
-    end
-  end
-  eq(#anchors, 1, "player stack is not sent to the engine")
-  truthy(sawRight, "foe HP registers a topright window anchor")
-  truthy(battle.game.renderer._arFieldHudLeft, "player stack is kept for the window blit")
+  eq(#anchors, 0, "HP stacks stay on the battle overlay")
+  eq(battle.game.renderer._arFieldHudLeft, nil,
+    "no second window blit of the player stack")
 end
 
 function tests.field_hud_window_left_blits_from_stored_stack()
@@ -762,6 +997,112 @@ function tests.field_hud_window_left_blits_from_stored_stack()
   eq(drawn[1].x, 8, "stack docks to window left at authored pad * scale")
   eq(drawn[1].y, 8, "stack docks to window top at authored pad * scale")
   eq(drawn[1].sx, 2, "stack uses the UI scale")
+end
+
+function tests.field_hud_does_not_clear_stack_before_anchor()
+  local kept = { x = 4, y = 4, w = 28, h = 40, canvas = {} }
+  local battle = {
+    game = { renderer = { _arFieldHudLeft = kept } },
+  }
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function() end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  eq(battle.game.renderer._arFieldHudLeft, kept,
+    "missing battlers do not wipe the window blit box")
+end
+
+function tests.field_hud_uses_session_mon_when_off_the_entity_list()
+  local painted = 0
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function()
+        painted = painted + 1
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local player = {
+    _arFieldBattler = true,
+    _arFieldSide = "player",
+    px = 20, py = 40, _fieldBarLift = 10,
+    hidden = true,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 20, mon = { name = "GEODUDE", stats = { hp = 20 } } },
+    game = {
+      overworld = { camera = { x = 0, y = 0 }, entities = {} },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  local session = {
+    live = true,
+    grid = {},
+    playerMon = player,
+    enemyMon = nil,
+  }
+  Lifecycle._testBind(battle, session)
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  Lifecycle._testUnbind(battle)
+  truthy(painted > 0, "HP still paints when the mon is off ow.entities")
+end
+
+function tests.field_hud_redraws_when_overlay_beats_present_tick()
+  local FBV = FieldBattle
+  local draws, chrome = 0, 0
+  local orig = FBV.drawUI
+  local origChrome = FBV.drawChrome
+  FBV.drawUI = function()
+    draws = draws + 1
+  end
+  FBV.drawChrome = function()
+    chrome = chrome + 1
+  end
+  local gen, opened = 0, false
+  FBV.beginPresentFrame = function()
+    if not opened then
+      gen = gen + 1
+      opened = true
+    end
+    return gen
+  end
+  local battle = { _arHudDrew = true }
+  FBV.drawFrame(battle)
+  eq(draws, 1, "stale _arHudDrew does not skip faces or the command plate")
+  FBV.drawFrame(battle)
+  eq(draws, 1, "same present gen does not replay FX")
+  eq(chrome, 1, "same present gen restamps chrome after the engine clear")
+  opened = false
+  FBV.drawFrame(battle)
+  eq(draws, 2, "next display frame paints again")
+  FBV.drawUI = orig
+  FBV.drawChrome = origChrome
+  FBV.beginPresentFrame = nil
 end
 
 function tests.move_hud_shows_b_pause_hint()
@@ -940,8 +1281,8 @@ function tests.dialogue_plate_is_one_light_glass()
   local fill = UI.DIALOGUE_FILL
   truthy(fill and fill[1] > 0.9 and fill[2] > 0.9 and fill[3] > 0.8,
     "plain dialogue is a light plate")
-  truthy(UI.DIALOGUE_A > 0.5 and UI.DIALOGUE_A < 1,
-    "plain dialogue is translucent")
+  eq(UI.DIALOGUE_A, 1, "dialogue plate is opaque so the world cannot shimmer through")
+  eq(UI.HUD_PANEL_A, 1, "command / move plate is opaque")
   local x, y, w, h = UI.dialogueRect()
   eq(x, 4, "dialogue stays in the bottom slot")
   eq(y, 119, "dialogue sits on the vanilla row")
@@ -1196,8 +1537,8 @@ function tests.focus_bar_gap_flush_vs_one_pixel()
   local flushTop, flushBot = paintY(0)
   local gappedTop, gappedBot = paintY(1)
   UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
-  eq(flushTop, gappedTop, "focus bar stays pinned to the top pad")
-  truthy(gappedBot > flushBot, "1PX gap drops the HP bar one pixel")
+  eq(flushBot, gappedBot, "HP bar stays planted on the sprite")
+  truthy(gappedTop < flushTop, "1PX gap lifts the focus bar one pixel")
 end
 
 function tests.compact_arena_keeps_cast_lanes_clear()
@@ -1257,6 +1598,62 @@ local function loadReactiveDefense()
   local FoeAi = assert(loadfile(root .. "/../battle/rules/foe_ai.lua"))()
   FoeAi.attach(RD)
   return RD, FoeAi
+end
+
+function tests.cover_can_force_a_miss()
+  local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  local tackle = { id = "TACKLE", power = 35, category = "physical", type = "NORMAL" }
+  local blizzard = { id = "BLIZZARD", power = 120, category = "special", type = "ICE" }
+  local battle = {
+    player = { stats = { speed = 80, defense = 50, special = 40 } },
+    enemy = { stats = { speed = 40, defense = 80, special = 30 } },
+  }
+  RD.state(battle)
+  RD._testRng = function() return 0 end
+  local result = RD.resolveIncoming(battle, "cover", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = tackle,
+  })
+  eq(result.forceMiss, true, "cover can make the incoming miss")
+  eq(result.coverSoak, false, "a miss does not spend cover durability")
+  RD._testRng = function() return 0 end
+  result = RD.resolveIncoming(battle, "cover", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = blizzard,
+  })
+  eq(result.forceMiss, false, "pierce moves still find cover")
+  truthy(result.coverSoak, "pierce still soaks durability")
+  RD._testRng = nil
+  RD.clear(battle)
+end
+
+function tests.blizzard_uses_a_snow_cone_not_an_area_ring()
+  eq(FxCatalog.MOVE_FX.BLIZZARD.style, "blizzard", "Blizzard is its own style")
+  truthy(FxCatalog.MOVE_FX.BLIZZARD.style ~= "area", "Blizzard is not a filled ring")
+  local grid = sampleGrid()
+  local player = {
+    id = "player", padU = grid.home.player.u, padV = grid.home.player.v,
+    px = 16, py = 32,
+  }
+  local enemy = {
+    id = "enemy", padU = grid.home.enemy.u, padV = grid.home.enemy.v,
+    px = 96, py = 40,
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _battle = { kind = "wild" },
+  }
+  Projectiles.clear(session)
+  local storm = Projectiles.move(session, "player", {
+    category = "special", moveType = "ICE", moveId = "BLIZZARD",
+  })
+  truthy(storm, "Blizzard spawned")
+  eq(storm.style, "blizzard", "catalog style reaches the projectile")
 end
 
 function tests.npc_react_spends_focus_and_mixes_picks()
@@ -1439,6 +1836,7 @@ end
 
 function tests.fire_now_reacts_during_a_charge()
   local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  RD._testRng = function() return 1 end
   local battle = {
     player = { stats = { speed = 90, defense = 40, special = 80 } },
     enemy = { stats = { speed = 40, defense = 80, special = 30 } },
@@ -2236,6 +2634,7 @@ end
 
 function tests.fire_clashes_with_an_incoming_special()
   local RD = assert(loadfile(root .. "/../battle/rules/reactive_defense.lua"))()
+  RD._testRng = function() return 1 end
   local ember = { id = "EMBER", power = 40, category = "special", type = "FIRE" }
   local water = { id = "WATER_GUN", power = 40, category = "special", type = "WATER" }
   truthy(RD.isSpecialClashIncoming(ember), "Ember is a clashable special")
@@ -2323,6 +2722,34 @@ function tests.fire_clashes_with_an_incoming_special()
   RD.state(battle)
   verdict = RD.contestSpecialClash(battle, hydro, bolt, { replySide = "enemy" })
   eq(verdict, "win", "slower foe FIRE with higher Special still cuts")
+  battle = {
+    player = { stats = { special = 20, speed = 20 } },
+    enemy = { stats = { special = 200, speed = 120 } },
+  }
+  RD.state(battle)
+  verdict = RD.contestSpecialClash(battle, hydro, bolt)
+  eq(verdict, "win", "Electric FIRE cuts Water even with lower Special")
+  result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = hydro,
+    replyMove = bolt,
+  })
+  eq(result.fireClash, "win", "Electric FIRE clash-wins vs Hydro")
+  eq(result.damageMult, RD.FIRE_CAST_MULT, "Electric FIRE keeps the 1.2x shot")
+  eq(result.fireShotMult, RD.FIRE_CAST_MULT, "Electric FIRE shot is not clash-nerfed")
+  eq(RD.COST.fire, 20, "FIRE spends more Focus")
+  RD._testRng = function() return 0 end
+  RD.state(battle)
+  result = RD.resolveIncoming(battle, "fire", nil, {
+    user = battle.enemy,
+    target = battle.player,
+    move = hydro,
+    replyMove = bolt,
+  })
+  eq(result.fireWhiff, true, "FIRE can go wide")
+  eq(result.fireNow, nil, "a whiffed FIRE does not interrupt")
+  RD._testRng = function() return 1 end
   RD.clear(battle)
 
   local React = assert(loadfile(root .. "/../battle/rules/react.lua"))()
@@ -2835,6 +3262,64 @@ function tests.asleep_mons_do_not_wander()
   eq(player.padU, frozenU, "frozen mon does not wander u")
   eq(player.padV, frozenV, "frozen mon does not wander v")
   Lifecycle._testUnbind(battle)
+end
+
+function tests.asleep_mons_do_not_dodge_a_miss()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local function mon(id, home, status)
+    return {
+      id = id,
+      padU = home.u,
+      padV = home.v,
+      anim = "idle",
+      lastAnim = nil,
+      play = function(self, kind)
+        self.lastAnim = kind
+        self.anim = kind
+      end,
+      _battleBattler = { mon = { status = status } },
+    }
+  end
+  local player = mon("player", pHome, nil)
+  local enemy = mon("enemy", eHome, "SLP")
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 8,
+    _deps = { Projectiles = { miss = function() end } },
+  }
+  local stayU, stayV = enemy.padU, enemy.padV
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, nil), "miss vs sleep")
+  eq(player.lastAnim, "miss", "attacker still plays miss")
+  eq(enemy.lastAnim, nil, "asleep defender does not play dodge")
+  eq(enemy.anim, "idle", "asleep defender keeps the sleep stance")
+  eq(enemy.padU, stayU, "asleep defender does not hop u")
+  eq(enemy.padV, stayV, "asleep defender does not hop v")
+
+  session._lastCueAt = nil
+  session._now = 9
+  player.lastAnim = nil
+  enemy._battleBattler.mon.status = "FRZ"
+  enemy.anim = "idle"
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, nil), "miss vs freeze")
+  eq(enemy.lastAnim, nil, "frozen defender does not play dodge")
+  eq(enemy.padU, stayU, "frozen defender does not hop u")
+  eq(enemy.padV, stayV, "frozen defender does not hop v")
+
+  session._lastCueAt = nil
+  session._now = 10
+  player.lastAnim = nil
+  enemy.lastAnim = nil
+  enemy._battleBattler.mon.status = nil
+  enemy.anim = "idle"
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, nil), "miss vs awake")
+  eq(enemy.lastAnim, "dodge", "awake defender still sidesteps a miss")
 end
 
 function tests.idle_mons_face_each_other_diagonally()
@@ -4569,6 +5054,203 @@ function tests.successful_dodge_plays_on_the_pick()
   truthy(not session._heldReact, "success is not stashed behind the hit")
 end
 
+function tests.dodge_counter_snaps_back_instead_of_dodging()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 93,
+    _battle = {},
+    _deps = { Projectiles = Projectiles },
+  }
+  truthy(Cues.apply(session, "player", "dodge", Grid, nil, session._battle, {
+    forceMiss = true,
+    counterPick = true,
+  }), "counter-pick dodge is accepted")
+  eq(player.lastAnim, "walk", "counter pick snaps back, not dodge pose")
+  truthy(not session._clashPunch, "live COUNTER does not punch in")
+  eq(session._clashSlowT, nil, "live COUNTER does not slow the clock")
+end
+
+function tests.live_counter_hud_times_out_to_hold()
+  local Pick = assert(loadfile(root .. "/../battle/chrome/pick.lua"))()
+  local battle = {}
+  local picked
+  local live = Pick.armLive(battle, {
+    title = "COUNTER",
+    choices = {
+      { label = "THUNDERBOLT", moveInst = { id = "THUNDERBOLT" } },
+      { label = "HOLD", hold = true },
+    },
+    window = 2.2,
+    onPick = function(choice)
+      picked = choice
+    end,
+  })
+  truthy(live, "live overlay armed")
+  eq(live.choices[1].dir, "up", "first move is U")
+  eq(live.choices[2].dir, "a", "HOLD sits on A")
+  eq(battle._arLiveCounter, live, "stored on the battle")
+  Pick.tickLive(battle, 1.0)
+  eq(picked, nil, "still open after one second")
+  truthy(battle._arLiveCounter, "window still live")
+  Pick.tickLive(battle, 1.3)
+  truthy(picked and picked.hold, "timeout HOLDs")
+  eq(battle._arLiveCounter, nil, "overlay clears")
+end
+
+function tests.live_counter_d_pad_confirms_the_move()
+  local Pick = assert(loadfile(root .. "/../battle/chrome/pick.lua"))()
+  local battle = {}
+  local picked
+  local live = Pick.armLive(battle, {
+    title = "COUNTER",
+    choices = {
+      { label = "SCRATCH", moveInst = { id = "SCRATCH" } },
+      { label = "CUT", moveInst = { id = "CUT" } },
+      { label = "HOLD", hold = true },
+    },
+    onPick = function(choice)
+      picked = choice
+    end,
+  })
+  live._padArmed = true
+  local presses = { up = true }
+  local input = {
+    wasPressed = function(_, key)
+      return presses[key] == true
+    end,
+    isDown = function()
+      return false
+    end,
+  }
+  -- FIELD calls these as methods: live.input(live, input)
+  truthy(live.input(live, input), "method-style U is accepted")
+  eq(picked and picked.label, "SCRATCH", "U fires Scratch immediately")
+  eq(battle._arLiveCounter, nil, "overlay closes after the pick")
+
+  battle = {}
+  picked = nil
+  live = Pick.armLive(battle, {
+    choices = {
+      { label = "SCRATCH", moveInst = { id = "SCRATCH" } },
+      { label = "HOLD", hold = true },
+    },
+    window = 2.2,
+    onPick = function(choice)
+      picked = choice
+    end,
+  })
+  live.tick(live, 2.3)
+  truthy(picked and picked.hold, "method-style tick still times out to HOLD")
+end
+
+function tests.live_counter_parks_the_engine_queue()
+  local grid = sampleGrid()
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = { id = "player" },
+    enemyMon = { id = "enemy" },
+    _battle = { _arLiveCounter = { resolved = false } },
+  }
+  truthy(Cues.shouldParkEngineQueue(session),
+    "engine waits out the live COUNTER window")
+  session._battle._arLiveCounter.resolved = true
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "engine resumes after the window")
+  session._battle._arLiveCounter = nil
+  truthy(not Cues.shouldParkEngineQueue(session),
+    "no overlay does not park")
+end
+
+function tests.live_counter_hud_uses_slim_chips()
+  local Pick = assert(loadfile(root .. "/../battle/chrome/pick.lua"))()
+  local battle = {}
+  local live = Pick.armLive(battle, {
+    title = "COUNTER",
+    subtitle = "KABUTO",
+    choices = {
+      { label = "SCRATCH", moveInst = { id = "SCRATCH" } },
+      { label = "CUT", moveInst = { id = "CUT" } },
+      { label = "HOLD", hold = true },
+    },
+  })
+  truthy(live.slim, "live COUNTER uses the slim strip")
+  local chips = Pick.liveChipTexts(live)
+  eq(chips[1], "U SCRATCH", "U is Scratch")
+  eq(chips[2], "L CUT", "L is Cut")
+  eq(chips[3], "A HOLD", "A is Hold")
+end
+
+function tests.spent_miss_does_not_replay_after_the_counter_window()
+  local grid = sampleGrid()
+  local pHome = grid.home.player
+  local eHome = grid.home.enemy
+  local player = {
+    id = "player", padU = pHome.u, padV = pHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  local enemy = {
+    id = "enemy", padU = eHome.u, padV = eHome.v,
+    play = function(self, kind) self.lastAnim = kind end,
+  }
+  Grid.setPad(grid, player, player.padU, player.padV)
+  Grid.setPad(grid, enemy, enemy.padU, enemy.padV)
+  local leftover = {
+    text = "The attack missed!",
+    arFieldCue = { side = "player", kind = "miss" },
+  }
+  local battle = {
+    queue = { leftover },
+  }
+  local session = {
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    _now = 12,
+    _deps = { Projectiles = Projectiles, UI = UI, Grid = Grid, Cues = Cues },
+    _battle = battle,
+  }
+  truthy(Cues.apply(session, "player", "miss", Grid, nil, battle), "first miss plays")
+  eq(player.lastAnim, "miss", "miss pose on the first cue")
+  eq(leftover.arFieldCue, nil, "leftover miss tag is stripped")
+  leftover.arFieldCue = { side = "player", kind = "miss" }
+  battle.current = leftover
+  leftover._arFieldCueDone = nil
+  session._now = 15
+  session._lastCueAt = 12
+  player.lastAnim = "idle"
+  enemy.lastAnim = "idle"
+  truthy(Cues.shouldSkipEvent(session, "player", "miss"),
+    "spent miss stays skipped after 2.2s")
+  eq(Cues.pumpCurrent(session, battle, Grid, nil), false,
+    "pump does not replay the leftover miss")
+  eq(player.lastAnim, "idle", "miss pose does not replay")
+  eq(enemy.lastAnim, "idle", "dodge hop does not replay")
+
+  Lifecycle._testBind(battle, session)
+  Lifecycle.onTurnStarted(battle)
+  truthy(not Cues.shouldSkipEvent(session, "player", "miss"),
+    "next turn can miss again")
+  Lifecycle._testUnbind(battle)
+end
+
 function tests.failed_dodge_leads_the_hit()
   local grid = sampleGrid()
   local pHome = grid.home.player
@@ -5641,8 +6323,8 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   eq(y + 23 + 2, 119, "gap sits between foe box and vanilla box")
   truthy(y >= 2, "box stays on the UI")
   local _, ySlot, _, _, placeSlot = Callouts.dockRect(23, nil)
-  eq(placeSlot, "slot", "standalone box uses the vanilla slot")
-  eq(ySlot, 119, "empty narrator leaves the foe box at the bottom")
+  eq(placeSlot, "above_box", "callouts stay above the dialogue row")
+  eq(ySlot + 23 + 2, 119, "empty narrator still docks above the vanilla slot")
 
   local session = {}
   truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
@@ -5664,9 +6346,8 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   eq(session._trainerCallouts.foe[1].text, "Onix! Move!", "react is showing")
   eq(#session._trainerCallouts.foe, 1, "previous order is dropped")
   Callouts.tick(session, Callouts.HOLD_REACT + Callouts.FADE + 0.05)
-  truthy(not (session._trainerCallouts and session._trainerCallouts.foe
-      and session._trainerCallouts.foe[1]),
-    "emitted callout is not replayed after the hold")
+  eq(session._trainerCallouts.foe[1].text, "Onix! Move!",
+    "callout stays up until a new shout replaces it")
 
   truthy(Callouts.push(session, "player", "PIKACHU!\nDodge it!", { kind = "react" }),
     "player react order uses the dialogue strip")
@@ -6973,6 +7654,118 @@ function tests.camera_look_zone_skips_touch_chrome()
   truthy((session.mouseLookT or 0) > 0, "look timer is held from the inner viewport")
 end
 
+function tests.camera_idle_tour_orbits_pad()
+  local sx, sy = Lifecycle.idleTourSpan(160, 144)
+  eq(sx, Lifecycle.CAMERA_TOUR_SPAN_X, "classic view keeps the 20px tour X")
+  eq(sy, Lifecycle.CAMERA_TOUR_SPAN_Y, "classic view keeps the 12px tour Y")
+  eq(select(1, Lifecycle.idleTourSpan(320, 144)), Lifecycle.CAMERA_TOUR_SPAN_X * 2,
+    "double-wide view doubles tour X")
+
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  Lifecycle._testBind(battle, {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+  })
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local restX, restY = followed.x, followed.y
+
+  battle.phase = "menu"
+  for _ = 1, 120 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local tour1x, tour1y = followed.x, followed.y
+  truthy(math.abs(tour1x - restX) > 2 or math.abs(tour1y - restY) > 2,
+    "command idle lifts the camera off the tight battler lock")
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  truthy(math.abs(followed.x - tour1x) > 2 or math.abs(followed.y - tour1y) > 2,
+    "idle tour keeps drifting over the pad")
+
+  battle.phase = "messages"
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  eq(followed.x, restX, "action framing returns camera X after the tour")
+  eq(followed.y, restY, "action framing returns camera Y after the tour")
+end
+
+function tests.camera_idle_tour_yields_to_mouse_look()
+  local grid = sampleGrid()
+  local followed
+  local camera = {
+    x = 0,
+    y = 0,
+    follow = function(self, x, y, vw, vh)
+      vw, vh = vw or 160, vh or 144
+      self.x = x - (vw / 2 - 16)
+      self.y = y - (vh / 2 - 8)
+      followed = { x = x, y = y }
+    end,
+  }
+  local battle = {
+    phase = "menu",
+    game = {
+      overworld = { camera = camera },
+      renderer = { worldViewSize = function() return 160, 144 end },
+    },
+  }
+  local player = { padU = grid.home.player.u, padV = grid.home.player.v }
+  local enemy = { padU = grid.home.enemy.u, padV = grid.home.enemy.v }
+  local session = {
+    state = Lifecycle.STATE.Live,
+    live = true,
+    grid = grid,
+    playerMon = player,
+    enemyMon = enemy,
+    envelope = { gridRect = grid.worldRect },
+    _mouseLookInjected = true,
+  }
+  Lifecycle._testBind(battle, session)
+
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  local tourX = followed.x
+
+  Lifecycle.noteMouseLook(session, 1, 0, 8)
+  for _ = 1, 180 do
+    Lifecycle.focusCamera(battle, 1 / 60)
+  end
+  Lifecycle._testUnbind(battle)
+
+  truthy(followed.x > tourX + 8, "mouse look takes the lens from the idle tour")
+end
+
 function tests.sprite_cast_and_animation()
   local grid, plan = sampleGrid()
   local overworld = { entities = {} }
@@ -7009,7 +7802,7 @@ function tests.sprite_cast_and_animation()
   eq(player.anim, "idle", "attack returns to idle")
   Cast.tick(session, 0.10)
   eq(player.px, player.basePx, "idle bob has no horizontal sway")
-  truthy(player.py ~= player.basePy, "idle pose bobs vertically")
+  eq(player.py, player.basePy, "idle pose stays planted (legacy wave off)")
 
   enemy:play("faint")
   for _ = 1, 55 do
@@ -9134,7 +9927,7 @@ function tests.emotions_chip_colors_match_mood()
   truthy(angry.fill and angry.fill[1] > 0.6, "angry fill is red")
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
   eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
-  eq(E.chip("normal"), nil, "normal has no chip")
+  eq(E.chip("normal").text, "OK", "calm mood still has a chip")
 end
 
 function tests.status_chips_are_smaller_than_hud_type()
@@ -9248,7 +10041,8 @@ function tests.emotions_portrait_holds_until_normal()
   side.flash = nil
   side.fadeAt = (os.clock()) - 2
   side.portraitMood = "angry"
-  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after fading back to normal")
+  eq(E.portraitAlpha(battle, true), 1, "calm still keeps the portrait up")
+  eq(E.portraitMood(battle, true), "normal", "face follows the live mood")
   E.clear(battle)
 end
 

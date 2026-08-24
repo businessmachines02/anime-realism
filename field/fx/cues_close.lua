@@ -155,6 +155,11 @@ return function(Cues)
         if Cues.awaitingReact(battle) then
             return false
         end
+        -- Live COUNTER HUD is not a stack modal. Park the turn scripts so
+        -- end-of-turn cannot fire while the window is open; FIELD still ticks.
+        if battle and battle._arLiveCounter and not battle._arLiveCounter.resolved then
+            return true
+        end
         if Cues.awaitingCallout(battle) then
             return true
         end
@@ -205,6 +210,7 @@ return function(Cues)
         if Grid and type(Grid.knockbackTiles) == "function" then
             Grid.knockbackTiles(session.grid, ent, foe, tiles)
         end
+        Cues.applyWaterHazard(session, side, Grid, battle)
         ent._heavyHit = true
         H.playHitAnim(ent)
         return true

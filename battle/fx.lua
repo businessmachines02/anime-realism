@@ -100,6 +100,8 @@ function Fx.play(battle, action, result)
             local opts = {}
             if kind == "dodge" and result and result.counter
                 and not result.counter.deferToCall then
+                -- Snap-back; the live COUNTER HUD owns the pick window.
+                opts.counterPick = true
                 opts.counterMoveId = result.counter.moveId
                 opts.counterMoveType = result.counter.moveType
                 opts.counterCategory = result.counter.category

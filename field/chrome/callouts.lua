@@ -1,18 +1,17 @@
 -- Field battle — standalone foe dialogue box (UI overlay).
 --
--- One live shout at a time. Same light glass as the narrator box; lifts
--- above it when both are up. Engine prompts (learn-move / "about to use" /
--- switch) and the command menu dismiss it so a used-move callout cannot
--- linger into your turn.
+-- One live shout at a time. Same cream plate as the narrator, always
+-- docked above the main dialogue row. A line stays up until a new shout
+-- replaces it (or the command / learn-move prompt takes the box).
 
 local Callouts = {}
 
-Callouts.HOLD = 1.6
-Callouts.HOLD_ORDER = 1.6
-Callouts.HOLD_REACT = 1.6
-Callouts.HOLD_BANTER = 1.6
-Callouts.FADE = 0.25
-Callouts.POP = 0.14
+Callouts.HOLD = 3.2
+Callouts.HOLD_ORDER = 3.2
+Callouts.HOLD_REACT = 3.2
+Callouts.HOLD_BANTER = 3.2
+Callouts.FADE = 0.35
+Callouts.POP = 0.28
 Callouts.MAX_QUEUE = 1
 Callouts.MAX_PER_SIDE = 1
 
@@ -195,27 +194,17 @@ function Callouts.holdFor(kind)
   return Callouts.HOLD
 end
 
--- Standalone dialogue box. Sits in the vanilla slot when the white box is
--- down; lifts just above it when both are up.
--- Returns x, y, w, h, placement ("above_box"|"slot").
+-- Always above the main dialogue row (vanilla 119, or the live narrator
+-- top). Never occupies the narrator slot.
+-- Returns x, y, w, h, placement ("above_box").
 function Callouts.dockRect(bh, vanillaTop)
   bh = math.max(23, tonumber(bh) or 23)
-  local top = tonumber(vanillaTop)
-  local y, place
-  if top then
-    y = math.floor(top - Callouts.GAP - bh)
-    place = "above_box"
-  else
-    y = Callouts.VANILLA_Y
-    if y + bh > 142 then
-      y = 142 - bh
-    end
-    place = "slot"
-  end
+  local top = tonumber(vanillaTop) or Callouts.VANILLA_Y
+  local y = math.floor(top - Callouts.GAP - bh)
   if y < 2 then
     y = 2
   end
-  return Callouts.BOX_X, y, Callouts.BOX_W, bh, place
+  return Callouts.BOX_X, y, Callouts.BOX_W, bh, "above_box"
 end
 
 -- Older tests / callers used world-anchored placement. The strip is docked now.
@@ -283,11 +272,9 @@ function Callouts.tick(session, dt, battle)
   for side, q in pairs(all) do
     local toast = q[1]
     if toast then
+      -- Age only drives the pop-in. The line stays until a new shout
+      -- replaces it (or shouldHold clears the strip).
       toast.age = (toast.age or 0) + dt
-      local total = (toast.hold or Callouts.HOLD) + Callouts.FADE
-      if toast.age >= total then
-        table.remove(q, 1)
-      end
     end
     if #q == 0 then
       all[side] = nil
@@ -344,14 +331,10 @@ local function wrapText(Font, text, maxPx)
   return lines
 end
 
-local function toastAlpha(age, hold)
+local function toastAlpha(age, _hold)
   age = age or 0
-  hold = hold or Callouts.HOLD
   if age < Callouts.POP then
     return age / Callouts.POP
-  end
-  if age > hold then
-    return math.max(0, 1 - (age - hold) / Callouts.FADE)
   end
   return 1
 end
@@ -378,7 +361,7 @@ local function drawBox(g, Font, text, vanillaTop, alpha)
   end
   local bh = math.max(23, padY * 2 + #lines * lineH)
   local x, y, bw = Callouts.dockRect(bh, vanillaTop)
-  local plateA = (tonumber(Callouts.PLATE_A) or 0.78) * alpha
+  local plateA = (tonumber(Callouts.PLATE_A) or 1) * alpha
 
   g.push("all")
   if type(Callouts.paintPlate) == "function" then
@@ -433,7 +416,7 @@ function Callouts.draw(session, battle)
   if not Font and not (Type and type(Type.draw) == "function") then
     return
   end
-  local vanillaTop = battle and battle._arNarratorTop or nil
+  local vanillaTop = (battle and battle._arNarratorTop) or Callouts.VANILLA_Y
   local g = love.graphics
   local alpha = toastAlpha(toast.age, toast.hold)
   drawBox(g, Font, toast.text, vanillaTop, alpha)

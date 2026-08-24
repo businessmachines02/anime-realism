@@ -4157,13 +4157,17 @@ return function(mod)
                 return nil
             end
             if opt("anime_move_calls") and enemyLooksWeak(battle) then
+                return nil
+
+                -- TODO: finishing calls
                 -- Faint owns the exit. Do not queue "Finish it!" behind it.
-                local foe = battle.enemy and battle.enemy.mon
-                if foe and (foe.hp or 0) > 0 then
-                    return pickFormatted(S.PLAYER_FINISH_CALLS, bare, moveName)
-                        or ("Finish it!\n" .. bare .. "!"), nil, false,
-                        { side = "player", kind = "attack" }
-                end
+
+                -- local foe = battle.enemy and battle.enemy.mon
+                -- if foe and (foe.hp or 0) > 0 then
+                --     return pickFormatted(S.PLAYER_FINISH_CALLS, bare, moveName)
+                --         or ("Finish it!\n" .. bare .. "!"), nil, false,
+                --         { side = "player", kind = "attack" }
+                -- end
             end
             return nil
         end
@@ -4520,8 +4524,8 @@ return function(mod)
 
         mod.hooks:wrap("battle.overlay", function(next, battle)
             if hud.fieldCompactActive(battle) then
-                -- FIELD chrome is FBV.drawFrame (hooks_draw). Do not paint
-                -- classic / gen3 / bubbles on top of it.
+                -- hooks_draw owns FBV.drawFrame. Do not paint again and do
+                -- not next() — that is classic/gen3 (white sheet vs world).
                 return
             end
             next(battle)

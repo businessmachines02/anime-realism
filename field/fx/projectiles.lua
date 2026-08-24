@@ -3833,6 +3833,40 @@ Projectiles.registerStyle("area", function(g, p, x, y, ox, oy, t, c, glitz)
           a + math.pi * 0.5, 0.95, 0.85 * (1 - t))
       end
       drawFlameTongue(g, x, y - 1, 0, 1.1, 0.9 * (1 - t))
+    elseif glitz == "frost" then
+      local age = p.age or t
+      for i = 1, 10 do
+        local a = i * 0.63 + age * 2.8
+        local dist = (4 + (i % 4) * 3 + t * 8) % (radius + 2)
+        g.setColor(0.78, 0.92, 1.00, 0.80 * (1 - t))
+        g.circle("fill", x + math.cos(a) * dist, y + math.sin(a) * dist * 0.55 - t * 4, 1.3)
+      end
+    end
+end)
+Projectiles.registerStyle("blizzard", function(g, p, x, y, ox, oy, t, c, glitz)
+    local fade = 1 - t
+    local radius = p.radius or 24
+    local age = p.age or t
+    -- Swirling snow cone around the foe — not a filled ring.
+    for i = 1, 16 do
+      local a = i * 0.42 + age * 3.4
+      local dist = (5 + (i % 6) * 2.4 + t * 12) % (radius + 5)
+      local px = x + math.cos(a) * dist
+      local py = y + math.sin(a) * dist * 0.52 - t * 10 - (i % 4)
+      g.setColor(0.80, 0.94, 1.00, 0.88 * fade)
+      g.circle("fill", px, py, 1.15 + (i % 3) * 0.35)
+      g.setColor(1, 1, 1, 0.55 * fade)
+      g.circle("fill", px - 0.3, py - 0.4, 0.55)
+    end
+    g.setColor((c and c[1]) or 0.72, (c and c[2]) or 0.88, (c and c[3]) or 1.00, 0.20 * fade)
+    g.setLineWidth(1.4)
+    for i = 1, 3 do
+      local a = t * math.pi * 2 + i * 2.05
+      g.ellipse("line", x + math.cos(a) * 3, y - 3, radius * 0.72, radius * 0.26)
+    end
+    if glitz == "frost" then
+      g.setColor(0.92, 0.98, 1.00, 0.28 * fade)
+      g.ellipse("fill", x, y + 2, radius * 0.38, radius * 0.16)
     end
 end)
 Projectiles.registerStyle("wave", function(g, p, x, y, ox, oy, t, c, glitz)
@@ -5029,6 +5063,20 @@ function Projectiles.move(session, side, opts)
       color = fx.color,
       pinTip = true,
       followSide = (side == "player") and "enemy" or "player",
+      onDone = opts.onDone,
+    })
+  end
+
+  if fx.style == "blizzard" then
+    return spawn(session, {
+      kind = "effect",
+      style = "blizzard",
+      glitz = fx.glitz or "frost",
+      sx = ex, sy = ey, ex = ex, ey = ey,
+      duration = fx.duration or 0.72,
+      arc = 0,
+      radius = fx.radius or 24,
+      color = fx.color or { 0.72, 0.90, 1.00 },
       onDone = opts.onDone,
     })
   end

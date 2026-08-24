@@ -1,8 +1,7 @@
 -- Field battle — compact reference-style chrome (draw-only).
 --
--- Three voices; each paints at most once per frame:
+-- One overlay pass, opaque plates, alpha blend. Three voices:
 --   1. Game dialogue — engine narrator (appeared / used / about to use / faint)
---      One light glass plate. Never the classic white slab, never a bubble.
 --   2. Banter        — trainer / NPC interludes (Callouts strip)
 --   3. REACT / miss  — chips over the battler sprite after a successful
 --      REACT! pick (DODGE / BRACE / COVER / HOLD) or an accuracy MISS.
@@ -10,13 +9,9 @@
 --      failed reacts stay toasts.
 --
 -- BattleState still owns phases, cursors, input, and turn resolution.
--- This module also paints command / move HUDs and world-anchored HP bars.
---
--- Battler chrome (HP / Focus / emotion pills / face) is authored on the UI
--- overlay corners, then docked via setBattleUIAnchor. REACT / MISS chips
--- paint on the full 160×144 battle overlay (same pass as projectiles) so
--- they sit on the mon. Move chrome stays in the letterbox. Floor / cover
--- still paint from Lifecycle.drawWorldOverlay.
+-- HP / Focus plant on the field battler. Faces + emotion pills paint in
+-- true window corners after endFrame so widescreen letterbox cannot pin
+-- them to the 160×144 box. Command / dialogue stay on the battle overlay.
 --
 -- Instant-cast / PAUSE latch live in hooks.lua, not here.
 
@@ -192,11 +187,11 @@ local function fitText(Font, value, maxWidth)
     return text .. "+"
 end
 
--- Command / move HUD: cream plate, opaque enough that the floor
--- cannot eat the pixel type. Dialogue stays a lighter glass.
-UI.HUD_PANEL_A = 0.92
+-- Command / move / dialogue: solid cream. Glass over a moving voxel
+-- world (or additive FX) shimmered; src-over of an opaque plate does not.
+UI.HUD_PANEL_A = 1
 UI.DIALOGUE_FILL = { 0.98, 0.96, 0.90 }
-UI.DIALOGUE_A = 0.78
+UI.DIALOGUE_A = 1
 UI.DIALOGUE_X = 4
 UI.DIALOGUE_Y = 119
 UI.DIALOGUE_W = 152
@@ -207,6 +202,17 @@ local function resetTint(g)
     if g and type(g.setColor) == "function" then
         g.setColor(1, 1, 1, 1)
     end
+end
+
+-- Leftover add/multiply from projectiles made a second HUD blit flash.
+function UI.prepareCanvas(g)
+    if not g then
+        return
+    end
+    if type(g.setBlendMode) == "function" then
+        pcall(g.setBlendMode, "alpha")
+    end
+    resetTint(g)
 end
 
 function UI.hudPanelAlpha()
@@ -307,7 +313,8 @@ UI.HP_CHIP_H = 10         -- cream badge height
 UI.HP_LETTER_SCALE = 1    -- 1 = native HUD type size inside the badge
 UI.HP_BADGE_LIFT = 2      -- nudge the badge (not the bars) up, in pixels
 UI.HP_BAR_H = 5           -- green HP track height
-UI.FACE_SIZE = 28         -- PMD portrait square under the HP row
+UI.FACE_SIZE = 20         -- PMD portrait square in the window corners
+UI.FACE_BORDER = 1        -- black frame around the emotion icon
 UI.FACE_GAP = 28
 UI.FACE_LIFT = 10
 UI.FACE_MARGIN = 2
@@ -381,16 +388,14 @@ function UI.anchorFieldHud(battle, side, x, y, w, h)
     return ok == true
 end
 
--- Copy the stored player stack to the real window left. Called after the
--- engine finishes compositing so this is not clipped to the letterbox.
-function UI.drawWindowPlayerHud(ren, metrics)
-    local box = ren and ren._arFieldHudLeft
-    local canvas = box and (box.canvas or (ren and ren.battleHUDCanvas))
-    if not (box and canvas and love and love.graphics) then
-        return false
+-- Window pixels per authored UI pixel. Faces use this so they sit on the
+-- real window corners, not the letterboxed 160×144 overlay.
+function UI.windowUiScale(ren, metrics)
+    if not (love and love.graphics) then
+        return nil
     end
-    metrics = metrics or {}
     local g = love.graphics
+    metrics = metrics or {}
     local ww = tonumber(metrics.width)
     local wh = tonumber(metrics.height)
     if not ww and type(g.getWidth) == "function" then
@@ -400,7 +405,7 @@ function UI.drawWindowPlayerHud(ren, metrics)
         wh = g.getHeight()
     end
     if not (ww and wh and ww > 0 and wh > 0) then
-        return false
+        return nil
     end
     local dpiX = tonumber(metrics.dpiX) or 1
     local dpiY = tonumber(metrics.dpiY) or 1
@@ -418,16 +423,31 @@ function UI.drawWindowPlayerHud(ren, metrics)
         end
     end
     local up = 1
-    if type(ren.uiScale) == "function" then
+    if ren and type(ren.uiScale) == "function" then
         up = tonumber(ren:uiScale()) or 1
     end
-    if ren.uiFill then
+    if ren and ren.uiFill then
         up = math.min((wh * dpiY) / uih, (ww * dpiX) / uiw)
     end
     if up < 1 then
         up = 1
     end
-    local ux, uy = up / dpiX, up / dpiY
+    return ww, wh, up / dpiX, up / dpiY, dpiX, dpiY
+end
+
+-- Copy the stored player stack to the real window left. Called after the
+-- engine finishes compositing so this is not clipped to the letterbox.
+function UI.drawWindowPlayerHud(ren, metrics)
+    local box = ren and ren._arFieldHudLeft
+    local canvas = box and (box.canvas or (ren and ren.battleHUDCanvas))
+    if not (box and canvas and love and love.graphics) then
+        return false
+    end
+    local ww, wh, ux, uy, dpiX, dpiY = UI.windowUiScale(ren, metrics)
+    if not ww then
+        return false
+    end
+    local g = love.graphics
     local dx = (box.x or 0) * ux
     local dy = (box.y or 0) * uy
     local dw = (box.w or 1) * ux
@@ -493,6 +513,27 @@ function UI.moodChipAboveHp(hx, hy, extraTop)
     extraTop = math.max(0, tonumber(extraTop) or 0)
     local gap = UI.CHIP_AIR or 4
     return hx, hy - extraTop - gap - (UI.CHIP_H or 13)
+end
+
+-- Mood pill inward of the window face (player: right of face, foe: left).
+function UI.moodBesideFace(fx, fy, size, side, chipW)
+    size = tonumber(size) or UI.FACE_SIZE
+    fx = tonumber(fx) or 0
+    fy = tonumber(fy) or 0
+    chipW = math.max(8, tonumber(chipW) or 28)
+    local gap = UI.CHIP_AIR or 4
+    local my = fy + math.floor((size - (UI.CHIP_H or 13)) / 2)
+    if side == "enemy" then
+        return fx - gap - math.floor(chipW / 2), my
+    end
+    return fx + size + gap + math.floor(chipW / 2), my
+end
+
+-- HP / Focus plant on the battler (UI or world pixels), not the face stack.
+function UI.hpAboveMon(spriteX, spriteY)
+    spriteX = tonumber(spriteX) or 0
+    spriteY = tonumber(spriteY) or 0
+    return spriteX, spriteY - (UI.HP_CHIP_H or 10)
 end
 
 -- REACT / MISS pill, centered on the battler sprite (grid, not the HUD).
@@ -627,14 +668,28 @@ end
 
 local function fieldEntity(battle, side)
     local ow = battle and battle.game and battle.game.overworld
+    local hidden
     for i = 1, #(ow and ow.entities or {}) do
         local ent = ow.entities[i]
         if ent and ent._arFieldBattler and ent._arFieldSide == side
-            and not ent.hidden and not ent._removed then
-            return ent
+            and not ent._removed then
+            if not ent.hidden then
+                return ent
+            end
+            hidden = hidden or ent
         end
     end
-    return nil
+    -- Vanished / voxel-parked mons leave ow.entities. HUD still needs them
+    -- or beginBattleHUDPass clears the canvas and the stack flashes off.
+    if type(UI.sessionOf) == "function" then
+        local session = UI.sessionOf(battle)
+        local mon = session and ((side == "player") and session.playerMon
+            or session.enemyMon)
+        if mon and not mon._removed then
+            return mon
+        end
+    end
+    return hidden
 end
 
 -- First A–Z of nickname / species ("Vaporeon" → "V").
@@ -752,6 +807,13 @@ function UI.drawFace(g, img, x, y, size, alpha)
     if alpha <= 0.02 then
         return
     end
+    x = math.floor(x + 0.5)
+    y = math.floor(y + 0.5)
+    local border = math.max(0, math.floor(tonumber(UI.FACE_BORDER) or 1))
+    if border > 0 and type(g.rectangle) == "function" then
+        g.setColor(0, 0, 0, alpha)
+        g.rectangle("fill", x - border, y - border, size + border * 2, size + border * 2)
+    end
     local iw = 40
     if type(img.getWidth) == "function" then
         iw = tonumber(img:getWidth()) or iw
@@ -761,7 +823,7 @@ function UI.drawFace(g, img, x, y, size, alpha)
         pcall(img.setFilter, img, "nearest", "nearest")
     end
     g.setColor(1, 1, 1, alpha)
-    g.draw(img, math.floor(x + 0.5), math.floor(y + 0.5), 0, scale, scale)
+    g.draw(img, x, y, 0, scale, scale)
     resetTint(g)
 end
 
@@ -776,10 +838,7 @@ local function moodChipOf(battle, isPlayer)
     if type(UI.moodOf) ~= "function" then
         return nil
     end
-    local mood = UI.moodOf(battle, isPlayer)
-    if not mood or mood == "normal" then
-        return nil
-    end
+    local mood = UI.moodOf(battle, isPlayer) or "normal"
     return UI.moodChipSpec(mood), mood
 end
 
@@ -837,9 +896,8 @@ function UI.drawWorldHP(battle, camX, camY, mode)
     camY = camY or 0
     mode = mode or "ui"
     local ren = battle and battle.game and battle.game.renderer
-    if ren then
-        ren._arFieldHudLeft = nil
-    end
+    -- Keep the last player stack. Clearing it here races endFrame's
+    -- window blit and flashes the party lights off for a frame.
     local ow = battle and battle.game and battle.game.overworld
     if (camX == 0 and camY == 0) and ow and ow.camera then
         camX = ow.camera.x or 0
@@ -851,7 +909,7 @@ function UI.drawWorldHP(battle, camX, camY, mode)
     }) do
         local ent = fieldEntity(battle, item.side)
         local battler = item.battler
-        if ent and battler and not ent.hidden and not ent._removed then
+        if ent and battler and not ent._removed then
             local lift = UI.barLift(ent)
             local wx = (ent.px or 0) - camX + 8
             local wy = (ent.py or 0) - camY - lift
@@ -877,30 +935,19 @@ function UI.drawWorldHP(battle, camX, camY, mode)
                 extraTop = UI.FOCUS_BAR_H + math.max(0, math.floor(gap + 0.5))
             end
 
-            -- Emotion pill stays on the HUD. REACT / MISS paints later on
-            -- the full battle overlay (drawReactChips) so the HUD crop
-            -- cannot clip it off the battler.
-            local moodSpec = select(1, moodChipOf(battle, item.side == "player"))
-            local moodTop = moodSpec and ((UI.CHIP_H or 13) + (UI.CHIP_AIR or 4)) or 0
-            local faceOn = type(UI.faceEnabled) == "function" and UI.faceEnabled(battle)
-            local faceImg, faceA
-            if faceOn and type(UI.faceFlash) == "function" then
-                faceImg, faceA = UI.faceFlash(battle, item.side == "player")
+            -- HP / Focus follow the mon. Faces + mood paint in window
+            -- corners from drawWindowFaceHud (endFrame), not here.
+            local x, y = UI.hpAboveMon(spriteX, spriteY)
+            -- Cream badge / Focus sit a few px above the HP row. Raise the
+            -- plant so those plates stay on the canvas at the camera top.
+            local minPlant = (UI.HP_CHIP_TOP or 2) + 4 + (UI.HP_BADGE_LIFT or 2)
+                + extraTop
+            if y < minPlant then
+                y = minPlant
             end
-            -- Portrait square; stackH reserves room above it for mood + HP.
-            local fs = UI.FACE_SIZE or 28
-            -- +4 / badge lift: HP row sits a few px above hpAboveFace, cream higher still.
-            local stackH = extraTop + moodTop + UI.HP_CHIP_H + (UI.HP_FACE_GAP or 0)
-                + 4 + (UI.HP_BADGE_LIFT or 2)
-            local fx, fy = UI.faceAnchor(item.side, nil, nil, fs, stackH, canvasW)
-            if fy + fs > canvasH - 1 then
-                fy = canvasH - 1 - fs
-            end
-            -- HP row origin: centered on the portrait, flush above it.
-            local x, y = UI.hpAboveFace(fx, fy, fs)
+            x, y = UI.clampHpChip(x, y, canvasW, canvasH, extraTop)
             x = math.floor(x + 0.5)
             y = math.floor(y + 0.5)
-            -- Bubbles still point at the mon; HUD chrome is screen-pinned.
             if mode == "ui" then
                 ent._fieldWorldX, ent._fieldWorldY = wx, wy
                 ent._fieldScreenX, ent._fieldScreenY = spriteX, spriteY
@@ -964,23 +1011,81 @@ function UI.drawWorldHP(battle, camX, camY, mode)
             local target = UI.hpFillWidth(barW - 2, hp, maxHP)
             fills[item.side] = UI.easeHpFill(fills[item.side], target)
             hpBar(g, left + letterW + 1, barY, barW, ratio, fills[item.side])
-            -- Worry / ANGRY / TIRED stays on this HUD stack.
-            if moodSpec then
-                local mx, my = UI.moodChipAboveHp(x, y, extraTop)
-                drawStatusChip(g, Font, moodSpec, mx, my, canvasW)
-            end
-            -- PMD portrait under the HP row.
-            if faceImg and (faceA or 1) > 0.02 and fx then
-                UI.drawFace(g, faceImg, fx, fy, fs, faceA)
-            end
-            if mode == "ui" then
-                resetTint(g)
-                local bx, by, bw, bh = UI.hudStackBox(fx, fy, fs, stackH)
-                UI.anchorFieldHud(battle, item.side, bx, by, bw, bh)
-            end
         end
     end
     resetTint(g)
+end
+
+-- PMD faces + emotion pills on the real window corners. Must run after
+-- endFrame so the letterbox scissor cannot pin them to 160×144.
+function UI.drawWindowFaceHud(ren, metrics, battle)
+    battle = battle or (ren and ren._arFieldFaceBattle)
+    if not (UI.active(battle) and love and love.graphics) then
+        return false
+    end
+    local faceOn = type(UI.faceEnabled) ~= "function" or UI.faceEnabled(battle)
+    if not faceOn and type(UI.moodOf) ~= "function" then
+        return false
+    end
+    local ww, _, ux, uy = UI.windowUiScale(ren, metrics)
+    if not ww then
+        return false
+    end
+    local g = love.graphics
+    local Font = font()
+    local pad = UI.HUD_PAD or UI.FACE_MARGIN or 4
+    -- fs stands for "face size", the pixel size of the face display; uses UI.FACE_SIZE if set, otherwise defaults to 28
+    local fs = UI.FACE_SIZE or 28
+    local painted = false
+    g.push("all")
+    if type(g.origin) == "function" then
+        g.origin()
+    end
+    if type(g.setScissor) == "function" then
+        g.setScissor()
+    end
+    UI.prepareCanvas(g)
+    for _, item in ipairs({
+        { side = "player", isPlayer = true },
+        { side = "enemy",  isPlayer = false },
+    }) do
+        local faceImg, faceA
+        if faceOn and type(UI.faceFlash) == "function" then
+            faceImg, faceA = UI.faceFlash(battle, item.isPlayer)
+        end
+        local moodSpec = select(1, moodChipOf(battle, item.isPlayer))
+        if (faceImg and (faceA or 1) > 0.02) or moodSpec then
+            local fx = pad
+            if item.side == "enemy" then
+                fx = UI.WIDTH - pad - fs
+            end
+            local fy = pad
+            local ox = item.side == "enemy"
+                and (ww - (pad + fs) * ux)
+                or (pad * ux)
+            local oy = pad * uy
+            g.push()
+            g.translate(ox, oy)
+            g.scale(ux, uy)
+            g.translate(-fx, -fy)
+            if faceImg and (faceA or 1) > 0.02 then
+                UI.drawFace(g, faceImg, fx, fy, fs, faceA)
+                painted = true
+            end
+            if moodSpec then
+                local text = tostring(moodSpec.text or "")
+                local scale = UI.CHIP_SCALE or 1
+                local chipW = math.max(1, math.floor(measureText(Font, text) * scale + 0.5)) + 6
+                local mx, my = UI.moodBesideFace(fx, fy, fs, item.side, chipW)
+                drawStatusChip(g, Font, moodSpec, mx, my, UI.WIDTH)
+                painted = true
+            end
+            g.pop()
+        end
+    end
+    UI.prepareCanvas(g)
+    g.pop()
+    return painted
 end
 
 -- DODGE / BRACE / COVER / HOLD / MISS on the 160×144 battle overlay.
@@ -1317,7 +1422,7 @@ end
 
 
 function UI.draw(battle, style)
-    -- Paint at most one bottom chrome layer per frame (command XOR moves XOR dialogue).
+    -- One bottom plate per frame (command XOR moves XOR dialogue).
     if not (UI.active(battle) and love and love.graphics) then
         return
     end
@@ -1325,28 +1430,21 @@ function UI.draw(battle, style)
     local Font = font()
     local state = UI.layoutState(battle)
     g.push("all")
-    -- HP / faces go on the extended HUD canvas so setBattleUIAnchor can
-    -- dock them to the window. Move / command chrome stays on the UI canvas.
+    UI.prepareCanvas(g)
     local ren = battle and battle.game and battle.game.renderer
-    local hudPrev
-    local hudPass = ren and type(ren.beginBattleHUDPass) == "function"
-        and type(ren.endBattleHUDPass) == "function"
-    if hudPass then
-        local ok, prev = pcall(ren.beginBattleHUDPass, ren)
-        if ok then
-            hudPrev = prev
-        else
-            hudPass = false
-        end
+    if ren then
+        ren._arFieldFaceBattle = battle
+        -- HP stays on the overlay. Faces blit from endFrame.
+        ren._arFieldHudLeft = nil
     end
     UI.drawWorldHP(battle, nil, nil, "ui")
-    resetTint(g)
-    if hudPass then
-        pcall(ren.endBattleHUDPass, ren, hudPrev)
-    end
-    resetTint(g)
-    -- After the HUD crop: chips sit on the same overlay as projectiles.
     UI.drawReactChips(battle)
+    local live = battle and battle._arLiveCounter
+    if live and not live.resolved and type(live.draw) == "function" then
+        pcall(live.draw, live)
+    elseif type(UI.drawLiveCounter) == "function" then
+        pcall(UI.drawLiveCounter, battle)
+    end
     local paintedDialogue = false
     if state.showCommand then
         drawCommand(g, Font, battle)
@@ -1358,10 +1456,9 @@ function UI.draw(battle, style)
     if not paintedDialogue then
         battle._arNarratorTop = nil
     end
-    resetTint(g)
+    UI.prepareCanvas(g)
     g.pop()
-    -- HUD canvas blit uses the current multiply. Do not leave dark ink.
-    resetTint(g)
+    UI.prepareCanvas(g)
 end
 
 return UI

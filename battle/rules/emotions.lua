@@ -25,13 +25,14 @@ Emotions.FILE = {
     happy = "Happy",
 }
 
--- Face stays up while the mood is not normal, then fades out.
+-- Face + chip stay up for the live mood, including calm / Normal.
 Emotions.PORTRAIT_FADE = 0.45
 
 -- One dark ink on every chip. Light-on-deep used to leak into Font / the
 -- HUD canvas blit, so faces and dialogue flickered dark ↔ light.
 Emotions.INK = { 0.10, 0.07, 0.06 }
 Emotions.CHIP = {
+    normal = { text = "OK", fill = { 0.88, 0.84, 0.72 }, ink = Emotions.INK },
     angry = { text = "ANGRY", fill = { 0.90, 0.42, 0.32 }, ink = Emotions.INK },
     pain = { text = "TIRED", fill = { 0.78, 0.58, 0.62 }, ink = Emotions.INK },
     determined = { text = "DTRMD", fill = { 0.90, 0.70, 0.16 }, ink = Emotions.INK },
@@ -494,44 +495,17 @@ function Emotions.portraitAlpha(battle, isPlayer)
     if not side then
         return 0
     end
-    local shown = Emotions.mood(battle, isPlayer)
-    if shown and shown ~= "normal" then
-        side.fadeAt = nil
-        side.portraitMood = shown
-        return 1
-    end
-    if not side.fadeAt then
-        if side.portraitMood then
-            side.fadeAt = now()
-        else
-            return 0
-        end
-    end
-    local fade = (now() - side.fadeAt) / (Emotions.PORTRAIT_FADE or 0.45)
-    if fade >= 1 then
-        side.fadeAt = nil
-        side.portraitMood = nil
-        return 0
-    end
-    if fade < 0 then
-        return 1
-    end
-    return 1 - fade
+    local shown = Emotions.mood(battle, isPlayer) or "normal"
+    side.fadeAt = nil
+    side.portraitMood = shown
+    return 1
 end
 
 function Emotions.portraitMood(battle, isPlayer)
-    local shown = Emotions.mood(battle, isPlayer)
-    if shown and shown ~= "normal" then
-        return shown
-    end
-    local side = Emotions.side(battle, isPlayer)
-    if not side then
+    if not Emotions.side(battle, isPlayer) then
         return nil
     end
-    if Emotions.portraitAlpha(battle, isPlayer) <= 0 then
-        return nil
-    end
-    return side.portraitMood
+    return Emotions.mood(battle, isPlayer) or "normal"
 end
 
 function Emotions.announce(battle)

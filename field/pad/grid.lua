@@ -202,7 +202,7 @@ function Grid.canTraverse(grid, u, v, ent)
     return false
   end
   if Grid.isWater(grid, u, v) then
-    return ent and ent.canSwim == true
+    return ent and (ent.canSwim == true or ent.canFly == true)
   end
   if grid and type(grid.walkable) == "table" then
     return grid.walkable[padKey(u, v)] == true
@@ -394,6 +394,56 @@ function Grid.setPad(grid, ent, u, v)
   ent.basePx = ent.basePx or ent.targetPx
   ent.basePy = ent.basePy or ent.targetPy
   return true
+end
+
+--- Occupy a cell even when `canTraverse` would refuse it (water hazard shove).
+function Grid.forcePad(grid, ent, u, v)
+  if not (grid and ent and Grid.inPad(grid, u, v)) then
+    return false
+  end
+  if Grid.isBlocked(grid, u, v) then
+    return false
+  end
+  local occupant = grid.occ and grid.occ[padKey(u, v)]
+  if occupant ~= nil and occupant ~= ent.id then
+    return false
+  end
+  Grid.occupy(grid, ent.id, u, v)
+  ent.padU, ent.padV = u, v
+  Grid.syncPx(grid, ent)
+  ent.basePx = ent.basePx or ent.targetPx
+  ent.basePy = ent.basePy or ent.targetPy
+  return true
+end
+
+--- Nearest dry cell after a land mon is shoved into water.
+function Grid.escapeWater(grid, ent)
+  if not (grid and ent) then
+    return false
+  end
+  local u, v = padOf(grid, ent)
+  if not Grid.isWater(grid, u, v) then
+    return false
+  end
+  local bestU, bestV, bestD
+  for du = -3, 3 do
+    for dv = -3, 3 do
+      if du ~= 0 or dv ~= 0 then
+        local nu, nv = u + du, v + dv
+        if not Grid.isWater(grid, nu, nv)
+            and Grid.isFree(grid, nu, nv, ent.id, ent) then
+          local d = math.abs(du) + math.abs(dv)
+          if not bestD or d < bestD then
+            bestD, bestU, bestV = d, nu, nv
+          end
+        end
+      end
+    end
+  end
+  if bestU == nil then
+    return false
+  end
+  return Grid.setPad(grid, ent, bestU, bestV)
 end
 
 --- World-cell wrapper (converts at the boundary). Prefer setPad.
@@ -704,19 +754,7 @@ function Grid.returnHome(grid, ent)
 end
 
 function Grid.knockback(grid, ent, fromEnt)
-  if not (grid and ent) then
-    return false
-  end
-  local deltaU, deltaV = 0, 0
-  if fromEnt then
-    local u, v = padOf(grid, ent)
-    local fromU, fromV = padOf(grid, fromEnt)
-    deltaU, deltaV = u - fromU, v - fromV
-  else
-    deltaU, deltaV = -1, 0
-  end
-  local stepU, stepV = unitStep(deltaU, deltaV)
-  return Grid.step(grid, ent, stepU, stepV)
+  return Grid.knockbackTiles(grid, ent, fromEnt, 1) > 0
 end
 
 --- True when a cover prop / third party sits between two battlers on the pad.
@@ -1078,6 +1116,15 @@ function Grid.knockbackTiles(grid, ent, fromEnt, maxTiles)
     if Grid.step(grid, ent, stepU, stepV) then
       moved = moved + 1
     else
+      local u, v = padOf(grid, ent)
+      local nextU, nextV = u + stepU, v + stepV
+      -- Land mons cannot wander onto water, but a shove can splash them in.
+      if Grid.isWater(grid, nextU, nextV)
+          and not (ent.canSwim == true or ent.canFly == true)
+          and Grid.forcePad(grid, ent, nextU, nextV) then
+        ent._waterHazard = true
+        moved = moved + 1
+      end
       break
     end
   end
