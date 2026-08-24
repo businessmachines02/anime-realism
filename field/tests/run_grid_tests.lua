@@ -6323,8 +6323,8 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   eq(y + 23 + 2, 119, "gap sits between foe box and vanilla box")
   truthy(y >= 2, "box stays on the UI")
   local _, ySlot, _, _, placeSlot = Callouts.dockRect(23, nil)
-  eq(placeSlot, "slot", "standalone box uses the vanilla slot")
-  eq(ySlot, 119, "empty narrator leaves the foe box at the bottom")
+  eq(placeSlot, "above_box", "callouts stay above the dialogue row")
+  eq(ySlot + 23 + 2, 119, "empty narrator still docks above the vanilla slot")
 
   local session = {}
   truthy(Callouts.push(session, "foe", "BROCK:\nOnix, dodge!", { kind = "react" }),
@@ -6346,9 +6346,8 @@ function tests.callout_filters_narrative_and_sits_outside_fight()
   eq(session._trainerCallouts.foe[1].text, "Onix! Move!", "react is showing")
   eq(#session._trainerCallouts.foe, 1, "previous order is dropped")
   Callouts.tick(session, Callouts.HOLD_REACT + Callouts.FADE + 0.05)
-  truthy(not (session._trainerCallouts and session._trainerCallouts.foe
-      and session._trainerCallouts.foe[1]),
-    "emitted callout is not replayed after the hold")
+  eq(session._trainerCallouts.foe[1].text, "Onix! Move!",
+    "callout stays up until a new shout replaces it")
 
   truthy(Callouts.push(session, "player", "PIKACHU!\nDodge it!", { kind = "react" }),
     "player react order uses the dialogue strip")
