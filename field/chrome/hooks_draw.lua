@@ -303,9 +303,17 @@ function Hooks.installDraw(FBV, mod, ctx)
             and not Renderer._arFbvLeftHud then
             local origEnd = Renderer.endFrame
             function Renderer:endFrame(...)
-                -- Player HP lives on the battle overlay now. A second
-                -- window blit of battleHUDCanvas was the dark/light flicker.
-                return origEnd(self, ...)
+                local result = origEnd(self, ...)
+                -- Faces sit on the real window corners. HP stays on the
+                -- battle overlay next to the mon (not this blit).
+                if FBV.enabled(mod) and type(FBV.liveBattle) == "function"
+                    and type(FBV.drawWindowFaceHud) == "function" then
+                    local battle = select(1, FBV.liveBattle(gameSingleton()))
+                    if battle and isFieldBattle(battle) then
+                        pcall(FBV.drawWindowFaceHud, self, result, battle)
+                    end
+                end
+                return result
             end
             Renderer._arFbvLeftHud = true
         end

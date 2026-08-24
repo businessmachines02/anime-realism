@@ -725,6 +725,8 @@ function tests.status_chip_abbreviations()
 end
 
 function tests.mood_portrait_sits_beside_the_sprite()
+  eq(UI.FACE_SIZE, 20, "emotion icons are compact")
+  eq(UI.FACE_BORDER, 1, "emotion icons have a 1px black frame")
   local pad = UI.HUD_PAD
   local px, py = UI.faceAnchor("player", 40, 80, 28, 0, 160)
   eq(px, pad, "player face hugs the left edge")
@@ -733,8 +735,15 @@ function tests.mood_portrait_sits_beside_the_sprite()
   eq(ex, 160 - pad - 28, "foe face hugs the right edge")
   eq(ey, pad, "foe face sits at the top")
   local hx, hy = UI.hpAboveFace(px, py, 28)
-  eq(hx, px + 14, "HP sits on the face midline")
-  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "HP sits just above the portrait")
+  eq(hx, px + 14, "legacy helper still centers HP on the face")
+  eq(hy, py - UI.HP_CHIP_H - (UI.HP_FACE_GAP or 0), "legacy helper sits HP above the portrait")
+  local mx, my = UI.hpAboveMon(48, 90)
+  eq(mx, 48, "field HP is centered on the sprite")
+  eq(my, 90 - UI.HP_CHIP_H, "field HP sits just above the sprite")
+  local chipX, chipY = UI.moodBesideFace(px, py, 28, "player", 20)
+  truthy(chipX > px + 28, "player mood sits inward of the left face")
+  chipX = select(1, UI.moodBesideFace(ex, ey, 28, "enemy", 20))
+  truthy(chipX < ex, "foe mood sits inward of the right face")
   local stack = 12
   local _, stackedY = UI.faceAnchor("player", 0, 0, 28, stack, 160)
   eq(stackedY, pad + stack, "chips and bars push the face down from the pad")
@@ -805,6 +814,102 @@ function tests.hp_stack_does_not_jump_when_mood_appears()
   end
   eq(paintBadgeY(nil), paintBadgeY("worried"),
     "HP chip stays put when a mood pill appears")
+end
+
+function tests.hp_chip_plants_on_the_sprite()
+  local painted = {}
+  local prevLove = love
+  love = {
+    graphics = {
+      setColor = function() end,
+      rectangle = function(_, x, y)
+        painted[#painted + 1] = { x = x, y = y }
+      end,
+      polygon = function() end,
+      push = function() end,
+      pop = function() end,
+      translate = function() end,
+      scale = function() end,
+      print = function() end,
+    },
+  }
+  local enemy = {
+    _arFieldBattler = true,
+    _arFieldSide = "enemy",
+    px = 80, py = 64, _fieldBarLift = 10, hidden = false,
+  }
+  local battle = {
+    _arAnimeField = true,
+    player = { shownHP = 20, mon = { name = "EKANS", stats = { hp = 20 } } },
+    enemy = { shownHP = 30, mon = { name = "GEODUDE", stats = { hp = 30 } } },
+    game = {
+      overworld = { camera = { x = 0, y = 0 }, entities = { enemy } },
+      renderer = {
+        uiSize = function() return 160, 144 end,
+        worldViewSize = function() return 160, 144 end,
+        fitScale = function() return 1 end,
+      },
+    },
+  }
+  UI.drawWorldHP(battle, 0, 0, "ui")
+  love = prevLove
+  local hx, hy = UI.hpAboveMon((enemy.px or 0) + 8, (enemy.py or 0) - 10)
+  hx, hy = UI.clampHpChip(hx, hy, 160, 144, 0)
+  truthy(#painted > 0, "HP chip paints on the overlay")
+  local near = false
+  for i = 1, #painted do
+    if math.abs((painted[i].x or 0) - (hx - math.floor(UI.HP_CHIP_W / 2))) <= 2 then
+      near = true
+      break
+    end
+  end
+  truthy(near, "HP chip sits next to the field sprite, not the window corner")
+end
+
+function tests.window_faces_hug_true_window_corners()
+  local drawn = {}
+  local prevFace, prevMood, prevChip = UI.faceFlash, UI.moodOf, UI.moodChip
+  UI.faceEnabled = function() return true end
+  UI.faceFlash = function(_, isPlayer)
+    return { getWidth = function() return 40 end }, 1, isPlayer
+  end
+  UI.moodOf = function() return nil end
+  local prevLove = love
+  love = {
+    graphics = {
+      getWidth = function() return 800 end,
+      getHeight = function() return 450 end,
+      push = function() end,
+      pop = function() end,
+      origin = function() end,
+      setScissor = function() end,
+      setColor = function() end,
+      setBlendMode = function() end,
+      translate = function() end,
+      scale = function() end,
+      draw = function(_, x, y)
+        drawn[#drawn + 1] = { x = x, y = y }
+      end,
+    },
+  }
+  local battle = { _arAnimeField = true }
+  local ren = {
+    uiScale = function() return 2 end,
+    uiSize = function() return 160, 144 end,
+    _arFieldFaceBattle = battle,
+  }
+  truthy(UI.drawWindowFaceHud(ren, { width = 800, height = 450, dpiX = 1, dpiY = 1 }, battle),
+    "window faces paint")
+  love = prevLove
+  UI.faceFlash, UI.moodOf, UI.moodChip = prevFace, prevMood, prevChip
+  UI.faceEnabled = nil
+  eq(#drawn, 2, "both faces paint")
+  local pad = UI.HUD_PAD
+  local fs = UI.FACE_SIZE
+  eq(drawn[1].x, pad, "player face authors at the left pad")
+  eq(drawn[1].y, pad, "player face authors at the top pad")
+  eq(drawn[2].x, 160 - pad - fs, "foe face authors at the right pad")
+  eq(drawn[2].y, pad, "foe face authors at the top pad")
 end
 
 function tests.field_hud_registers_wide_anchors()
@@ -1432,8 +1537,8 @@ function tests.focus_bar_gap_flush_vs_one_pixel()
   local flushTop, flushBot = paintY(0)
   local gappedTop, gappedBot = paintY(1)
   UI.focusBarVisible, UI.focusRatio, UI.focusBarGap = prevVisible, prevRatio, prevGap
-  eq(flushTop, gappedTop, "focus bar stays pinned to the top pad")
-  truthy(gappedBot > flushBot, "1PX gap drops the HP bar one pixel")
+  eq(flushBot, gappedBot, "HP bar stays planted on the sprite")
+  truthy(gappedTop < flushTop, "1PX gap lifts the focus bar one pixel")
 end
 
 function tests.compact_arena_keeps_cast_lanes_clear()
@@ -9711,7 +9816,7 @@ function tests.emotions_chip_colors_match_mood()
   truthy(angry.fill and angry.fill[1] > 0.6, "angry fill is red")
   eq(E.chip("pain").text, "TIRED", "low HP chip is TIRED")
   eq(E.chip("determined").text, "DTRMD", "determined chip is DTRMD")
-  eq(E.chip("normal"), nil, "normal has no chip")
+  eq(E.chip("normal").text, "OK", "calm mood still has a chip")
 end
 
 function tests.status_chips_are_smaller_than_hud_type()
@@ -9825,7 +9930,8 @@ function tests.emotions_portrait_holds_until_normal()
   side.flash = nil
   side.fadeAt = (os.clock()) - 2
   side.portraitMood = "angry"
-  eq(E.portraitAlpha(battle, true), 0, "portrait is gone after fading back to normal")
+  eq(E.portraitAlpha(battle, true), 1, "calm still keeps the portrait up")
+  eq(E.portraitMood(battle, true), "normal", "face follows the live mood")
   E.clear(battle)
 end
 

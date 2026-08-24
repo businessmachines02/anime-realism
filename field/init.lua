@@ -511,6 +511,13 @@ return function(env)
     return false
   end
 
+  function FBV.drawWindowFaceHud(ren, metrics, battle)
+    if UI and type(UI.drawWindowFaceHud) == "function" then
+      return UI.drawWindowFaceHud(ren, metrics, battle)
+    end
+    return false
+  end
+
   -- HP / command / dialogue only. The engine clears the UI canvas between
   -- the two overlay calls in one BattleState.draw; skipping chrome there
   -- is what made the whole HUD blink off.
