@@ -60,15 +60,22 @@ FIT_BY_HEIGHT: list[tuple[float, int]] = [
 FIT_MAX_BY_DEX: dict[int, int] = {
     15: 23,   # Beedrill - a bit smaller
     3: 33,    #  Venusaur - make a bit bigger
+    1: 20, # bulbasaur a bit smaller
+    4: 20, # charmander a bit smaller
     5: 23,    # charmeleon - make a bit smaller
     6: 36,    # Charizard — wings read small at the 2.2m / 31px cap
+    7: 20, # squirtle a bit smaller
     9: 31,    # Blastoise - make a bit bigger
     19: 20,   # ratata 
     20: 23,   # raticate - a bit smaller
     25: 21,   # pikachu - make smaller, like Growlite
     26: 23,   # raichu - make the size of Ninetales
     37: 20,   # Vulpix
+    29: 20,   # nidoran female a bit smaller
     31: 27,  # nidoqueen 
+    32: 20, # nidoran male a bit smaller
+    23: 22,   # ekans - a bit smaller
+    24: 26,   # arbok - a bit smaller
     34: 27,  # nidoking
     38: 27,   # Ninetales
     58: 22,   # Growlithe
