@@ -65,8 +65,8 @@ FIT_MAX_BY_DEX: dict[int, int] = {
     9: 31,    # Blastoise - make a bit bigger
     19: 20,   # ratata 
     20: 23,   # raticate - a bit smaller
-    25: 20,   # pikachu - make smaller, like Growlite
-    26: 25,   # raichu - make the size of Ninetales
+    25: 21,   # pikachu - make smaller, like Growlite
+    26: 23,   # raichu - make the size of Ninetales
     37: 20,   # Vulpix
     31: 27,  # nidoqueen 
     34: 27,  # nidoking
